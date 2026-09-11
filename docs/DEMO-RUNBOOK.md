@@ -98,7 +98,9 @@ On the improvement board (manager tab):
    staged demo, one deploy. Only one build runs on the line at a time; anything
    approved while a build is running queues and starts on its own when the
    first one deploys or fails (a queued card shows "Queued" and a Cancel
-   button). Narrate the steps as they light up: agent build, visual check or
+   button). A batch shows as one tile with the changes folded under "See
+   the N changes"; the requirement to confirm covers the whole batch and sits
+   in that tile. Narrate the steps as they light up: agent build, visual check or
    cross-check review, internal tests, then the manager deploy gate. A UI
    change takes roughly one to two minutes; a functionality change a bit
    longer. Run shift 2 while a slow build is in progress if you want to keep

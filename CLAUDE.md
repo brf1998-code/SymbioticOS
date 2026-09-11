@@ -60,6 +60,19 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   rejected by Fable 5.1; the runner falls back to `auto` plus an instruction
   and remembers which models refuse. Review and diagram calls use a 16k
   output budget.
+- **Batch tiles**: a run with several proposals renders as ONE card on the
+  board (in progress and done), with the changes collapsed under "See the N
+  changes", the requirement in full at the confirm step, and one "We did"
+  line when deployed. The feedback items in it are folded into the tile
+  while the run exists (cancel puts them back as their own cards).
+- **Plain summaries** (`pipeline.plainSummary`, Haiku, ~a cent): after every
+  build, a title (<= 8 words) and a one-to-three sentence "what changed" go
+  into `evidence.title` / `evidence.what_changed`; the title becomes the
+  version's `notes` (shown in the Versions panel) and what_changed is the
+  feedback outcome and the Done card text. `SOS_MODEL_SUMMARY` overrides.
+- **Run diagnostics**: when the agent process dies, the run log gets a `diag`
+  entry (model, message count, whether init was seen, stderr tail, prompt
+  sizes) and the error says at what stage it died.
 - **Board layout** (`public/index.html`): header band, module strip (Open
   live / Preview vN / Diagrams per module), KPI strip, system review toolbar,
   four columns. Platform feedback (about the tool itself, shipped from Cowork)

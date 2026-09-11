@@ -99,6 +99,7 @@ function fakeStructured(toolName, prompt) {
     proposal: { proposal: "Fake-mode proposal: apply the requested change as described in the feedback. (SOS_FAKE_AGENT=1)", class: /color|copy|text|label|layout|style|bigger|smaller|show|display|legend|see/i.test(quoted) ? "ui" : "functionality", target_file: target, rationale: "Deterministic fake classification for machinery testing." },
     requirement: { requirement: "Fake-mode requirement: (1) the change in the feedback will be applied, (2) everything else stays the same, (3) verified by smoke checks on staging. (SOS_FAKE_AGENT=1)" },
     verdict: { verdict: "pass", summary: "Fake-mode cross-check: diff reviewed, no violations. (SOS_FAKE_AGENT=1)" },
+    summary: { title: `Fake change to ${target || "the module"}`, what_changed: "Fake-mode summary: a marker was stamped on the page named in the feedback. Nothing else changed. (SOS_FAKE_AGENT=1)" },
   };
   return { data: canned[toolName] || {}, costUsd: 0 };
 }
@@ -116,6 +117,7 @@ async function runAgent({ model, system, dir, prompt, readOnly = false }) {
   let estimate = 0;
   let aborted = false;
   let stderrTail = "";
+  let seen = 0, initSeen = false;
   const it = query({
     prompt,
     options: {
@@ -130,11 +132,13 @@ async function runAgent({ model, system, dir, prompt, readOnly = false }) {
       maxTurns: 40,
       abortController: abort,
       env: { ...process.env, IS_SANDBOX: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
-      stderr: (data) => { stderrTail = (stderrTail + String(data)).slice(-2000); },
+      stderr: (data) => { stderrTail = (stderrTail + String(data)).slice(-4000); },
     },
   });
   try {
     for await (const msg of it) {
+      seen++;
+      if (msg.type === "system" && msg.subtype === "init") initSeen = true;
       if (msg.type === "assistant" && msg.message && Array.isArray(msg.message.content)) {
         for (const block of msg.message.content) if (block.type === "text") text += block.text;
         const u = msg.message.usage || {};
@@ -150,9 +154,12 @@ async function runAgent({ model, system, dir, prompt, readOnly = false }) {
     }
   } catch (e) {
     if (!aborted) {
-      const detail = stderrTail.trim().split("\n").filter(Boolean).slice(-3).join(" | ");
-      const err = new Error(`build agent failed: ${e.message}${detail ? ` (${detail})` : ""}`);
+      const lines = stderrTail.trim().split("\n").filter(Boolean);
+      const detail = lines.slice(-3).join(" | ");
+      const stage = !initSeen ? "the agent process died before it started" : seen < 3 ? "the agent process died right after starting" : `after ${seen} messages`;
+      const err = new Error(`build agent failed: ${e.message} (${stage}; model ${model}${detail ? `; ${detail}` : "; nothing on stderr"})`);
       err.costUsd = costUsd || estimate;
+      err.diag = { model, messages: seen, initSeen, stderr: stderrTail.slice(-4000), promptChars: prompt.length, systemChars: (system || "").length };
       throw err;
     }
   }

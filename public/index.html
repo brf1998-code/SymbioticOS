@@ -64,6 +64,15 @@
   .step { display:flex; gap:6px; align-items:center; color:var(--steel); padding:2px 0; }
   .dot { width:9px; height:9px; border-radius:50%; background:var(--line); flex:none; }
   .dot.done { background:var(--green); } .dot.now { background:var(--amber); } .dot.fail { background:var(--red); }
+  .card.batch { border-left:4px solid var(--navy); }
+  .card.batch .bhead { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-weight:800; font-size:14px; }
+  .card.batch .bhead .n { background:var(--navy); color:#fff; border-radius:12px; padding:2px 9px; font-size:12px; }
+  .card.batch details { margin-top:8px; }
+  .card.batch details summary { cursor:pointer; font-size:12.5px; color:var(--navy); font-weight:700; }
+  .card.batch .chg { border-top:1px solid var(--line); padding:7px 0; font-size:12.5px; line-height:1.45; }
+  .card.batch .chg .k { font-weight:700; margin-right:6px; }
+  .card.batch .chg .orig { color:var(--steel); font-size:12px; margin-top:2px; }
+  .card.batch .req { margin-top:10px; } .card.batch .req b { display:block; margin-bottom:4px; }
   .outcome { background:var(--greenSoft); color:var(--green); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; }
   .fail-note { background:#fdeceb; color:var(--red); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; }
   a.demo { display:inline-block; color:#fff; background:var(--amber); font-weight:700; font-size:12.5px; border-radius:7px; padding:8px 12px; margin-top:8px; text-decoration:none; }
@@ -138,7 +147,8 @@ function modelOptions(sel) {
   return DATA.models.list.map(m => `<option value="${m.id}" ${m.id === sel ? "selected" : ""}>${m.label} ($${m.in}/$${m.out} per M tokens)</option>`).join("");
 }
 function screenLabel(mod, file) {
-  const s = (DATA.screens[mod] || []).find(x => x.file === file);
+  // several routes can serve one file; show the most specific one (longest route)
+  const s = (DATA.screens[mod] || []).filter(x => x.file === file).sort((a, b) => String(b.route || "").length - String(a.route || "").length)[0];
   return s ? s.label : (file || "unspecified");
 }
 
@@ -249,6 +259,48 @@ function submitEdit(pid, decision) {
   act(`/api/proposals/${pid}/decide`, body);
 }
 
+// One tile for a batch run (several proposals built as one change). Feedback
+// items in the batch are not shown as separate cards while the run exists.
+function batchCard(run) {
+  const items = DATA.feedback.filter(f => (run.feedback_ids || []).includes(f.id));
+  const review = items.find(f => f.review_id);
+  const ev = run.evidence || {};
+  const mod = DATA.modules.find(m => m.name === run.module) || {};
+  let html = `<div class="card batch">`;
+  html += `<div class="bhead"><span class="n">${items.length}</span>${ev.title ? esc(ev.title) : `${items.length} changes built as one`}${review ? `<span class="chip review">REVIEW #${review.review_id}</span>` : ""}<span class="chip ${run.lane}">${run.lane === "ui" ? "UI" : "FUNCTIONALITY"}</span></div>`;
+  html += `<div class="meta">run #${run.id} · ${esc(mod.title || run.module)} · v${run.from_version}${run.to_version ? " → v" + run.to_version : ""} · ${esc(modelLabel(run.model))} · $${Number(run.cost_usd).toFixed(2)}</div>`;
+  if (run.status === "deployed" || run.status === "rolled_back") {
+    html += `<div class="${run.status === "deployed" ? "outcome" : "fail-note"}">${run.status === "deployed" ? "We did: " : "Rolled back: "}${esc(ev.what_changed || ev.build_summary || "").slice(0, 600)}</div>`;
+  }
+  html += `<details><summary>See the ${items.length} changes</summary>` + items.map((f, i) => `<div class="chg"><span class="k">${i + 1}.</span><span class="chip screen">${esc(screenLabel(f.module, f.proposal_target) || f.screen || "")}</span> ${esc(f.proposal_body || "")}<div class="orig">"${esc(f.message)}" · ${esc(f.name || "anonymous")}${f.recurrence > 1 ? ` · x${f.recurrence}` : ""}</div></div>`).join("") + `</details>`;
+  if (run.status === "queued") {
+    html += `<div class="meta"><span class="pulse"></span>Queued: waiting for the current build on ${esc(mod.title || run.module)} to finish.</div>`;
+    if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;
+    return html + "</div>";
+  }
+  if (["running", "waiting", "failed"].includes(run.status)) html += stepsHtml(run);
+  if (run.step === "confirm_requirement" && run.status === "waiting") {
+    html += `<div class="req"><b>Requirement to confirm (covers all ${items.length} changes)</b>${esc(run.requirement)}</div>`;
+    if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/confirm')">Confirm requirement and build</button><button class="no" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;
+  }
+  if (run.step === "await_deploy" && run.status === "waiting") {
+    if (ev.what_changed || ev.build_summary) html += `<div class="prop">${esc(ev.what_changed || ev.build_summary)}</div>`;
+    if (ev.test_run) html += `<div class="meta">tests: ${ev.test_run.ok ? "passed" : "failed"} (${(ev.test_run.checked || []).length} checks)</div>`;
+    if (ev.cross_check) html += `<div class="meta">cross-check (${esc(modelLabel(ev.cross_check.model))}): ${esc(ev.cross_check.verdict)} · ${esc(ev.cross_check.summary || "")}</div>`;
+    html += `<a class="demo" href="/c/${SLUG}/staging/m/${esc(run.module)}/" target="_blank">Open preview of v${run.to_version} (not live)</a><br>`;
+    if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/deploy')">Deploy v${run.to_version} to floor</button><button class="no" onclick="if(confirm('Discard this build? The ${items.length} proposals go back to Reviewing.'))act('/api/runs/${run.id}/cancel')">Discard</button>`;
+  }
+  if (run.status === "failed") {
+    const last = (run.log || []).filter(l => l.step === "error").slice(-1)[0];
+    html += `<div class="fail-note">Stopped: ${esc(last ? last.note : "see log")}</div>`;
+    if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/retry')">Retry</button><button class="no" onclick="act('/api/runs/${run.id}/cancel')">Cancel (back to Reviewing)</button>`;
+  }
+  if (run.status === "deployed" && MGR() && mod.live_version === run.to_version) {
+    html += `<button class="no" onclick="act('/api/runs/${run.id}/rollback')">Roll back</button>`;
+  }
+  return html + "</div>";
+}
+
 function card(fb) {
   const run = DATA.runs.find(r => (r.feedback_ids || [r.feedback_id]).includes(fb.id) && r.status !== "cancelled");
   const isPlatform = !fb.module || fb.module === "platform";
@@ -303,7 +355,7 @@ function card(fb) {
     }
     if (run.step === "await_deploy" && run.status === "waiting") {
       const ev = run.evidence || {};
-      if (ev.build_summary) html += `<div class="prop">${esc(ev.build_summary)}</div>`;
+      if (ev.what_changed || ev.build_summary) html += `<div class="prop">${esc(ev.what_changed || ev.build_summary)}</div>`;
       if (ev.test_run) html += `<div class="meta">tests: ${ev.test_run.ok ? "passed" : "failed"} (${(ev.test_run.checked || []).length} checks)</div>`;
       if (ev.cross_check) html += `<div class="meta">cross-check (${esc(modelLabel(ev.cross_check.model))}): ${esc(ev.cross_check.verdict)} · ${esc(ev.cross_check.summary || "")}</div>`;
       if (ev.docs) html += `<div class="meta">guided by: ${esc(ev.docs.join(", "))}</div>`;
@@ -311,7 +363,7 @@ function card(fb) {
       if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/deploy')">Deploy v${run.to_version} to floor</button><button class="no" onclick="if(confirm('Discard this build? The proposals go back to Reviewing.'))act('/api/runs/${run.id}/cancel')">Discard</button>`;
     }
     if (run.status === "failed") {
-      const last = (run.log || []).slice(-1)[0];
+      const last = (run.log || []).filter(l => l.step === "error").slice(-1)[0];
       html += `<div class="fail-note">Stopped: ${esc(last ? last.note : "see log")}</div>`;
       if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/retry')">Retry</button><button class="no" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;
     }
@@ -349,7 +401,7 @@ async function openVersions(mod) {
     ${j.versions.map(v => `<div class="vrow">
       <span class="vn">v${v.version}</span>
       ${v.version === j.live_version ? '<span class="live">LIVE</span>' : ""}${v.version === j.staged_version ? '<span class="live" style="background:var(--amber)">STAGED</span>' : ""}
-      <span class="vs">${esc(String(v.summary || v.notes || (v.source === "repo" ? "Imported from the repo" : "Agent build")).split(/\n|(?:^|\s)- /).map(x => x.trim()).filter(Boolean)[0] || "")} · ${new Date(v.created_at).toLocaleString()}</span>
+      <span class="vs">${esc(v.notes && v.source !== "repo" ? v.notes : String(v.summary || v.notes || "Agent build").split(/\n|(?:^|\s)- /).map(x => x.trim()).filter(Boolean)[0] || "")} · ${new Date(v.created_at).toLocaleString()}</span>
       <button ${v.version === j.live_version ? "disabled" : ""} onclick="gotoVersion(${v.version}, false)">Switch to v${v.version}</button>
       <button ${v.version === j.live_version || !v.has_snapshot ? "disabled" : ""} title="${v.has_snapshot ? "" : "no data snapshot left for this version"}" onclick="gotoVersion(${v.version}, true)">Restore v${v.version} with its data</button>
     </div>`).join("")}
@@ -395,8 +447,24 @@ async function load() {
     [`$${DATA.spend.usd.toFixed(2)}`, `AI spend of $${DATA.spend.cap.toFixed(0)} cap`], [modelLabel(DATA.models.build), "build model"],
   ].map(([v, l]) => `<div class="kpi"><b>${esc(v)}</b><span>${l}</span></div>`).join("");
   const buckets = { new: [], reviewing: [], in_progress: [], done: [], platform: [] };
+  // batch runs render as one tile; their feedback items are folded into it
+  const batchRuns = DATA.runs.filter(r => (r.proposal_ids || []).length > 1 && !["cancelled"].includes(r.status));
+  const folded = new Set();
+  const tiles = { in_progress: [], done: [] };
+  for (const r of batchRuns) {
+    const col = ["deployed", "rolled_back"].includes(r.status) ? "done" : "in_progress";
+    const ids = (r.feedback_ids || []).filter(id => !folded.has(id));
+    if (!ids.length) continue;
+    const fbs = DATA.feedback.filter(f => ids.includes(f.id));
+    // only fold items whose own status matches the run (a cancelled/re-reviewed item stays its own card)
+    const live = fbs.filter(f => (col === "done" ? f.status === "done" : f.status === "in_progress"));
+    if (!live.length) continue;
+    for (const f of live) folded.add(f.id);
+    tiles[col].push({ run: r, ids: live.map(f => f.id) });
+  }
   for (const fb of DATA.feedback) {
     if (!fb.module || fb.module === "platform") { buckets.platform.push(fb); continue; }
+    if (folded.has(fb.id)) continue;
     (buckets[fb.status === "declined" ? "done" : fb.status] || buckets.new).push(fb);
   }
   renderToolbar();
@@ -405,8 +473,9 @@ async function load() {
   for (const id of [...SEL]) if (!reviewing.has(id)) SEL.delete(id);
   renderBatchBar();
   for (const k of ["new", "reviewing", "in_progress", "done", "platform"]) {
-    document.getElementById("col-" + k).innerHTML = buckets[k].map(card).join("") || '<div class="empty">Nothing here.</div>';
-    document.getElementById("n-" + k).textContent = buckets[k].length;
+    const batches = (tiles[k] || []).map(t => batchCard({ ...t.run, feedback_ids: t.ids }));
+    document.getElementById("col-" + k).innerHTML = (batches.join("") + buckets[k].map(card).join("")) || '<div class="empty">Nothing here.</div>';
+    document.getElementById("n-" + k).textContent = buckets[k].length + batches.length;
   }
 }
 load();

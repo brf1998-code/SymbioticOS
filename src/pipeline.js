@@ -106,9 +106,23 @@ async function proposalsText(run) {
   ).join("\n\n");
 }
 
+// Short title (for the version list) and a two-sentence "what changed" for
+// operators, from the approved changes and the agent's final message.
+async function plainSummary(batch, agentText, isBatch) {
+  const { data, costUsd } = await runStructured({
+    model: process.env.SOS_MODEL_SUMMARY || "claude-haiku-4-5-20251001",
+    system: "You write one-line change notes for people on a factory floor. Plain words, no code talk, no praise, no preamble.",
+    prompt: `Approved changes:\n${batch}\n\nWhat the build agent reported:\n${(agentText || "").slice(0, 3000)}\n\nWrite a title of at most 8 words naming what changed${isBatch ? " (it is a batch, so summarize the theme, e.g. 'Station page: fold names, clip position, distance unit')" : ""}, and a what_changed of one to three short sentences an operator would understand, naming the screen.`,
+    schema: { type: "object", properties: { title: { type: "string" }, what_changed: { type: "string" } }, required: ["title", "what_changed"] },
+    toolName: "summary",
+  });
+  return { title: String(data.title || "").slice(0, 80), what_changed: String(data.what_changed || "").slice(0, 600), costUsd };
+}
+
 async function failRun(runId, err) {
   console.error(`run ${runId} failed:`, err);
   if (err && typeof err.costUsd === "number") await addCost(runId, err.costUsd);
+  if (err && err.diag) await log(runId, { step: "diag", note: JSON.stringify(err.diag) });
   await log(runId, { step: "error", note: String(err.message || err) });
   await setRun(runId, { status: "failed" });
   const run = await getRun(runId);
@@ -176,6 +190,16 @@ ${isBatch ? "- Implement every change in the batch. Keep them independent where 
       const cur = await getRun(runId);
       await setRun(runId, { evidence: { ...cur.evidence, build_summary: text, docs: guidance.names, model } });
       await log(runId, { step: "build", note: `agent build complete (${model})` });
+      // Plain-language title and summary for the version list, the Done card
+      // and the feedback outcome. Cheap model; the agent's own final text is
+      // often chatty despite the instruction.
+      try {
+        const plain = await plainSummary(batch, text, isBatch);
+        await addCost(runId, plain.costUsd);
+        const c3 = await getRun(runId);
+        await setRun(runId, { evidence: { ...c3.evidence, title: plain.title, what_changed: plain.what_changed } });
+        await q("UPDATE platform.module_versions SET notes=$4 WHERE company=$1 AND module=$2 AND version=$3", [company, mod, c3.to_version, plain.title]);
+      } catch (e) { await log(runId, { step: "build", note: `summary skipped: ${e.message}` }); }
       await registry.stageVersion(company, mod, (await getRun(runId)).to_version);
       await log(runId, { step: "stage", note: "staged version mounted for preview" });
       await setRun(runId, { step: run.lane === "ui" ? "visual_check" : "cross_check" });
@@ -279,7 +303,8 @@ async function deploy(runId) {
   await setRun(runId, { status: "deployed" });
   await log(runId, { step: "deploy", note: `v${result.from} -> v${result.to} live` });
   const ps = await loadProposals(run.proposal_ids || [run.proposal_id]);
-  const summary = ((run.evidence || {}).build_summary || "").slice(0, 600);
+  const ev = run.evidence || {};
+  const summary = (ev.what_changed || ev.build_summary || "").slice(0, 600);
   for (const p of ps) {
     await q("UPDATE platform.feedback SET status='done', outcome=$2, updated_at=now() WHERE id=$1",
       [p.feedback_id, `Deployed v${result.to}${ps.length > 1 ? ` (batch of ${ps.length})` : ""}: ${summary || p.body.slice(0, 500)}`]);
