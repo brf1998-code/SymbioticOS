@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Symbiotic OS · Agent settings</title>
+<style>
+  :root { --ink:#1c242e; --steel:#51606f; --line:#d5dbe3; --fog:#f2f4f7; --navy:#1f3a5f; --green:#2e7d4f; --red:#b3261e; --amber:#c2620a; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); padding:18px; padding-bottom:90px; max-width:1100px; margin:0 auto; }
+  header { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:12px; }
+  h1 { font-size:21px; } h1 small { font-size:13px; color:var(--steel); font-weight:400; margin-left:6px; }
+  a { color:var(--navy); }
+  h2 { font-size:15px; margin:18px 0 8px; }
+  .sub { color:var(--steel); font-size:13px; line-height:1.5; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:10px; font-size:13px; }
+  .row { display:grid; grid-template-columns:150px 1fr; gap:10px; align-items:start; padding:8px 0; border-top:1px solid var(--line); }
+  .row:first-of-type { border-top:none; }
+  .row b { font-size:13px; } .row .why { color:var(--steel); font-size:12px; margin-top:4px; }
+  select, textarea, input { font-family:inherit; font-size:13px; border:1px solid var(--line); border-radius:7px; padding:7px; }
+  select { min-width:260px; max-width:100%; }
+  textarea { width:100%; min-height:220px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12.5px; line-height:1.45; }
+  button { border:none; border-radius:7px; padding:8px 12px; font-size:12.5px; font-weight:700; cursor:pointer; margin:8px 6px 0 0; min-height:36px; }
+  .go { background:var(--green); color:#fff; } .quiet { background:#e5e9ee; color:var(--ink); } .no { background:#fff; color:var(--red); border:1px solid var(--red); }
+  .doc { margin-bottom:10px; }
+  .doc summary { cursor:pointer; font-weight:700; font-size:13px; padding:6px 0; }
+  .doc summary .tag { font-weight:400; color:var(--steel); font-size:12px; margin-left:6px; }
+  pre { background:var(--fog); border-radius:8px; padding:10px; font-size:12px; white-space:pre-wrap; line-height:1.45; }
+  .prices td, .prices th { text-align:left; padding:4px 10px 4px 0; font-size:12.5px; }
+  .prices th { color:var(--steel); font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+  .ok { color:var(--green); font-size:12.5px; margin-left:8px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Agent settings <small id="coname"></small></h1>
+    <span class="sub"><a id="back" href="#">Improvement board</a></span>
+  </header>
+  <p class="sub">Which model does each job, and what the agents read before they touch this company's modules. Managers can change both; the platform principles are fixed and shown for reference.</p>
+
+  <h2>Models</h2>
+  <div class="card">
+    <div class="row"><b>Propose</b><div><select id="m-propose"></select><div class="why">One call per feedback item: reads the module and drafts the proposal, picks UI vs functionality and the target screen. Small context, so a cheaper model is fine. Also restates requirements before functionality builds.</div></div></div>
+    <div class="row"><b>Build</b><div><select id="m-build"></select><div class="why">The agent that edits the module files, many turns with file tools. Most of the spend. Sonnet 5 handles UI changes well; step up to Opus 5 for functionality changes that touch server logic and data, or when a build keeps missing.</div></div></div>
+    <div class="row"><b>Review</b><div><select id="m-review"></select><div class="why">Independent cross-check of the diff on the functionality lane. One call, diff only, so a stronger model than the builder costs little here and catches more.</div></div></div>
+    <div class="row"><b></b><div><button class="go" onclick="saveModels()">Save models</button><span class="ok" id="m-ok"></span></div></div>
+    <table class="prices" id="prices" style="margin-top:8px"></table>
+    <div class="why" style="margin-top:6px">Prices are per million tokens, input / output. A typical UI build on Sonnet 5 runs 5 to 30 cents; the same on Fable 5.1 about five times that. Per-run and monthly caps still apply.</div>
+  </div>
+
+  <h2>What the agents read</h2>
+  <p class="sub">Sent with every proposal and build, in this order: platform principles, then this company's docs, then the module's reference doc. Plain markdown. Keep them short and concrete; the agent follows what is written here more reliably than anything in the feedback text.</p>
+  <div id="platformdocs"></div>
+  <div id="docs"></div>
+  <div class="card">
+    <b>Add a doc</b>
+    <div class="row" style="border-top:none"><span class="sub">Scope</span><select id="new-scope"></select></div>
+    <div class="row"><span class="sub">Name</span><input id="new-name" placeholder="NOTES.md" style="max-width:260px"></div>
+    <button class="quiet" onclick="addDoc()">Create</button>
+  </div>
+<script>
+const SLUG = location.pathname.split("/")[2];
+let D = null;
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
+function opts(sel) { return D.models.list.map(m => `<option value="${m.id}" ${m.id === sel ? "selected" : ""}>${m.label} ($${m.in} / $${m.out})</option>`).join(""); }
+async function post(url, body, method = "POST") {
+  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) alert(j.error || "failed");
+  return j;
+}
+async function load() {
+  const r = await fetch(`/api/c/${SLUG}/agents`);
+  if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
+  if (r.status === 403) { document.body.innerHTML = "<p style='padding:20px'>Manager login required.</p>"; return; }
+  D = await r.json();
+  document.getElementById("coname").textContent = D.company.name;
+  document.getElementById("back").href = `/c/${SLUG}/`;
+  for (const role of ["propose", "build", "review"]) document.getElementById("m-" + role).innerHTML = opts(D.models[role]);
+  document.getElementById("prices").innerHTML = `<tr><th>Model</th><th>In</th><th>Out</th><th>When</th></tr>` +
+    D.models.list.map(m => `<tr><td><b>${m.label}</b> <span class="sub">${m.id}</span></td><td>$${m.in}</td><td>$${m.out}</td><td class="sub">${esc(m.note)}</td></tr>`).join("");
+  document.getElementById("platformdocs").innerHTML = D.platformDocs.map(d => `<details class="doc card"><summary>${esc(d.name)}<span class="tag">platform, read-only</span></summary><pre>${esc(d.content)}</pre></details>`).join("");
+  document.getElementById("docs").innerHTML = D.docs.map(d => `<details class="doc card" ${d.name === "COMPANY.md" ? "open" : ""}><summary>${esc(d.name)}<span class="tag">${d.module ? "module " + esc(d.module) : "company-wide"} · ${d.source === "repo" ? "seeded" : "edited"} · ${new Date(d.updated_at).toLocaleString()}</span></summary>
+    <textarea id="doc-${d.id}">${esc(d.content)}</textarea>
+    <button class="go" onclick="saveDoc(${d.id}, ${JSON.stringify(d.module)}, '${esc(d.name)}')">Save</button><button class="no" onclick="delDoc(${d.id}, '${esc(d.name)}')">Delete</button><span class="ok" id="ok-${d.id}"></span></details>`).join("") || `<p class="sub">No company docs yet.</p>`;
+  document.getElementById("new-scope").innerHTML = `<option value="">Company-wide</option>` + D.modules.map(m => `<option value="${m.name}">Module: ${esc(m.title)}</option>`).join("");
+}
+async function saveModels() {
+  await post(`/api/c/${SLUG}/agents/models`, { propose: v("m-propose"), build: v("m-build"), review: v("m-review") });
+  document.getElementById("m-ok").textContent = "saved"; setTimeout(() => document.getElementById("m-ok").textContent = "", 2000);
+}
+const v = (id) => document.getElementById(id).value;
+async function saveDoc(id, mod, name) {
+  await post(`/api/c/${SLUG}/agents/docs`, { module: mod, name, content: document.getElementById("doc-" + id).value });
+  document.getElementById("ok-" + id).textContent = "saved"; setTimeout(load, 800);
+}
+async function delDoc(id, name) { if (!confirm(`Delete ${name}?`)) return; await post(`/api/c/${SLUG}/agents/docs/${id}`, null, "DELETE"); load(); }
+async function addDoc() {
+  const name = v("new-name").trim(); if (!name) return;
+  await post(`/api/c/${SLUG}/agents/docs`, { module: v("new-scope") || null, name, content: `# ${name}\n\n` });
+  document.getElementById("new-name").value = ""; load();
+}
+load();
+</script>
+<script src="/assets/feedback-widget.js" data-module="platform"></script>
+</body>
+</html>

@@ -1,40 +1,17 @@
-// Feedback widget — injected into every module page by the runtime.
-// Posts to the platform's /api/feedback with the module name and page path.
+// Feedback widget — injected into every module page by the runtime, and used by
+// the platform's own pages with data-module="platform".
+// Posts to /api/feedback with the company, module name and page path (the page
+// path is how the platform knows which screen the feedback is about).
 // It also watches the module's version: when the manager deploys a new
 // version, every open page reloads itself and shows a short "updated" banner.
+// On a staged preview it pins an amber bar so nobody mistakes it for the floor.
 (function () {
   const script = document.currentScript;
   const mod = script ? script.getAttribute("data-module") : null;
   const version = script ? script.getAttribute("data-version") : null;
   const mount = script ? script.getAttribute("data-mount") : null;
-
-  function banner(text) {
-    const el = document.createElement("div");
-    el.textContent = text;
-    el.style.cssText = "position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:10000;background:#2e7d4f;color:#fff;border-radius:20px;padding:10px 18px;font-size:14px;font-weight:700;box-shadow:0 4px 14px rgba(0,0,0,.25);font-family:system-ui,sans-serif;";
-    document.body.appendChild(el);
-    setTimeout(() => el.remove(), 7000);
-  }
-  function watchVersion() {
-    if (!mod || !version || mod === "platform") return;
-    const key = "sos.updated." + mod;
-    try {
-      const v = sessionStorage.getItem(key);
-      if (v) { sessionStorage.removeItem(key); banner("This page was just updated (version " + v + ")"); }
-    } catch (e) {}
-    setInterval(async () => {
-      try {
-        const r = await fetch("/api/modules/" + mod + "/version", { cache: "no-store" });
-        if (!r.ok) return;
-        const j = await r.json();
-        const current = mount === "staged" ? j.staged_version : j.live_version;
-        if (current && String(current) !== String(version)) {
-          try { sessionStorage.setItem(key, String(current)); } catch (e) {}
-          location.reload();
-        }
-      } catch (e) {}
-    }, 5000);
-  }
+  const company = (script && script.getAttribute("data-company")) || ((/^\/c\/([^/]+)/.exec(location.pathname) || [])[1]) || "demo";
+  const staged = mount === "staged";
 
   const btn = document.createElement("button");
   btn.textContent = "Something in the way?";
@@ -51,6 +28,58 @@
 
   btn.onclick = () => { panel.style.display = panel.style.display === "none" ? "block" : "none"; };
 
+  function banner(text, color) {
+    const el = document.createElement("div");
+    el.textContent = text;
+    el.style.cssText = "position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:10000;background:" + (color || "#2e7d4f") + ";color:#fff;border-radius:20px;padding:10px 18px;font-size:14px;font-weight:700;box-shadow:0 4px 14px rgba(0,0,0,.25);font-family:system-ui,sans-serif;max-width:calc(100vw - 32px);text-align:center;";
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 7000);
+  }
+
+  // Staged preview: a bar that never goes away, with a live-version reminder.
+  function stagedBar(liveVersion) {
+    let bar = document.getElementById("sos-staged-bar");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "sos-staged-bar";
+      bar.style.cssText = "position:sticky;top:0;z-index:10001;background:#c2620a;color:#fff;padding:9px 14px;font-size:13.5px;font-weight:700;font-family:system-ui,sans-serif;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.25);";
+      document.body.insertBefore(bar, document.body.firstChild);
+      document.body.style.borderTop = "4px dashed #c2620a";
+    }
+    const back = location.pathname.replace("/staging/", "/");
+    bar.innerHTML = "PREVIEW of version " + version + " (not on the floor)" + (liveVersion ? " · the floor is on version " + liveVersion : "") +
+      ' · <a href="' + back + '" style="color:#fff;text-decoration:underline">open the live page</a>';
+  }
+
+  function watchVersion() {
+    if (!mod || !version || mod === "platform") return;
+    const key = "sos.updated." + company + "." + mod;
+    try {
+      const v = sessionStorage.getItem(key);
+      if (v) { sessionStorage.removeItem(key); banner("This page was just updated (version " + v + ")"); }
+    } catch (e) {}
+    const probe = async () => {
+      try {
+        const r = await fetch("/api/c/" + company + "/modules/" + mod + "/version", { cache: "no-store" });
+        if (!r.ok) return;
+        const j = await r.json();
+        if (staged) {
+          stagedBar(j.live_version);
+          if (!j.staged_version) { banner("This preview is gone (deployed or discarded). Opening the live page.", "#51606f"); setTimeout(() => location.href = location.pathname.replace("/staging/", "/"), 2500); }
+          else if (String(j.staged_version) !== String(version)) location.reload();
+          return;
+        }
+        if (j.live_version && String(j.live_version) !== String(version)) {
+          try { sessionStorage.setItem(key, String(j.live_version)); } catch (e) {}
+          location.reload();
+        }
+      } catch (e) {}
+    };
+    if (staged) stagedBar(null);
+    probe();
+    setInterval(probe, 5000);
+  }
+
   document.addEventListener("DOMContentLoaded", init);
   if (document.readyState !== "loading") init();
   function init() {
@@ -66,7 +95,7 @@
       try { localStorage.setItem("sos.name", nameEl.value); } catch (e) {}
       const res = await fetch("/api/feedback", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ module: mod, page: location.pathname, message: msg, name: nameEl.value }),
+        body: JSON.stringify({ company, module: mod, page: location.pathname, message: msg, name: nameEl.value }),
       });
       if (res.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
       panel.querySelector("#fbw-msg").value = "";

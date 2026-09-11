@@ -18,8 +18,9 @@ SOS_FAKE_AGENT=1 npm start        # whole loop, zero API cost
 # or: ANTHROPIC_API_KEY=sk-... npm start
 ```
 
-Open http://localhost:3000 for the improvement board and
-http://localhost:3000/m/paperline/ for the line. Modules under `modules/` are
+Open http://localhost:3000 (lands on the Demo Company board at `/c/demo/`),
+http://localhost:3000/c/demo/m/paperline/ for the line, `/c/demo/agents` for
+models and agent docs, `/admin` for companies. Modules under `modules/` are
 imported into the database on first boot; no seed step.
 
 With no `SOS_FLOOR_PASSWORD` / `SOS_MANAGER_PASSWORD` set, every request is a
@@ -31,8 +32,8 @@ manager (local dev). Set both for anything reachable from the internet.
 |---|---|
 | `DATABASE_URL` | Postgres connection (default `postgres://sos:sos@localhost:5432/sos`) |
 | `ANTHROPIC_API_KEY` | enables real proposals and builds |
-| `SOS_MODEL` | default `claude-sonnet-4-5` |
-| `SOS_FLOOR_PASSWORD`, `SOS_MANAGER_PASSWORD` | two-role access |
+| `SOS_MODEL_PROPOSE`, `SOS_MODEL_BUILD`, `SOS_MODEL_REVIEW` | instance defaults (`claude-sonnet-5`, `claude-sonnet-5`, `claude-opus-5`); companies override in the app |
+| `SOS_FLOOR_PASSWORD`, `SOS_MANAGER_PASSWORD`, `SOS_ADMIN_PASSWORD` | three-role access (admin falls back to the manager password) |
 | `SESSION_SECRET` | signs the session cookie |
 | `SOS_MAX_RUN_USD` | per build run cap (default 1.50); the run is aborted past it |
 | `SOS_MONTHLY_CAP_USD` | no new proposals or runs past this (default 25) |
@@ -61,7 +62,8 @@ through the repo, not the in-app agent.
 - `src/migrate.js` — additive-only migration validator, staging clone, in-database snapshots and restore
 - `src/proposals.js` — feedback -> proposal + UI/functionality classification
 - `src/pipeline.js` — the two lanes as a state machine over build_runs
-- `src/agent.js` — Claude Agent SDK runner (cwd = draft version dir, file tools only), cost caps, fake mode
+- `src/agent.js` — Claude Agent SDK runner (cwd = draft version dir, file tools only), model roles and prices, guidance docs, cost caps, fake mode
+- `public/agents.html`, `public/admin.html` — per-company agent settings, instance admin
 - `principles/` — PRINCIPLES, GUARDRAILS, STYLE + per-module reference formats (fed to every agent run)
 - `modules/<name>/` — seed source for each module (manifest, routes, pages, migrations)
 

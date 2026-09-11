@@ -130,7 +130,7 @@ async function load() {
   D = await r.json();
   // shift buttons are shown to everyone; the server only accepts them from a manager session
   document.getElementById("links").innerHTML =
-    D.stations.map(s => `<a href="${base}/station/${s.seq}">Station ${s.seq}</a>`).join("") + `<a href="${base}/stock">Stockroom</a><a href="/">Improvement board</a>`;
+    D.stations.map(s => `<a href="${base}/station/${s.seq}">Station ${s.seq}</a>`).join("") + `<a href="${base}/stock">Stockroom</a><a href="${base.replace(/\/m\/[^/]+$/, "").replace(/\/staging$/, "")}/">Improvement board</a>`;
   document.getElementById("shiftlabel").textContent = D.shift ? `Shift ${D.shift.number} running · ${D.shift.released} travelers released` : "No shift running";
   document.getElementById("controls").innerHTML = D.shift
     ? `<button class="stop" onclick="post('/api/shift/end')">End shift now</button>`

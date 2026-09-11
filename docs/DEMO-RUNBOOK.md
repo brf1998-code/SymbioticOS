@@ -19,8 +19,11 @@ count matches the app).
 Devices: everyone opens https://sos.finnoperations.com on their phone, signs
 in with the floor password, and picks a station. You (manager) open the same
 site on a laptop with the manager password and keep two tabs: the line board
-(`/m/paperline/`) on a projector if you have one, and the improvement board
-(`/`).
+(`/c/demo/m/paperline/`) on a projector if you have one, and the improvement
+board (`/c/demo/`). Before the session, check `/c/demo/agents`: which model
+builds (Sonnet 5 is the default; Opus 5 for functionality-heavy sessions) and
+what the agents read (COMPANY.md is yours to fill in with the room's
+vocabulary).
 
 Headcount: 5 stations plus 1 stockroom plus you is the full setup. Fewer
 people means fewer stations (set it in Demo setup, the folds merge). With
@@ -81,7 +84,9 @@ their words, name included. Do not filter or reword for them.
 
 On the improvement board (manager tab):
 
-1. Each item appears under Feedback with the station page it came from.
+1. Each item appears under Feedback with the screen it came from ("Station
+   page", "Line board", "Stockroom page"). That screen is where the change
+   will land; if someone filed it from the wrong page, fix it in **Adjust**.
    If two people report the same thing, use **+1 seen again** instead of a
    second card. Recurrence is the priority signal.
 2. Click **Review with AI** on the ones worth doing. Read each proposal out
@@ -98,8 +103,10 @@ On the improvement board (manager tab):
    change takes roughly one to two minutes; a functionality change a bit
    longer. Run shift 2 while a slow build is in progress if you want to keep
    energy up.
-4. When it reaches the gate, open **View staged demo** on the projector. That
-   is the change running against a copy of the live data, not the live line.
+4. When it reaches the gate, open **Open preview of vN (not live)** on the
+   projector. The preview carries an amber bar the whole time ("PREVIEW of
+   version N, the floor is on version M") so nobody confuses it with the line.
+   It runs against a copy of the live data.
 5. **Deploy to floor.** Every open station, stockroom, and line board page
    reloads itself within about five seconds and shows a green "This page was
    just updated (version N)" banner. The card moves to Done with a "You said /

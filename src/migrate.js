@@ -18,8 +18,8 @@ const { q, pool, logEvent } = require("./db");
 
 const KEEP_SNAPSHOTS = Number(process.env.SOS_KEEP_SNAPSHOTS || 5);
 
-function liveSchema(mod) { return `mod_${mod}`; }
-function stagingSchema(mod) { return `stg_${mod}`; }
+function liveSchema(company, mod) { return `mod_${company}_${mod}`; }
+function stagingSchema(company, mod) { return `stg_${company}_${mod}`; }
 
 // ---- validation -----------------------------------------------------------
 // Allowed statement shapes (whitespace-insensitive, case-insensitive):
@@ -81,7 +81,7 @@ function migrationFiles(versionDir) {
 }
 
 // Apply a version's migrations to a schema (skipping already-applied files).
-async function applyMigrations(mod, schema, versionDir) {
+async function applyMigrations(schema, versionDir) {
   await q(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
   await ensureMigrationTable(schema);
   const applied = new Set(
@@ -130,29 +130,29 @@ async function cloneSchema(fromSchema, toSchema) {
   return tables;
 }
 
-// Rebuild stg_<mod> as a clone (structure + data) of mod_<mod>.
-async function rebuildStagingClone(mod) {
-  const tables = await cloneSchema(liveSchema(mod), stagingSchema(mod));
-  await logEvent("staging_clone_rebuilt", mod, { tables });
+// Rebuild the staging schema as a clone (structure + data) of the live one.
+async function rebuildStagingClone(company, mod) {
+  const tables = await cloneSchema(liveSchema(company, mod), stagingSchema(company, mod));
+  await logEvent("staging_clone_rebuilt", `${company}/${mod}`, { tables });
   return tables;
 }
 
 // ---- snapshots (in-database) ----------------------------------------------
-async function snapshotSchema(mod, version) {
-  const name = `snap_${mod}_${Date.now()}`;
-  await cloneSchema(liveSchema(mod), name);
+async function snapshotSchema(company, mod, version) {
+  const name = `snap_${company}_${mod}_${Date.now()}`;
+  await cloneSchema(liveSchema(company, mod), name);
   return name;
 }
 
-async function recordSnapshot(mod, version, snapName) {
+async function recordSnapshot(company, mod, version, snapName) {
   await q(
-    "INSERT INTO platform.schema_snapshots (module, version, file) VALUES ($1,$2,$3)",
-    [mod, version, snapName]
+    "INSERT INTO platform.schema_snapshots (company, module, version, file) VALUES ($1,$2,$3,$4)",
+    [company, mod, version, snapName]
   );
   // retention: keep the newest N per module
   const old = (await q(
-    `SELECT id, file FROM platform.schema_snapshots WHERE module=$1 ORDER BY id DESC OFFSET $2`,
-    [mod, KEEP_SNAPSHOTS])).rows;
+    `SELECT id, file FROM platform.schema_snapshots WHERE company=$1 AND module=$2 ORDER BY id DESC OFFSET $3`,
+    [company, mod, KEEP_SNAPSHOTS])).rows;
   for (const s of old) {
     await q(`DROP SCHEMA IF EXISTS ${s.file} CASCADE`);
     await q("DELETE FROM platform.schema_snapshots WHERE id=$1", [s.id]);
@@ -168,8 +168,8 @@ async function columnsOf(schema, table) {
 // Restore a snapshot INTO the live schema in place. Additive-only migrations
 // mean the live schema is a superset of the snapshot: extra tables, columns and
 // indexes get dropped, then every table's data is replaced with the snapshot's.
-async function restoreSnapshot(mod, snapName) {
-  const live = liveSchema(mod);
+async function restoreSnapshot(company, mod, snapName) {
+  const live = liveSchema(company, mod);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -215,7 +215,7 @@ async function restoreSnapshot(mod, snapName) {
   } finally {
     client.release();
   }
-  await logEvent("schema_restored", mod, { snapshot: snapName });
+  await logEvent("schema_restored", `${company}/${mod}`, { snapshot: snapName });
 }
 
 module.exports = {

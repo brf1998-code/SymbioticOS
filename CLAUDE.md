@@ -5,6 +5,34 @@ instance are worked on.** Repo: `brf1998-code/SymbioticOS` (private). Live:
 https://sos.finnoperations.com (Railway project `symbiotic-os`, service
 `SymbioticOS` + `Postgres`).
 
+## Shape of the instance (since 2026-09-11)
+
+One instance hosts many **companies**. Everything is scoped by company slug:
+- `/c/<slug>/` improvement board, `/c/<slug>/agents` model choices and agent
+  docs, `/c/<slug>/m/<module>/` live module pages,
+  `/c/<slug>/staging/m/<module>/` the preview of a build (amber bar on every
+  staged page, reloads/leaves when the staged version changes).
+- `/admin` (admin role, `SOS_ADMIN_PASSWORD`; manager password doubles as
+  admin when unset) lists companies, their modules, docs, spend, and adds
+  companies or library modules to them.
+- Module schemas are `mod_<company>_<module>` / `stg_...` / `snap_...`. The
+  first boot after this change renamed the old `mod_paperline` schema and
+  moved everything under company `demo` (`src/db.js upgradeSingleTenant`).
+- Feedback records the **screen** it came from (label + file, resolved from
+  the module manifest's `pages` map, which now carries labels). Proposals
+  carry `target_file`; the build prompt pins the change to that file; the
+  cross-check fails a diff that lands on another screen. The manager can
+  change the target in the Adjust form.
+- Three model roles per company (propose / build / review), chosen on the
+  Agent settings page, with a per-run override in Adjust and in the batch bar.
+  `src/agent.js MODELS` is the price table; keep it current with
+  platform.claude.com/docs/en/models/overview.
+- Agent docs: repo `principles/*.md` are platform-wide and read-only in the
+  app; each company has editable docs in `platform.agent_docs` (COMPANY.md
+  seeded, module `reference.md` seeded from `principles/module-formats/`).
+  Every run records which docs it was guided by (`evidence.docs`).
+- Old URLs `/m/<module>` redirect to `/c/demo/m/<module>`.
+
 ## What this is
 
 The product version of Brendan's operations methodology: one app per factory
@@ -34,8 +62,8 @@ is the facilitator script.
    `src/`, `public/`, `server.js`, `principles/`) and for deliberate module
    revisions. Feedback filed about the platform itself lands in the
    "Platform (built by Brendan)" column of the board and is readable from here:
-   `GET /api/feedback/platform` (manager session) or the `platform.feedback`
-   table where `module='platform'`. Close them with
+   `GET /api/c/<slug>/feedback/platform` (manager session) or the
+   `platform.feedback` table where `module='platform'`. Close them with
    `POST /api/feedback/:id/close {outcome}` after shipping.
 
 ### How module versions work (read before touching `modules/`)
@@ -49,7 +77,7 @@ is the facilitator script.
 - So: to revise a module from Cowork, edit `modules/<name>/`, push, done. But
   if the in-app agent has built versions since the last import, the repo copy
   is behind. **Export the live version first** and edit that:
-  `GET https://sos.finnoperations.com/api/admin/modules/paperline/export`
+  `GET https://sos.finnoperations.com/api/c/demo/modules/paperline/export`
   (manager cookie) returns `{files}`; write them over `modules/paperline/`,
   then make the change. Otherwise the agent's changes get superseded (they
   remain in the DB and are still rollback-able, but not live).
@@ -91,9 +119,12 @@ the whole loop with zero API spend. The sandbox has no npm registry access.
 ## Live instance env vars (Railway service `SymbioticOS`)
 
 `DATABASE_URL` (reference to Postgres), `ANTHROPIC_API_KEY`,
-`SOS_FLOOR_PASSWORD`, `SOS_MANAGER_PASSWORD`, `SESSION_SECRET`,
-`SOS_MODEL` (default claude-sonnet-4-5), `SOS_MAX_RUN_USD` (per build run,
-default 1.50), `SOS_MONTHLY_CAP_USD` (default 25), `SOS_FAKE_AGENT` (0/1).
+`SOS_FLOOR_PASSWORD`, `SOS_MANAGER_PASSWORD`, `SOS_ADMIN_PASSWORD`,
+`SESSION_SECRET`, `SOS_MODEL_PROPOSE` / `SOS_MODEL_BUILD` / `SOS_MODEL_REVIEW`
+(instance defaults: claude-sonnet-5 / claude-sonnet-5 / claude-opus-5;
+companies override on their Agent settings page), `SOS_MAX_RUN_USD` (per
+build run, default 1.50), `SOS_MONTHLY_CAP_USD` (default 25),
+`SOS_FAKE_AGENT` (0/1).
 Passwords live only in Railway; never commit them.
 
 ## Hard rules

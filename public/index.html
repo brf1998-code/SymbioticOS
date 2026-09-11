@@ -9,10 +9,11 @@
           --teal:#0e8a86; --tealSoft:#e3f2f1; --amber:#c2620a; --amberSoft:#fbefe0;
           --navy:#1f3a5f; --green:#2e7d4f; --red:#b3261e; }
   * { box-sizing:border-box; margin:0; }
-  body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); padding:18px; }
+  body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); padding:18px; padding-bottom:90px; }
   header { display:flex; align-items:baseline; gap:14px; margin-bottom:4px; flex-wrap:wrap; }
   h1 { font-size:21px; }
-  .modules a { color:var(--navy); font-size:13px; margin-right:10px; font-weight:600; }
+  h1 small { font-size:13px; color:var(--steel); font-weight:400; margin-left:6px; }
+  .modules a { color:var(--navy); font-size:13px; margin-right:12px; font-weight:600; }
   .right { margin-left:auto; color:var(--steel); font-size:12.5px; }
   .right a { color:var(--navy); }
   .warn { color:var(--amber); font-size:12.5px; margin:4px 0 12px; }
@@ -27,6 +28,7 @@
   .chip { display:inline-block; font-size:10.5px; font-weight:700; border-radius:10px; padding:2px 8px; color:#fff; margin-right:4px; }
   .chip.ui { background:var(--teal); } .chip.functionality { background:var(--amber); }
   .chip.rec { background:var(--steel); } .chip.platform { background:var(--navy); }
+  .chip.screen { background:#e5e9ee; color:var(--ink); }
   .prop { background:var(--fog); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; }
   .req { background:var(--amberSoft); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; }
   button { border:none; border-radius:7px; padding:8px 12px; font-size:12.5px; font-weight:700; cursor:pointer; margin:8px 6px 0 0; min-height:36px; }
@@ -36,19 +38,23 @@
   .step { display:flex; gap:6px; align-items:center; color:var(--steel); padding:2px 0; }
   .dot { width:9px; height:9px; border-radius:50%; background:var(--line); flex:none; }
   .dot.done { background:var(--green); } .dot.now { background:var(--amber); } .dot.fail { background:var(--red); }
-  .outcome { background:#e4f1e9; color:var(--green); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; }
+  .outcome { background:#e4f1e9; color:var(--green); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; }
   .fail-note { background:#fdeceb; color:var(--red); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; }
-  a.demo { color:var(--teal); font-weight:700; font-size:12.5px; }
-  .batchbar { position:sticky; top:0; z-index:5; background:#fff; border:1px solid var(--line); border-radius:10px; padding:8px 12px; margin-bottom:12px; font-size:13px; }
-  .batchbar button { margin:0 6px 0 0; }
+  a.demo { display:inline-block; color:#fff; background:var(--amber); font-weight:700; font-size:12.5px; border-radius:7px; padding:8px 12px; margin-top:8px; text-decoration:none; }
+  .batchbar { position:sticky; top:0; z-index:5; background:#fff; border:1px solid var(--line); border-radius:10px; padding:8px 12px; margin-bottom:12px; font-size:13px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .batchbar button { margin:0; }
   label.pick { display:block; font-size:12px; color:var(--steel); margin-top:8px; cursor:pointer; }
+  select, textarea { font-family:inherit; font-size:12.5px; border:1px solid var(--line); border-radius:7px; padding:6px; }
+  textarea { width:100%; min-height:90px; }
+  .edit { margin-top:8px; display:grid; gap:6px; }
+  .edit label { font-size:11.5px; color:var(--steel); }
   .pulse { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--amber); margin-right:5px; animation:p 1s infinite alternate; }
   @keyframes p { from { opacity:.3 } to { opacity:1 } }
 </style>
 </head>
 <body>
   <header>
-    <h1>Improvement Board</h1>
+    <h1>Improvement Board <small id="coname"></small></h1>
     <span class="modules" id="modules"></span>
     <span class="right" id="who"></span>
   </header>
@@ -63,6 +69,7 @@
     <div class="col"><h2>Platform (built by Brendan)</h2><div id="col-platform"></div></div>
   </div>
 <script>
+const SLUG = location.pathname.split("/")[2];
 const LANES = {
   ui: ["build", "visual_check", "await_deploy"],
   functionality: ["confirm_requirement", "build", "cross_check", "test_run", "await_deploy"],
@@ -73,17 +80,16 @@ const STEP_LABEL = {
 };
 let DATA = null;
 const SEL = new Set();
-const MGR = () => DATA && DATA.role === "manager";
-function toggleSel(pid, on) { if (on) SEL.add(pid); else SEL.delete(pid); renderBatchBar(); }
-function renderBatchBar() {
-  const bar = document.getElementById("batchbar");
-  if (!SEL.size) { bar.style.display = "none"; return; }
-  bar.style.display = "block";
-  bar.innerHTML = `<b>${SEL.size}</b> proposal(s) selected · <button class="go" onclick="buildBatch()">Build together as one change</button><button class="quiet" onclick="SEL.clear();renderBatchBar();load()">Clear</button>`;
+let EDITING = null;
+const MGR = () => DATA && (DATA.role === "manager" || DATA.role === "admin");
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
+function modelLabel(id) { const m = (DATA.models.list || []).find(x => x.id === id); return m ? m.label : (id || ""); }
+function modelOptions(sel) {
+  return DATA.models.list.map(m => `<option value="${m.id}" ${m.id === sel ? "selected" : ""}>${m.label} ($${m.in}/$${m.out} per M tokens)</option>`).join("");
 }
-async function buildBatch() {
-  const ids = [...SEL]; SEL.clear(); renderBatchBar();
-  await act("/api/runs/batch", { proposal_ids: ids });
+function screenLabel(mod, file) {
+  const s = (DATA.screens[mod] || []).find(x => x.file === file);
+  return s ? s.label : (file || "unspecified");
 }
 
 async function act(url, body) {
@@ -93,7 +99,18 @@ async function act(url, body) {
   load();
 }
 
-function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
+function toggleSel(pid, on) { if (on) SEL.add(pid); else SEL.delete(pid); renderBatchBar(); }
+function renderBatchBar() {
+  const bar = document.getElementById("batchbar");
+  if (!SEL.size) { bar.style.display = "none"; return; }
+  bar.style.display = "flex";
+  bar.innerHTML = `<b>${SEL.size}</b> proposal(s) selected · build with <select id="batchmodel">${modelOptions(DATA.models.build)}</select>
+    <button class="go" onclick="buildBatch()">Build together as one change</button><button class="quiet" onclick="SEL.clear();renderBatchBar();load()">Clear</button>`;
+}
+async function buildBatch() {
+  const ids = [...SEL]; const model = document.getElementById("batchmodel").value; SEL.clear(); renderBatchBar();
+  await act("/api/runs/batch", { proposal_ids: ids, model });
+}
 
 function stepsHtml(run) {
   const lane = LANES[run.lane] || [];
@@ -107,13 +124,32 @@ function stepsHtml(run) {
   }).join("") + "</div>";
 }
 
+function editForm(fb) {
+  const opts = (DATA.screens[fb.module] || []).map(s => `<option value="${s.file}" ${s.file === fb.proposal_target ? "selected" : ""}>${esc(s.label)}</option>`).join("");
+  return `<div class="edit">
+    <label>Proposal text (what the agent builds from)</label>
+    <textarea id="eb-${fb.proposal_id}">${esc(fb.proposal_body)}</textarea>
+    <label>Kind</label><select id="ec-${fb.proposal_id}"><option value="ui" ${fb.proposal_class === "ui" ? "selected" : ""}>UI change (build straight away)</option><option value="functionality" ${fb.proposal_class === "functionality" ? "selected" : ""}>Functionality change (confirm requirement first)</option></select>
+    <label>Screen this change lands on</label><select id="et-${fb.proposal_id}">${opts}</select>
+    <label>Build with</label><select id="em-${fb.proposal_id}">${modelOptions(DATA.models.build)}</select>
+    <div><button class="go" onclick="submitEdit(${fb.proposal_id}, 'approve')">Approve build</button><button class="quiet" onclick="submitEdit(${fb.proposal_id}, 'save')">Save</button><button class="quiet" onclick="EDITING=null;load()">Cancel</button></div>
+  </div>`;
+}
+function submitEdit(pid, decision) {
+  const body = { decision, editedBody: document.getElementById("eb-" + pid).value, editedClass: document.getElementById("ec-" + pid).value,
+    editedTarget: document.getElementById("et-" + pid).value, model: document.getElementById("em-" + pid).value };
+  EDITING = null;
+  act(`/api/proposals/${pid}/decide`, body);
+}
+
 function card(fb) {
   const run = DATA.runs.find(r => (r.feedback_ids || [r.feedback_id]).includes(fb.id) && r.status !== "cancelled");
   const isPlatform = !fb.module || fb.module === "platform";
   let html = `<div class="card">`;
   html += `<div class="msg">${esc(fb.message)}</div>`;
-  html += `<div class="meta">#${fb.id} · ${isPlatform ? '<span class="chip platform">PLATFORM</span>' : esc(fb.module)}${fb.page ? " · " + esc(fb.page) : ""} · ${esc(fb.name || "anonymous")}`
+  html += `<div class="meta">#${fb.id} · ${isPlatform ? '<span class="chip platform">PLATFORM</span>' : esc(fb.module)} · ${esc(fb.name || "anonymous")}`
        + (fb.recurrence > 1 ? ` · <span class="chip rec">x${fb.recurrence}</span>` : "") + `</div>`;
+  html += `<div class="meta"><span class="chip screen">Screen: ${esc(fb.screen || fb.page || "unknown")}</span></div>`;
 
   if (isPlatform) {
     if (fb.status === "new") {
@@ -132,12 +168,13 @@ function card(fb) {
   }
 
   if (fb.status === "reviewing" && fb.proposal_id) {
-    html += `<div class="prop"><span class="chip ${fb.proposal_class}">${fb.proposal_class === "ui" ? "UI CHANGE" : "FUNCTIONALITY"}</span><br>${esc(fb.proposal_body)}</div>`;
-    if (fb.proposal_rationale) html += `<div class="meta">${esc(fb.proposal_rationale)}</div>`;
+    if (EDITING === fb.proposal_id) { html += editForm(fb); return html + "</div>"; }
+    html += `<div class="prop"><span class="chip ${fb.proposal_class}">${fb.proposal_class === "ui" ? "UI CHANGE" : "FUNCTIONALITY"}</span><span class="chip screen">Will change: ${esc(screenLabel(fb.module, fb.proposal_target))}</span><br>${esc(fb.proposal_body)}</div>`;
+    if (fb.proposal_rationale) html += `<div class="meta">${esc(fb.proposal_rationale)}${fb.proposal_model ? " · proposed by " + esc(modelLabel(fb.proposal_model)) : ""}</div>`;
     if (MGR()) {
       html += `<label class="pick"><input type="checkbox" ${SEL.has(fb.proposal_id) ? "checked" : ""} onchange="toggleSel(${fb.proposal_id}, this.checked)"> add to batch</label>`;
-      html += `<button class="go" onclick="act('/api/proposals/${fb.proposal_id}/decide',{decision:'approve'})">Approve build</button>`;
-      html += `<button class="quiet" onclick="adjust(${fb.proposal_id})">Adjust</button>`;
+      html += `<button class="go" onclick="act('/api/proposals/${fb.proposal_id}/decide',{decision:'approve'})">Approve build (${esc(modelLabel(DATA.models.build))})</button>`;
+      html += `<button class="quiet" onclick="EDITING=${fb.proposal_id};load()">Adjust</button>`;
       html += `<button class="no" onclick="decline(${fb.proposal_id})">Decline</button>`;
     } else {
       html += `<div class="meta">Waiting on the manager.</div>`;
@@ -146,7 +183,7 @@ function card(fb) {
 
   if (fb.status === "in_progress" && run) {
     const others = (run.feedback_ids || []).filter(i => i !== fb.id);
-    html += `<div class="meta" style="margin-top:6px"><span class="chip ${run.lane}">${run.lane === "ui" ? "UI LANE" : "FUNCTIONALITY LANE"}</span> run #${run.id} · v${run.from_version}${run.to_version ? " → v" + run.to_version : ""} · $${Number(run.cost_usd).toFixed(2)}${others.length ? ` · <span class="chip rec">batch with #${others.join(", #")}</span>` : ""}</div>`;
+    html += `<div class="meta" style="margin-top:6px"><span class="chip ${run.lane}">${run.lane === "ui" ? "UI LANE" : "FUNCTIONALITY LANE"}</span> run #${run.id} · v${run.from_version}${run.to_version ? " → v" + run.to_version : ""} · ${esc(modelLabel(run.model))} · $${Number(run.cost_usd).toFixed(2)}${others.length ? ` · <span class="chip rec">batch with #${others.join(", #")}</span>` : ""}</div>`;
     if (run.status === "queued") {
       html += `<div class="meta"><span class="pulse"></span>Queued: waiting for the current build on ${esc(run.module)} to finish.</div>`;
       if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;
@@ -161,9 +198,10 @@ function card(fb) {
       const ev = run.evidence || {};
       if (ev.build_summary) html += `<div class="prop">${esc(ev.build_summary)}</div>`;
       if (ev.test_run) html += `<div class="meta">tests: ${ev.test_run.ok ? "passed" : "failed"} (${(ev.test_run.checked || []).length} checks)</div>`;
-      if (ev.cross_check) html += `<div class="meta">cross-check: ${esc(ev.cross_check.verdict)} · ${esc(ev.cross_check.summary || "")}</div>`;
-      html += `<a class="demo" href="/staging/m/${esc(fb.module)}/" target="_blank">View staged demo</a><br>`;
-      if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/deploy')">Deploy to floor</button><button class="no" onclick="if(confirm('Discard this build? The proposals go back to Reviewing.'))act('/api/runs/${run.id}/cancel')">Discard</button>`;
+      if (ev.cross_check) html += `<div class="meta">cross-check (${esc(modelLabel(ev.cross_check.model))}): ${esc(ev.cross_check.verdict)} · ${esc(ev.cross_check.summary || "")}</div>`;
+      if (ev.docs) html += `<div class="meta">guided by: ${esc(ev.docs.join(", "))}</div>`;
+      html += `<a class="demo" href="/c/${SLUG}/staging/m/${esc(fb.module)}/" target="_blank">Open preview of v${run.to_version} (not live)</a><br>`;
+      if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/deploy')">Deploy v${run.to_version} to floor</button><button class="no" onclick="if(confirm('Discard this build? The proposals go back to Reviewing.'))act('/api/runs/${run.id}/cancel')">Discard</button>`;
     }
     if (run.status === "failed") {
       const last = (run.log || []).slice(-1)[0];
@@ -182,12 +220,6 @@ function card(fb) {
   return html + "</div>";
 }
 
-function adjust(pid) {
-  const editedBody = prompt("Adjust the proposal (this replaces the text the agent will build from):");
-  if (editedBody == null) return;
-  const editedClass = confirm("Treat as a FUNCTIONALITY change? (Cancel = UI change)") ? "functionality" : "ui";
-  act(`/api/proposals/${pid}/decide`, { decision: "approve", editedBody, editedClass });
-}
 function decline(pid) {
   const note = prompt("Reason (shown back to the reporter):") || "declined";
   act(`/api/proposals/${pid}/decide`, { decision: "decline", note });
@@ -198,18 +230,21 @@ function closeItem(id, declined) {
 }
 
 async function load() {
-  const res = await fetch("/api/board");
-  if (res.status === 401) { location.href = "/login?next=/"; return; }
+  const res = await fetch(`/api/c/${SLUG}/board`);
+  if (res.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
+  if (!res.ok) { document.body.innerHTML = "<p style='padding:20px'>Unknown company.</p>"; return; }
   DATA = await res.json();
+  document.title = `${DATA.company.name} · Improvement Board`;
+  document.getElementById("coname").textContent = DATA.company.name;
   const w = document.getElementById("aiwarn");
   if (!DATA.aiConfigured) { w.style.display = "block"; w.textContent = "AI is not configured on this instance (set ANTHROPIC_API_KEY). Proposals will be placeholders."; }
   else if (DATA.fakeAgent) { w.style.display = "block"; w.textContent = "Fake agent mode (SOS_FAKE_AGENT=1): the loop runs but the agent only stamps a marker on pages."; }
   else w.style.display = "none";
   document.getElementById("spend").textContent =
-    `AI spend this month $${DATA.spend.usd.toFixed(2)} of $${DATA.spend.cap.toFixed(2)} cap · per-run cap $${Number(DATA.maxRunUsd).toFixed(2)} · model ${DATA.model}`;
-  document.getElementById("who").innerHTML = `signed in as <b>${esc(DATA.role)}</b> · <a href="/logout">sign out</a>`;
+    `AI spend this month $${DATA.spend.usd.toFixed(2)} of $${DATA.spend.cap.toFixed(2)} cap · per-run cap $${Number(DATA.maxRunUsd).toFixed(2)} · builds with ${modelLabel(DATA.models.build)}`;
+  document.getElementById("who").innerHTML = `signed in as <b>${esc(DATA.role)}</b>${DATA.role === "admin" ? ' · <a href="/admin">admin</a>' : ""} · <a href="/logout">sign out</a>`;
   document.getElementById("modules").innerHTML =
-    DATA.modules.map(m => `<a href="/m/${m.name}/">${esc(m.title)} (v${m.live_version})</a>`).join("");
+    DATA.modules.map(m => `<a href="/c/${SLUG}/m/${m.name}/">${esc(m.title)} (v${m.live_version})</a>`).join("") + (MGR() ? `<a href="/c/${SLUG}/agents">Agent settings</a>` : "");
   const buckets = { new: [], reviewing: [], in_progress: [], done: [], platform: [] };
   for (const fb of DATA.feedback) {
     if (!fb.module || fb.module === "platform") { buckets.platform.push(fb); continue; }
@@ -223,7 +258,7 @@ async function load() {
   }
 }
 load();
-setInterval(load, 4000);
+setInterval(() => { if (EDITING === null) load(); }, 4000);
 </script>
 <script src="/assets/feedback-widget.js" data-module="platform"></script>
 </body>

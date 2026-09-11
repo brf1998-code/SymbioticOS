@@ -1,14 +1,16 @@
-// Symbiotic OS — factory instance server.
-// One process serves the improvement board, the platform APIs, and every
-// module's live and staged versions.
+// Symbiotic OS — instance server.
+// One process serves every company's improvement board, the platform APIs,
+// every module's live and staged versions, the agent settings pages, and the
+// admin view across companies.
 const path = require("path");
 const express = require("express");
-const { initPlatformSchema } = require("./src/db");
+const { initPlatformSchema, q } = require("./src/db");
 const registry = require("./src/registry");
 const platformApi = require("./src/feedback");
 const auth = require("./src/auth");
 
 const PORT = process.env.PORT || 3000;
+const page = (name) => path.join(__dirname, "public", name);
 
 async function main() {
   await initPlatformSchema();
@@ -25,15 +27,29 @@ async function main() {
 
   app.use("/assets", express.static(path.join(__dirname, "public", "assets")));
   app.get("/health", (_req, res) => res.json({ ok: true }));
-  app.get("/login", (_req, res) => res.sendFile(path.join(__dirname, "public", "login.html")));
+  app.get("/login", (_req, res) => res.sendFile(page("login.html")));
   app.post("/login", express.json(), auth.loginHandler);
   app.get("/logout", auth.logoutHandler);
 
-  app.use(auth.middleware);  // everything below needs a floor or manager session
+  app.use(auth.middleware);  // everything below needs a floor, manager, or admin session
 
-  app.get("/", (_req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
+  // Landing: admins go to the admin view; everyone else to their company board
+  // (the only company, or a chooser when there are several).
+  app.get("/", async (req, res) => {
+    const companies = (await q("SELECT slug, name FROM platform.companies ORDER BY created_at")).rows;
+    if (req.sosRole === "admin" && companies.length !== 1) return res.redirect("/admin");
+    if (companies.length === 1) return res.redirect(`/c/${companies[0].slug}/`);
+    res.type("html").send(`<!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Symbiotic OS</title>
+      <body style="font-family:system-ui,sans-serif;background:#f2f4f7;color:#1c242e;padding:24px"><h1 style="font-size:20px">Pick a company</h1>
+      ${companies.map((c) => `<p><a style="font-size:18px;color:#1f3a5f" href="/c/${c.slug}/">${c.name}</a></p>`).join("")}</body>`);
+  });
+  app.get("/c/:slug/", (_req, res) => res.sendFile(page("index.html")));
+  app.get("/c/:slug", (req, res) => res.redirect(`/c/${req.params.slug}/`));
+  app.get("/c/:slug/agents", (_req, res) => res.sendFile(page("agents.html")));
+  app.get("/admin", auth.requireAdmin, (_req, res) => res.sendFile(page("admin.html")));
+
   app.use(platformApi);      // /api/*
-  registry.attach(app);      // /m/:module and /staging/m/:module
+  registry.attach(app);      // /c/:slug/m/:module and /c/:slug/staging/m/:module
 
   await registry.loadAll();
 

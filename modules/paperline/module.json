@@ -1,7 +1,13 @@
 {
   "name": "paperline",
   "title": "Paper Airplane Line",
+  "company": "demo",
   "entry": "routes.js",
-  "pages": { "/": "pages/board.html", "/station": "pages/station.html", "/station/:seq": "pages/station.html", "/stock": "pages/stock.html" },
+  "pages": {
+    "/": { "file": "pages/board.html", "label": "Line board (manager view)" },
+    "/station": { "file": "pages/station.html", "label": "Station picker" },
+    "/station/:seq": { "file": "pages/station.html", "label": "Station page (operator, on a phone)" },
+    "/stock": { "file": "pages/stock.html", "label": "Stockroom page" }
+  },
   "smoke": ["/api/state", "/api/station/1", "/api/stock", "/station/1", "/stock"]
 }
