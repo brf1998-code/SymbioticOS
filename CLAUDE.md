@@ -48,6 +48,18 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   /api/c/<slug>/diagrams/<module>/regenerate`). Rendered client-side by
   mermaid from cdnjs; if the CDN is unreachable the page shows the source.
   Boot draws diagrams for any module version that has none.
+- **Version jumps** (`registry.goToVersion`, board "Versions" panel per
+  module, `GET/POST /api/c/<slug>/modules/<m>/versions|goto`): any version,
+  back or forward. Switch keeps today's data (additive migrations make older
+  code safe on a newer schema; newer code re-applies missing migrations).
+  Restore also puts back the data snapshot taken when that version was last
+  live. Every jump snapshots the current state first, so jumps are reversible.
+  Snapshot retention `SOS_KEEP_SNAPSHOTS` (default 10). The Done card's Roll
+  back is one restore step to the nearest older snapshot.
+- **Structured calls** (`agent.runStructured`): forced `tool_choice` is
+  rejected by Fable 5.1; the runner falls back to `auto` plus an instruction
+  and remembers which models refuse. Review and diagram calls use a 16k
+  output budget.
 - **Board layout** (`public/index.html`): header band, module strip (Open
   live / Preview vN / Diagrams per module), KPI strip, system review toolbar,
   four columns. Platform feedback (about the tool itself, shipped from Cowork)

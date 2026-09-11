@@ -101,6 +101,7 @@ async function generate(company, mod, version, opts = {}) {
         prompt: `Module "${row.title}" (${mod}), version ${version}.\nScreens:\n${screens}\n\nSource:\n${src}\n\nProduce the overview, the data flow set, and one workflow per role.`,
         schema: SCHEMA,
         toolName: "diagrams",
+        maxTokens: 16000,
       });
       data = out.data; costUsd = out.costUsd || 0;
     }

@@ -165,25 +165,49 @@ async function runAgent({ model, system, dir, prompt, readOnly = false }) {
 }
 
 // One-shot structured call (no file tools) for proposals/classification/verdicts.
-async function runStructured({ model, system, prompt, schema, toolName }) {
+// Some models (Fable 5.1 at the time of writing) reject a forced tool_choice
+// ("type tool and any are not supported for this model"). For those we ask
+// with tool_choice auto plus an explicit instruction, and accept a JSON body
+// in plain text as a last resort. The set of models that refused is cached
+// for the life of the process so the second call does not pay for the 400.
+const noForcedTool = new Set();
+async function runStructured({ model, system, prompt, schema, toolName, maxTokens }) {
   if (fakeMode()) return fakeStructured(toolName, prompt);
   if (!haveKey()) throw new Error("ANTHROPIC_API_KEY not configured on this instance");
   const Anthropic = require("@anthropic-ai/sdk");
   const client = new Anthropic();
-  const resp = await client.messages.create({
+  const tools = [{ name: toolName, description: `Return the ${toolName}.`, input_schema: schema }];
+  const call = (forced) => client.messages.create({
     model,
-    max_tokens: 2000,
+    max_tokens: maxTokens || 4000,
     system,
-    messages: [{ role: "user", content: prompt }],
-    tools: [{ name: toolName, description: `Return the ${toolName}.`, input_schema: schema }],
-    tool_choice: { type: "tool", name: toolName },
+    messages: [{ role: "user", content: forced ? prompt : `${prompt}\n\nRespond only by calling the ${toolName} tool with the complete result. No prose.` }],
+    tools,
+    tool_choice: forced ? { type: "tool", name: toolName } : { type: "auto" },
   });
+  let resp;
+  if (noForcedTool.has(model)) resp = await call(false);
+  else {
+    try { resp = await call(true); }
+    catch (e) {
+      const msg = String(e && e.message || e);
+      if (e && e.status === 400 && /tool_choice/i.test(msg)) { noForcedTool.add(model); resp = await call(false); }
+      else throw e;
+    }
+  }
+  let data;
   const use = resp.content.find((b) => b.type === "tool_use");
-  if (!use) throw new Error("model did not return structured output");
+  if (use) data = use.input;
+  else {
+    const text = resp.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) { try { data = JSON.parse(m[0]); } catch { /* fall through */ } }
+    if (!data) throw new Error(`model did not return structured output (stop_reason ${resp.stop_reason})`);
+  }
   const usage = resp.usage || {};
   const price = priceOf(model);
   const costUsd = (usage.input_tokens || 0) * price.inTok + (usage.output_tokens || 0) * price.outTok;
-  return { data: use.input, costUsd };
+  return { data, costUsd };
 }
 
 // Month-to-date AI spend (runs + proposals), optionally per company.

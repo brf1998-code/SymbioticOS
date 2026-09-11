@@ -135,6 +135,7 @@ async function runReview(reviewId) {
       prompt: `${ctx.text}\n\n${history}\n\nLive data snapshot:\n${snapshot}\n\nReview the module and return the summary and findings.`,
       schema: reviewSchema(files),
       toolName: "review",
+      maxTokens: 16000,
     });
     data = out.data; costUsd = out.costUsd || 0;
   }

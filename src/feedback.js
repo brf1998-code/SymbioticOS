@@ -72,6 +72,23 @@ router.get("/api/c/:slug/modules/:name/version", async (req, res) => {
   res.set("Cache-Control", "no-store").json({ live_version: row.live_version, staged_version: row.staged_version });
 });
 
+// Version history and jumps (manager). Back or forward, with or without the
+// data as it was when that version was last live.
+router.get("/api/c/:slug/modules/:name/versions", requireManager, async (req, res) => {
+  try { res.json(await registry.versionHistory(req.params.slug, req.params.name)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post("/api/c/:slug/modules/:name/goto", requireManager, async (req, res) => {
+  const { version, restore_data } = req.body || {};
+  const row = await registry.getModule(req.params.slug, req.params.name);
+  if (!row) return res.status(404).json({ error: "unknown module" });
+  const busy = (await q(
+    "SELECT id FROM platform.build_runs WHERE company=$1 AND module=$2 AND status='running'", [req.params.slug, req.params.name])).rows[0];
+  if (busy) return res.status(409).json({ error: "a build is running on this module; wait for it to reach the gate or cancel it first" });
+  try { res.json(await registry.goToVersion(req.params.slug, req.params.name, Number(version), { restoreData: !!restore_data })); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // ---- board data ------------------------------------------------------------
 router.get("/api/c/:slug/board", async (req, res) => {
   const co = await company(req.params.slug);

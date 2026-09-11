@@ -24,6 +24,16 @@
   .modcard a.amber { background:var(--amber); }
   .modcard .v { opacity:.8; }
   .wrap { max-width:1500px; margin:0 auto; padding:14px 22px 0; }
+  .modcard button.vbtn { background:rgba(255,255,255,.14); color:#fff; border:none; border-radius:14px; padding:4px 10px; font-weight:600; font-size:12.5px; cursor:pointer; font-family:inherit; }
+  .vpanel { background:#fff; border:1px solid var(--line); border-left:4px solid var(--navy); border-radius:10px; padding:12px 14px; margin-bottom:12px; font-size:13px; }
+  .vpanel h3 { font-size:14px; margin-bottom:6px; display:flex; gap:10px; align-items:center; }
+  .vpanel h3 .x { margin-left:auto; cursor:pointer; color:var(--steel); font-weight:400; }
+  .vpanel p.hint { color:var(--steel); font-size:12.5px; margin:0 0 8px; line-height:1.45; }
+  .vrow { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:7px 0; border-top:1px solid var(--line); }
+  .vrow .vn { font-weight:800; min-width:44px; } .vrow .vs { color:var(--steel); flex:1 1 260px; font-size:12.5px; }
+  .vrow .live { background:var(--green); color:#fff; border-radius:10px; padding:1px 8px; font-size:11px; font-weight:700; }
+  .vrow button { border:1px solid var(--line); background:#f6f8fa; color:var(--ink); border-radius:7px; padding:5px 9px; font-size:12px; font-weight:600; cursor:pointer; font-family:inherit; }
+  .vrow button:disabled { opacity:.45; cursor:default; }
   .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:12px; }
   .kpi { background:#fff; border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
   .kpi b { display:block; font-size:22px; line-height:1.1; }
@@ -90,6 +100,7 @@
   </div>
   <div class="wrap">
     <div class="warn" id="aiwarn" style="display:none"></div>
+    <div id="vpanel"></div>
     <div class="kpis" id="kpis"></div>
     <div class="toolbar" id="toolbar"></div>
     <div id="reviews"></div>
@@ -325,6 +336,38 @@ function closeItem(id, declined) {
   act(`/api/feedback/${id}/close`, { outcome, declined });
 }
 
+let VMOD = null;
+async function openVersions(mod) {
+  VMOD = mod;
+  const r = await fetch(`/api/c/${SLUG}/modules/${mod}/versions`);
+  const j = await r.json();
+  if (!r.ok) { alert(j.error || "failed"); return; }
+  const title = (DATA.modules.find(m => m.name === mod) || {}).title || mod;
+  document.getElementById("vpanel").innerHTML = `<div class="vpanel">
+    <h3>${esc(title)}: every version <span class="x" onclick="closeVersions()">close</span></h3>
+    <p class="hint"><b>Switch</b> puts that version's screens and logic on the floor and keeps today's data (nothing is lost, an older version just ignores what it never knew about). <b>Restore</b> also puts the data back to the moment that version was last live, for when a change corrupted something; it is only offered while that snapshot still exists (the newest ten are kept). Either way the current state is saved first, so a jump can be undone with Restore.</p>
+    ${j.versions.map(v => `<div class="vrow">
+      <span class="vn">v${v.version}</span>
+      ${v.version === j.live_version ? '<span class="live">LIVE</span>' : ""}${v.version === j.staged_version ? '<span class="live" style="background:var(--amber)">STAGED</span>' : ""}
+      <span class="vs">${esc(String(v.summary || v.notes || (v.source === "repo" ? "Imported from the repo" : "Agent build")).split(/\n|(?:^|\s)- /).map(x => x.trim()).filter(Boolean)[0] || "")} · ${new Date(v.created_at).toLocaleString()}</span>
+      <button ${v.version === j.live_version ? "disabled" : ""} onclick="gotoVersion(${v.version}, false)">Switch to v${v.version}</button>
+      <button ${v.version === j.live_version || !v.has_snapshot ? "disabled" : ""} title="${v.has_snapshot ? "" : "no data snapshot left for this version"}" onclick="gotoVersion(${v.version}, true)">Restore v${v.version} with its data</button>
+    </div>`).join("")}
+  </div>`;
+  document.getElementById("vpanel").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function closeVersions() { VMOD = null; document.getElementById("vpanel").innerHTML = ""; }
+async function gotoVersion(version, restore) {
+  const msg = restore
+    ? `Put version ${version} on the floor AND replace the line's data with what it was when v${version} was last live? Everything recorded since then is set aside (the current state is saved first).`
+    : `Put version ${version} on the floor, keeping today's data? Every open page reloads within a few seconds.`;
+  if (!confirm(msg)) return;
+  const r = await fetch(`/api/c/${SLUG}/modules/${VMOD}/goto`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version, restore_data: restore }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { alert(j.error || "failed"); return; }
+  await load();
+  openVersions(VMOD);
+}
 async function load() {
   const res = await fetch(`/api/c/${SLUG}/board`);
   if (res.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
@@ -341,7 +384,7 @@ async function load() {
     `<div class="modcard"><b>${esc(m.title)}</b><span class="v">v${m.live_version}</span>
       <a href="/c/${SLUG}/m/${m.name}/">Open live</a>
       ${m.staged_version ? `<a class="amber" href="/c/${SLUG}/staging/m/${m.name}/">Preview v${m.staged_version}</a>` : ""}
-      <a href="/c/${SLUG}/diagrams/${m.name}">Diagrams</a></div>`).join("");
+      <a href="/c/${SLUG}/diagrams/${m.name}">Diagrams</a>${MGR() ? `<button class="vbtn" onclick="openVersions('${m.name}')">Versions</button>` : ""}</div>`).join("");
   const active = DATA.runs.filter(r => ["running", "waiting", "queued"].includes(r.status)).length;
   const week = Date.now() - 7 * 86400000;
   const deployed = DATA.runs.filter(r => r.status === "deployed" && new Date(r.updated_at) > week).length;

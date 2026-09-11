@@ -16,7 +16,7 @@ const fs = require("fs");
 const path = require("path");
 const { q, pool, logEvent } = require("./db");
 
-const KEEP_SNAPSHOTS = Number(process.env.SOS_KEEP_SNAPSHOTS || 5);
+const KEEP_SNAPSHOTS = Number(process.env.SOS_KEEP_SNAPSHOTS || 10);
 
 function liveSchema(company, mod) { return `mod_${company}_${mod}`; }
 function stagingSchema(company, mod) { return `stg_${company}_${mod}`; }

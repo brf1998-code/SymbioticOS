@@ -327,23 +327,63 @@ async function deployVersion(company, mod, version) {
   return { from: row.live_version, to: version };
 }
 
+// One step back with data (the Done card's Roll back button). Same machinery
+// as goToVersion, so it is itself reversible.
 async function rollback(company, mod) {
   const row = await getModule(company, mod);
   const snap = (await q(
-    "SELECT * FROM platform.schema_snapshots WHERE company=$1 AND module=$2 ORDER BY id DESC LIMIT 1", [company, mod]
+    "SELECT * FROM platform.schema_snapshots WHERE company=$1 AND module=$2 AND version < $3 ORDER BY version DESC, id DESC LIMIT 1", [company, mod, row.live_version]
   )).rows[0];
   if (!snap) throw new Error("no snapshot to roll back to");
-  await migrate.restoreSnapshot(company, mod, snap.file);
-  await materialize(company, mod, snap.version);
-  const entry = mounts.get(key(company, mod)) || {};
-  entry.live = buildRouter(company, mod, snap.version, liveSchema(company, mod));
-  mounts.set(key(company, mod), entry);
-  await q("UPDATE platform.modules SET live_version=$3 WHERE company=$1 AND name=$2", [company, mod, snap.version]);
-  // the snapshot is consumed; the next rollback goes one step further back
-  await q("DELETE FROM platform.schema_snapshots WHERE id=$1", [snap.id]);
-  await q(`DROP SCHEMA IF EXISTS ${snap.file} CASCADE`);
-  await logEvent("rolled_back", `${company}/${mod}`, { from: row.live_version, to: snap.version });
-  return { from: row.live_version, to: snap.version };
+  return goToVersion(company, mod, snap.version, { restoreData: true });
+}
+
+// Jump to any version, back or forward. Two modes:
+//  - keep data (default): the current data stays, the target version's code is
+//    mounted. Migrations are additive-only, so an older version simply ignores
+//    columns and tables it never knew about, and a newer version re-applies
+//    any migrations the schema is missing.
+//  - restore data: the data is replaced with the snapshot taken when that
+//    version was last live (the state of the line when we left it). Only
+//    possible while that snapshot is still within retention.
+// Either way the current state is snapshotted first, so the jump itself is
+// reversible with restore.
+async function versionHistory(company, mod) {
+  const row = await getModule(company, mod);
+  if (!row) throw new Error("unknown module");
+  const versions = (await q(
+    `SELECT v.version, v.source, v.notes, v.created_at,
+            (SELECT r.evidence->>'build_summary' FROM platform.build_runs r WHERE r.company=v.company AND r.module=v.module AND r.to_version=v.version ORDER BY r.id DESC LIMIT 1) AS summary,
+            EXISTS (SELECT 1 FROM platform.schema_snapshots s WHERE s.company=v.company AND s.module=v.module AND s.version=v.version) AS has_snapshot
+       FROM platform.module_versions v WHERE v.company=$1 AND v.module=$2 ORDER BY v.version DESC`, [company, mod])).rows;
+  return { live_version: row.live_version, staged_version: row.staged_version, versions };
+}
+
+async function goToVersion(company, mod, version, { restoreData = false } = {}) {
+  const row = await getModule(company, mod);
+  if (!row) throw new Error("unknown module");
+  version = Number(version);
+  if (!(await versionFiles(company, mod, version))) throw new Error(`version ${version} does not exist`);
+  if (version === row.live_version) throw new Error(`version ${version} is already live`);
+  let target = null;
+  if (restoreData) {
+    target = (await q(
+      "SELECT * FROM platform.schema_snapshots WHERE company=$1 AND module=$2 AND version=$3 ORDER BY id DESC LIMIT 1", [company, mod, version])).rows[0];
+    if (!target) throw new Error(`no data snapshot left for version ${version}; switch without restoring data instead`);
+  }
+  // save where we are so this jump can be undone with restore
+  const snap = await migrate.snapshotSchema(company, mod, row.live_version);
+  await migrate.recordSnapshot(company, mod, row.live_version, snap);
+  await mountLive(company, mod, version); // applies any migrations the schema is missing (no-op going back)
+  if (target) {
+    await migrate.restoreSnapshot(company, mod, target.file);
+    await q("DELETE FROM platform.schema_snapshots WHERE id=$1", [target.id]);
+    await q(`DROP SCHEMA IF EXISTS ${target.file} CASCADE`);
+  }
+  await q("UPDATE platform.modules SET live_version=$3 WHERE company=$1 AND name=$2", [company, mod, version]);
+  await logEvent("version_switched", `${company}/${mod}`, { from: row.live_version, to: version, restored: !!target, saved: snap });
+  if (hooks.deployed) Promise.resolve(hooks.deployed(company, mod, version)).catch((e) => console.error("deploy hook failed:", e.message));
+  return { from: row.live_version, to: version, restored: !!target };
 }
 
 // ---- express wiring -------------------------------------------------------
@@ -365,6 +405,6 @@ function attach(app) {
 
 module.exports = {
   MODULES_DIR, REPO_MODULES_DIR, versionDir, readManifest, pageEntries, screenFor, loadAll, attach,
-  createDraftVersion, stageVersion, deployVersion, rollback, versionFiles, persistVersion, importFromRepo,
+  createDraftVersion, stageVersion, deployVersion, rollback, goToVersion, versionHistory, versionFiles, persistVersion, importFromRepo,
   unstage, getModule, libraryModules, mountLiveIfNeeded: mountLive, hooks,
 };

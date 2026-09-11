@@ -147,7 +147,13 @@ numbers, and if one does not, that is the conversation.
 
 **Roll back.** If a deployed change made things worse, the Done card has
 **Roll back**. One click restores the previous version and its data. Worth
-doing once on purpose so the room sees it is cheap.
+doing once on purpose so the room sees it is cheap. To go further than one
+step, or forward again, click **Versions** on the module card at the top of
+the board: every version is listed with what it changed. **Switch** puts that
+version on the floor and keeps today's data; **Restore with its data** also
+puts the line back to the moment that version was last live (only offered
+while that snapshot still exists, the newest ten are kept). The current state
+is saved before every jump, so a wrong jump is itself undoable.
 
 ## Things to say once, then stop saying
 
