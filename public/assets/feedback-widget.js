@@ -1,8 +1,40 @@
 // Feedback widget — injected into every module page by the runtime.
 // Posts to the platform's /api/feedback with the module name and page path.
+// It also watches the module's version: when the manager deploys a new
+// version, every open page reloads itself and shows a short "updated" banner.
 (function () {
   const script = document.currentScript;
   const mod = script ? script.getAttribute("data-module") : null;
+  const version = script ? script.getAttribute("data-version") : null;
+  const mount = script ? script.getAttribute("data-mount") : null;
+
+  function banner(text) {
+    const el = document.createElement("div");
+    el.textContent = text;
+    el.style.cssText = "position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:10000;background:#2e7d4f;color:#fff;border-radius:20px;padding:10px 18px;font-size:14px;font-weight:700;box-shadow:0 4px 14px rgba(0,0,0,.25);font-family:system-ui,sans-serif;";
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 7000);
+  }
+  function watchVersion() {
+    if (!mod || !version || mod === "platform") return;
+    const key = "sos.updated." + mod;
+    try {
+      const v = sessionStorage.getItem(key);
+      if (v) { sessionStorage.removeItem(key); banner("This page was just updated (version " + v + ")"); }
+    } catch (e) {}
+    setInterval(async () => {
+      try {
+        const r = await fetch("/api/modules/" + mod + "/version", { cache: "no-store" });
+        if (!r.ok) return;
+        const j = await r.json();
+        const current = mount === "staged" ? j.staged_version : j.live_version;
+        if (current && String(current) !== String(version)) {
+          try { sessionStorage.setItem(key, String(current)); } catch (e) {}
+          location.reload();
+        }
+      } catch (e) {}
+    }, 5000);
+  }
 
   const btn = document.createElement("button");
   btn.textContent = "Something in the way?";
@@ -25,6 +57,7 @@
     if (document.getElementById("fbw-send")) return;
     document.body.appendChild(btn);
     document.body.appendChild(panel);
+    watchVersion();
     const nameEl = panel.querySelector("#fbw-name");
     try { nameEl.value = localStorage.getItem("sos.name") || ""; } catch (e) {}
     panel.querySelector("#fbw-send").onclick = async () => {

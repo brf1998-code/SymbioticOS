@@ -100,8 +100,13 @@ On the improvement board (manager tab):
    energy up.
 4. When it reaches the gate, open **View staged demo** on the projector. That
    is the change running against a copy of the live data, not the live line.
-5. **Deploy to floor.** Tell the stations to reload. The card moves to Done
-   with a "You said / we did" line.
+5. **Deploy to floor.** Every open station, stockroom, and line board page
+   reloads itself within about five seconds and shows a green "This page was
+   just updated (version N)" banner. The card moves to Done with a "You said /
+   we did" line. Many changes only show when a traveler is at the station, so
+   look during a shift, not at the empty "Nothing here yet" card. If you do not
+   want the build after seeing the staged demo, **Discard** puts the
+   proposals back in Reviewing.
 
 Good first picks, in order of how well they land: show the fold type name
 instead of a letter (UI, fast), show clip position on station 5 (UI, fast),

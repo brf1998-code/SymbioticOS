@@ -157,7 +157,7 @@ Rules:
 - ${run.lane === "ui" ? "This is a UI-class change. Do NOT modify routes.js logic, module.json smoke list, or migrations. Touch pages/ and presentation only." : "This is a functionality-class change. If the data model must change, add a NEW migrations/NNN.sql file (additive only: CREATE TABLE / ALTER TABLE ADD COLUMN / CREATE INDEX / INSERT seed rows; bare table names, no schema prefixes). Never edit an existing migration file."}
 ${isBatch ? "- Implement every change in the batch. Keep them independent where you can so one can be understood without the others.\n" : ""}- Keep the module's existing style and structure. Plain HTML/JS, no frameworks.
 - Make the smallest change that removes the reported friction.
-- When done, summarize what changed in short bullets (one per change), in plain language for a production manager.`,
+- Your final message must be ONLY a short bullet list of what changed (one bullet per change), in plain language for a production manager. No preamble, no headings, no code talk.`,
       });
       await addCost(runId, costUsd);
       await setRun(runId, { evidence: { ...run.evidence, build_summary: text } });
@@ -299,15 +299,17 @@ async function retry(runId) {
   if (!busy) advance(runId).catch((e) => failRun(runId, e));
 }
 
-// Cancel a queued or failed run: proposals go back to reviewing.
+// Cancel a queued, failed, or gate-waiting run: proposals go back to reviewing.
 async function cancel(runId) {
   const run = await getRun(runId);
-  if (!["queued", "failed"].includes(run.status)) throw new Error("only queued or failed runs can be cancelled");
+  if (!["queued", "failed", "waiting"].includes(run.status)) throw new Error("only queued, failed, or waiting runs can be cancelled");
+  if (run.status === "waiting" && run.step === "await_deploy") await registry.unstage(run.module);
   await setRun(runId, { status: "cancelled" });
   const ps = await loadProposals(run.proposal_ids || [run.proposal_id]);
   await q("UPDATE platform.proposals SET status='draft' WHERE id = ANY($1::int[])", [ps.map((p) => p.id)]);
   await q("UPDATE platform.feedback SET status='reviewing', updated_at=now() WHERE id = ANY($1::int[])", [ps.map((p) => p.feedback_id)]);
   await log(runId, { step: run.step, note: "cancelled by manager; proposals back to review" });
+  kickQueue(run.module).catch((e) => console.error("queue kick failed:", e));
 }
 
 module.exports = { startRun, confirmRequirement, deploy, rollbackRun, retry, cancel, getRun, smokeCheck, kickQueue };

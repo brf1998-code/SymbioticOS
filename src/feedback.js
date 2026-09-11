@@ -50,6 +50,13 @@ router.post("/api/feedback/:id/close", requireManager, async (req, res) => {
   res.json(r.rows[0]);
 });
 
+// Module version probe: module pages poll this and reload when it changes.
+router.get("/api/modules/:name/version", async (req, res) => {
+  const row = (await q("SELECT live_version, staged_version FROM platform.modules WHERE name=$1", [req.params.name])).rows[0];
+  if (!row) return res.status(404).json({ error: "unknown module" });
+  res.set("Cache-Control", "no-store").json(row);
+});
+
 // ---- board data ------------------------------------------------------------
 router.get("/api/board", async (req, res) => {
   const feedback = (await q(

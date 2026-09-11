@@ -92,12 +92,15 @@ function readManifest(mod, version) {
   return JSON.parse(fs.readFileSync(p, "utf8"));
 }
 
-function widgetInject(html, mod) {
-  const tag = `<script src="/assets/feedback-widget.js" data-module="${mod}"></script>`;
+// The widget tag carries the version and mount so the page can notice a
+// deploy and reload itself (see public/assets/feedback-widget.js).
+function widgetInject(html, mod, version, mount) {
+  const tag = `<script src="/assets/feedback-widget.js" data-module="${mod}" data-version="${version}" data-mount="${mount}"></script>`;
   return html.includes("</body>") ? html.replace("</body>", `${tag}\n</body>`) : html + tag;
 }
 
 function buildRouter(mod, version, schema) {
+  const mount = schema.startsWith("stg_") ? "staged" : "live";
   const dir = versionDir(mod, version);
   const manifest = readManifest(mod, version);
   const router = express.Router();
@@ -106,7 +109,7 @@ function buildRouter(mod, version, schema) {
   for (const [route, file] of Object.entries(manifest.pages || {})) {
     router.get(route, (req, res) => {
       const html = fs.readFileSync(path.join(dir, file), "utf8");
-      res.set("Cache-Control", "no-cache").type("html").send(widgetInject(html, mod));
+      res.set("Cache-Control", "no-cache").type("html").send(widgetInject(html, mod, version, mount));
     });
   }
 
@@ -229,6 +232,13 @@ async function stageVersion(mod, version) {
   await logEvent("version_staged", mod, { version });
 }
 
+// Drop a staged version without deploying it (cancel at the deploy gate).
+async function unstage(mod) {
+  unmountStaged(mod);
+  await q("UPDATE platform.modules SET staged_version=NULL WHERE name=$1", [mod]);
+  await logEvent("version_unstaged", mod, {});
+}
+
 async function deployVersion(mod, version) {
   const row = (await q("SELECT * FROM platform.modules WHERE name=$1", [mod])).rows[0];
   const snap = await migrate.snapshotSchema(mod, row.live_version);
@@ -275,5 +285,5 @@ function attach(app) {
 
 module.exports = {
   MODULES_DIR, REPO_MODULES_DIR, versionDir, readManifest, loadAll, attach,
-  createDraftVersion, stageVersion, deployVersion, rollback, versionFiles, persistVersion, importFromRepo,
+  createDraftVersion, stageVersion, deployVersion, rollback, versionFiles, persistVersion, importFromRepo, unstage,
 };

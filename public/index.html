@@ -155,7 +155,7 @@ function card(fb) {
     html += stepsHtml(run);
     if (run.step === "confirm_requirement" && run.status === "waiting") {
       html += `<div class="req">${esc(run.requirement)}</div>`;
-      if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/confirm')">Confirm requirement</button>`;
+      if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/confirm')">Confirm requirement</button><button class="no" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;
     }
     if (run.step === "await_deploy" && run.status === "waiting") {
       const ev = run.evidence || {};
@@ -163,7 +163,7 @@ function card(fb) {
       if (ev.test_run) html += `<div class="meta">tests: ${ev.test_run.ok ? "passed" : "failed"} (${(ev.test_run.checked || []).length} checks)</div>`;
       if (ev.cross_check) html += `<div class="meta">cross-check: ${esc(ev.cross_check.verdict)} · ${esc(ev.cross_check.summary || "")}</div>`;
       html += `<a class="demo" href="/staging/m/${esc(fb.module)}/" target="_blank">View staged demo</a><br>`;
-      if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/deploy')">Deploy to floor</button>`;
+      if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/deploy')">Deploy to floor</button><button class="no" onclick="if(confirm('Discard this build? The proposals go back to Reviewing.'))act('/api/runs/${run.id}/cancel')">Discard</button>`;
     }
     if (run.status === "failed") {
       const last = (run.log || []).slice(-1)[0];
