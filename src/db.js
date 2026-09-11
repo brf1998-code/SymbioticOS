@@ -135,6 +135,21 @@ CREATE TABLE IF NOT EXISTS platform.agent_docs (
   UNIQUE (company, module, name)
 );
 
+CREATE TABLE IF NOT EXISTS platform.reviews (
+  id           SERIAL PRIMARY KEY,
+  company      TEXT NOT NULL,
+  module       TEXT NOT NULL,
+  model        TEXT NOT NULL,
+  version      INTEGER,                            -- live version reviewed
+  status       TEXT NOT NULL DEFAULT 'running',    -- running|done|failed
+  summary      TEXT,
+  item_count   INTEGER NOT NULL DEFAULT 0,
+  cost_usd     NUMERIC(10,4) NOT NULL DEFAULT 0,
+  requested_by TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at  TIMESTAMPTZ
+);
+
 CREATE TABLE IF NOT EXISTS platform.events (
   id         SERIAL PRIMARY KEY,
   kind       TEXT NOT NULL,
@@ -160,6 +175,7 @@ const UPGRADES = [
   "ALTER TABLE platform.feedback ADD COLUMN IF NOT EXISTS company TEXT NOT NULL DEFAULT 'demo'",
   "ALTER TABLE platform.feedback ADD COLUMN IF NOT EXISTS screen TEXT",
   "ALTER TABLE platform.feedback ADD COLUMN IF NOT EXISTS target_file TEXT",
+  "ALTER TABLE platform.feedback ADD COLUMN IF NOT EXISTS review_id INTEGER",
   "ALTER TABLE platform.proposals ADD COLUMN IF NOT EXISTS target_file TEXT",
   "ALTER TABLE platform.proposals ADD COLUMN IF NOT EXISTS model TEXT",
   "ALTER TABLE platform.proposals ADD COLUMN IF NOT EXISTS cost_usd NUMERIC(10,4) NOT NULL DEFAULT 0",

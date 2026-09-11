@@ -121,6 +121,16 @@ request quantity instead of one at a time (functionality, shows the
 requirement gate), release travelers in batches instead of all at once
 (functionality, changes the shape of the whole line).
 
+**System review (between sessions, or as the finale).** On the board,
+"System review" with a module and a model (Fable 5.1 by default; the estimate
+next to the button is for the review call only, roughly half a dollar for
+this module). It reads every screen, the agent docs, the feedback and build
+history, and the live line data, then files 3 to 12 recommendations as held
+proposals tagged REVIEW #N with a priority. Nothing builds on its own. Decline
+or Adjust items one by one, then "Select all held items for one batch" and
+build them as one change, with whichever model the batch bar shows. The
+review's summary stays on the board above the columns.
+
 **Shift 2 and 3.** Same two minutes. Compare the history rows: completed,
 average distance, stockouts, WIP at end. Improvements should show up in the
 numbers, and if one does not, that is the conversation.

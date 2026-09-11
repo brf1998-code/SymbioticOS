@@ -7,6 +7,7 @@ const { generateProposal } = require("./proposals");
 const pipeline = require("./pipeline");
 const registry = require("./registry");
 const agent = require("./agent");
+const review = require("./review");
 const { requireManager, requireAdmin } = require("./auth");
 
 const router = express.Router();
@@ -96,8 +97,9 @@ router.get("/api/c/:slug/board", async (req, res) => {
     try { screens[m.name] = registry.pageEntries(registry.readManifest(co.slug, m.name, m.live_version)).concat([{ route: null, file: "routes.js", label: "Server logic (routes.js)" }]); }
     catch (e) { screens[m.name] = []; }
   }
+  const reviews = await review.listReviews(co.slug);
   res.json({
-    company: co, feedback, runs, modules, screens,
+    company: co, feedback, runs, modules, screens, reviews,
     spend: await agent.monthlySpend(co.slug),
     models: { list: agent.MODELS, build: await agent.modelFor(co.slug, "build") },
     role: req.sosRole,
@@ -169,6 +171,20 @@ router.post("/api/runs/:id/retry", requireManager, async (req, res) => {
 });
 router.get("/api/runs/:id", async (req, res) => {
   res.json(await pipeline.getRun(Number(req.params.id)));
+});
+
+// ---- system review: re-baseline a whole module (manager) --------------------
+router.get("/api/c/:slug/reviews/estimate", requireManager, async (req, res) => {
+  try { res.json(await review.estimate(req.params.slug, String(req.query.module), String(req.query.model || "claude-fable-5-1"))); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.post("/api/c/:slug/reviews", requireManager, async (req, res) => {
+  const { module: mod, model, requested_by } = req.body || {};
+  try { res.json(await review.startReview(req.params.slug, mod, model || "claude-fable-5-1", requested_by)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.get("/api/c/:slug/reviews", requireManager, async (req, res) => {
+  res.json(await review.listReviews(req.params.slug));
 });
 
 // ---- agent settings: models per role + guidance docs (manager) --------------

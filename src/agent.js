@@ -191,7 +191,8 @@ async function monthlySpend(company) {
   const r = (await q(`
     SELECT COALESCE((SELECT SUM(cost_usd) FROM platform.build_runs WHERE created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR company=$1)),0)
          + COALESCE((SELECT SUM(p.cost_usd) FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id
-                      WHERE p.created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR f.company=$1)),0) AS usd`, [company || null])).rows[0];
+                      WHERE p.created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR f.company=$1)),0)
+         + COALESCE((SELECT SUM(cost_usd) FROM platform.reviews WHERE created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR company=$1)),0) AS usd`, [company || null])).rows[0];
   const usd = Number(r.usd || 0);
   return { usd, cap: MONTHLY_CAP_USD, capped: usd >= MONTHLY_CAP_USD };
 }

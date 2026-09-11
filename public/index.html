@@ -23,7 +23,7 @@
   @media (max-width: 640px) { .cols { grid-template-columns:1fr; } }
   .col h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--steel); margin-bottom:8px; }
   .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:10px; font-size:13px; }
-  .msg { font-weight:600; }
+  .msg { font-weight:600; white-space:pre-wrap; }
   .meta { color:var(--steel); font-size:11.5px; margin-top:4px; }
   .chip { display:inline-block; font-size:10.5px; font-weight:700; border-radius:10px; padding:2px 8px; color:#fff; margin-right:4px; }
   .chip.ui { background:var(--teal); } .chip.functionality { background:var(--amber); }
@@ -48,6 +48,12 @@
   textarea { width:100%; min-height:90px; }
   .edit { margin-top:8px; display:grid; gap:6px; }
   .edit label { font-size:11.5px; color:var(--steel); }
+  .chip.review { background:#5b3a8a; }
+  .reviewbar { background:#f3eefa; border:1px solid #cdb8e8; border-radius:10px; padding:10px 12px; margin-bottom:12px; font-size:13px; }
+  .reviewbar .sum { white-space:pre-wrap; margin-top:6px; color:var(--ink); }
+  .reviewbar button { margin:8px 6px 0 0; }
+  .toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:12.5px; color:var(--steel); margin:0 0 12px; }
+  .toolbar select { font-size:12.5px; }
   .pulse { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--amber); margin-right:5px; animation:p 1s infinite alternate; }
   @keyframes p { from { opacity:.3 } to { opacity:1 } }
 </style>
@@ -60,6 +66,8 @@
   </header>
   <div class="warn" id="aiwarn" style="display:none"></div>
   <div class="info" id="spend"></div>
+  <div class="toolbar" id="toolbar"></div>
+  <div id="reviews"></div>
   <div class="batchbar" id="batchbar" style="display:none"></div>
   <div class="cols">
     <div class="col"><h2>Feedback</h2><div id="col-new"></div></div>
@@ -80,6 +88,7 @@ const STEP_LABEL = {
 };
 let DATA = null;
 const SEL = new Set();
+let BATCH_MODEL = null; // set when a review's items are selected, so the batch defaults to that model
 let EDITING = null;
 const MGR = () => DATA && (DATA.role === "manager" || DATA.role === "admin");
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
@@ -90,6 +99,63 @@ function modelOptions(sel) {
 function screenLabel(mod, file) {
   const s = (DATA.screens[mod] || []).find(x => x.file === file);
   return s ? s.label : (file || "unspecified");
+}
+
+function priorityOf(fb) { const m = /^Priority (\w+)/.exec(fb.proposal_rationale || ""); return m ? " · " + m[1] : ""; }
+
+function renderToolbar() {
+  const tb = document.getElementById("toolbar");
+  if (document.activeElement && tb.contains(document.activeElement)) return;
+  if (!MGR() || !DATA.modules.length) { tb.innerHTML = ""; return; }
+  const running = (DATA.reviews || []).find(r => r.status === "running");
+  const fable = DATA.models.list.find(m => m.id === "claude-fable-5-1") ? "claude-fable-5-1" : DATA.models.build;
+  tb.innerHTML = running
+    ? `<span class="pulse"></span>System review #${running.id} running on ${esc(running.module)} with ${esc(modelLabel(running.model))}. Recommendations land in Reviewing when it finishes.`
+    : `System review: <select id="rv-module">${DATA.modules.map(m => `<option value="${m.name}">${esc(m.title)}</option>`).join("")}</select>
+       with <select id="rv-model">${modelOptions(fable)}</select>
+       <button class="quiet" style="margin:0" onclick="startReview()">Review the whole module</button>
+       <span class="meta" style="margin:0" id="rv-est"></span>`;
+  if (!running) estimateReview();
+}
+async function estimateReview() {
+  const mod = document.getElementById("rv-module").value, model = document.getElementById("rv-model").value;
+  const r = await fetch(`/api/c/${SLUG}/reviews/estimate?module=${encodeURIComponent(mod)}&model=${encodeURIComponent(model)}`).then(r => r.json()).catch(() => null);
+  const el = document.getElementById("rv-est");
+  if (el && r && r.usd != null) el.textContent = `about $${r.usd.toFixed(2)} for the review itself; builds are extra`;
+}
+async function startReview() {
+  const mod = document.getElementById("rv-module").value, model = document.getElementById("rv-model").value;
+  if (!confirm(`Review ${mod} with ${modelLabel(model)}? It reads the whole module, the feedback and build history, and the live data, then files its recommendations as held proposals you approve one by one.`)) return;
+  await act(`/api/c/${SLUG}/reviews`, { module: mod, model, requested_by: DATA.role });
+}
+function renderReviews() {
+  const box = document.getElementById("reviews");
+  const done = (DATA.reviews || []).filter(r => r.status !== "running").slice(0, 3);
+  box.innerHTML = done.map(r => {
+    const items = DATA.feedback.filter(f => f.review_id === r.id);
+    const open = items.filter(f => f.status === "reviewing");
+    const counts = { reviewing: 0, in_progress: 0, done: 0, declined: 0 };
+    for (const f of items) counts[f.status] = (counts[f.status] || 0) + 1;
+    const collapsed = !open.length;
+    return `<details class="reviewbar" ${collapsed ? "" : "open"}><summary><b>System review #${r.id}</b> · ${esc(r.module)} v${r.version} · ${esc(modelLabel(r.model))} · ${r.status === "failed" ? "failed" : `${r.item_count} recommendations`} · $${Number(r.cost_usd).toFixed(2)} · ${new Date(r.created_at).toLocaleString()}
+        <span class="meta" style="display:inline">${counts.reviewing} held · ${counts.in_progress} building · ${counts.done} done · ${counts.declined} declined</span></summary>
+      <div class="sum">${esc(r.summary || "")}</div>
+      ${open.length && MGR() ? `<button class="go" onclick="selectReview(${r.id})">Select all ${open.length} held items for one batch</button><button class="no" onclick="declineReview(${r.id})">Decline the rest</button>` : ""}
+    </details>`;
+  }).join("");
+}
+function selectReview(id) {
+  const r = (DATA.reviews || []).find(x => x.id === id);
+  if (r) BATCH_MODEL = r.model;
+  for (const f of DATA.feedback) if (f.review_id === id && f.status === "reviewing" && f.proposal_id) SEL.add(f.proposal_id);
+  load();
+}
+async function declineReview(id) {
+  if (!confirm("Decline every held item from this review?")) return;
+  for (const f of DATA.feedback) if (f.review_id === id && f.status === "reviewing" && f.proposal_id) {
+    await fetch(`/api/proposals/${f.proposal_id}/decide`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision: "decline", note: "declined with the rest of the review" }) });
+  }
+  load();
 }
 
 async function act(url, body) {
@@ -104,11 +170,11 @@ function renderBatchBar() {
   const bar = document.getElementById("batchbar");
   if (!SEL.size) { bar.style.display = "none"; return; }
   bar.style.display = "flex";
-  bar.innerHTML = `<b>${SEL.size}</b> proposal(s) selected · build with <select id="batchmodel">${modelOptions(DATA.models.build)}</select>
+  bar.innerHTML = `<b>${SEL.size}</b> proposal(s) selected · build with <select id="batchmodel">${modelOptions(BATCH_MODEL || DATA.models.build)}</select>
     <button class="go" onclick="buildBatch()">Build together as one change</button><button class="quiet" onclick="SEL.clear();renderBatchBar();load()">Clear</button>`;
 }
 async function buildBatch() {
-  const ids = [...SEL]; const model = document.getElementById("batchmodel").value; SEL.clear(); renderBatchBar();
+  const ids = [...SEL]; const model = document.getElementById("batchmodel").value; SEL.clear(); BATCH_MODEL = null; renderBatchBar();
   await act("/api/runs/batch", { proposal_ids: ids, model });
 }
 
@@ -149,7 +215,7 @@ function card(fb) {
   html += `<div class="msg">${esc(fb.message)}</div>`;
   html += `<div class="meta">#${fb.id} · ${isPlatform ? '<span class="chip platform">PLATFORM</span>' : esc(fb.module)} · ${esc(fb.name || "anonymous")}`
        + (fb.recurrence > 1 ? ` · <span class="chip rec">x${fb.recurrence}</span>` : "") + `</div>`;
-  html += `<div class="meta"><span class="chip screen">Screen: ${esc(fb.screen || fb.page || "unknown")}</span></div>`;
+  html += `<div class="meta"><span class="chip screen">Screen: ${esc(fb.screen || fb.page || "unknown")}</span>${fb.review_id ? `<span class="chip review">REVIEW #${fb.review_id}${priorityOf(fb)}</span>` : ""}</div>`;
 
   if (isPlatform) {
     if (fb.status === "new") {
@@ -250,6 +316,8 @@ async function load() {
     if (!fb.module || fb.module === "platform") { buckets.platform.push(fb); continue; }
     (buckets[fb.status === "declined" ? "done" : fb.status] || buckets.new).push(fb);
   }
+  renderToolbar();
+  renderReviews();
   const reviewing = new Set(buckets.reviewing.map(f => f.proposal_id));
   for (const id of [...SEL]) if (!reviewing.has(id)) SEL.delete(id);
   renderBatchBar();

@@ -32,6 +32,13 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   seeded, module `reference.md` seeded from `principles/module-formats/`).
   Every run records which docs it was guided by (`evidence.docs`).
 - Old URLs `/m/<module>` redirect to `/c/demo/m/<module>`.
+- **System review** (`src/review.js`, `platform.reviews`): a whole-module
+  re-baseline by a chosen model (Fable by default). Input: guidance docs, all
+  live files, feedback and build history, a live-data snapshot from the
+  manifest's `/api/...` smoke endpoints. Output: 3 to 12 findings, each filed
+  as a held feedback item (`review_id`, status reviewing) with a draft
+  proposal (class, target_file, priority in rationale). Building the approved
+  set is the normal batch run. One review per module at a time.
 
 ## What this is
 
