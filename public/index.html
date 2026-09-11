@@ -138,13 +138,14 @@ const STEP_LABEL = {
 };
 let DATA = null;
 const SEL = new Set();
-let BATCH_MODEL = null; // set when a review's items are selected, so the batch defaults to that model
+let BATCH_MODEL = null; // per-batch override; the batch bar defaults to the company build model
 let EDITING = null;
 const MGR = () => DATA && (DATA.role === "manager" || DATA.role === "admin");
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
 function modelLabel(id) { const m = (DATA.models.list || []).find(x => x.id === id); return m ? m.label : (id || ""); }
-function modelOptions(sel) {
-  return DATA.models.list.map(m => `<option value="${m.id}" ${m.id === sel ? "selected" : ""}>${m.label} ($${m.in}/$${m.out} per M tokens)</option>`).join("");
+// forBuild: models the build agent cannot run are left out
+function modelOptions(sel, forBuild = true) {
+  return DATA.models.list.filter(m => !forBuild || m.agent !== false).map(m => `<option value="${m.id}" ${m.id === sel ? "selected" : ""}>${m.label} ($${m.in}/$${m.out} per M tokens)</option>`).join("");
 }
 function screenLabel(mod, file) {
   // several routes can serve one file; show the most specific one (longest route)
@@ -163,7 +164,7 @@ function renderToolbar() {
   tb.innerHTML = running
     ? `<span class="pulse"></span>System review #${running.id} running on ${esc(running.module)} with ${esc(modelLabel(running.model))}. Recommendations land in Reviewing when it finishes.`
     : `System review: <select id="rv-module">${DATA.modules.map(m => `<option value="${m.name}">${esc(m.title)}</option>`).join("")}</select>
-       with <select id="rv-model">${modelOptions(fable)}</select>
+       with <select id="rv-model">${modelOptions(fable, false)}</select>
        <button class="quiet" style="margin:0" onclick="startReview()">Review the whole module</button>
        <span class="meta" style="margin:0" id="rv-est"></span>`;
   if (!running) estimateReview();
@@ -197,7 +198,6 @@ function renderReviews() {
 }
 function selectReview(id) {
   const r = (DATA.reviews || []).find(x => x.id === id);
-  if (r) BATCH_MODEL = r.model;
   for (const f of DATA.feedback) if (f.review_id === id && f.status === "reviewing" && f.proposal_id) SEL.add(f.proposal_id);
   load();
 }
@@ -425,6 +425,8 @@ async function load() {
   if (res.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
   if (!res.ok) { document.body.innerHTML = "<p style='padding:20px'>Unknown company.</p>"; return; }
   DATA = await res.json();
+  if (window.BOOT && DATA.boot && DATA.boot !== window.BOOT) { location.reload(); return; } // the platform redeployed; pick up the new board
+  window.BOOT = DATA.boot;
   document.title = `${DATA.company.name} · Improvement Board`;
   document.getElementById("coname").textContent = DATA.company.name;
   const w = document.getElementById("aiwarn");

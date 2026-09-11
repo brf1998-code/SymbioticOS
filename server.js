@@ -4,6 +4,7 @@
 // admin view across companies.
 const path = require("path");
 const express = require("express");
+process.env.SOS_BOOT_ID = process.env.SOS_BOOT_ID || String(Date.now()); // pages reload themselves when this changes (a redeploy)
 const { initPlatformSchema, q } = require("./src/db");
 const registry = require("./src/registry");
 const platformApi = require("./src/feedback");
@@ -27,7 +28,7 @@ async function main() {
   });
 
   app.use("/assets", express.static(path.join(__dirname, "public", "assets")));
-  app.get("/health", (_req, res) => res.json({ ok: true }));
+  app.get("/health", (_req, res) => res.json({ ok: true, boot: process.env.SOS_BOOT_ID }));
   app.get("/login", (_req, res) => res.sendFile(page("login.html")));
   app.post("/login", express.json(), auth.loginHandler);
   app.get("/logout", auth.logoutHandler);

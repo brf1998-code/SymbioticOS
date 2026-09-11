@@ -11,7 +11,7 @@
 // ONE agent run, one staged demo, one deploy. Only one run is active per
 // module at a time; further runs queue and start when the active one ends.
 const { q, logEvent } = require("./db");
-const { runAgent, runStructured, haveKey, assertUnderCap, modelFor, guidanceFor, MODELS } = require("./agent");
+const { runAgent, runStructured, haveKey, assertUnderCap, modelFor, buildModelFor, guidanceFor, MODELS } = require("./agent");
 const registry = require("./registry");
 
 const CROSS_CHECK_SCHEMA = {
@@ -168,7 +168,8 @@ async function advance(runId) {
       await log(runId, { step: "build", note: `draft version v${draft.version} created` });
       const req = run.requirement ? `\n\nConfirmed requirement:\n${run.requirement}` : "";
       const guidance = await guidanceFor(company, mod);
-      const model = run.model || await modelFor(company, "build");
+      const { model, substituted } = await buildModelFor(company, run.model);
+      if (substituted) await log(runId, { step: "build", note: `${substituted} cannot run as the build agent; building with ${model} instead` });
       const { text, costUsd } = await runAgent({
         model,
         system: guidance.text,

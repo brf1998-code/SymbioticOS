@@ -62,7 +62,7 @@
 const SLUG = location.pathname.split("/")[2];
 let D = null;
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
-function opts(sel) { return D.models.list.map(m => `<option value="${m.id}" ${m.id === sel ? "selected" : ""}>${m.label} ($${m.in} / $${m.out})</option>`).join(""); }
+function opts(sel, forBuild) { return D.models.list.filter(m => !forBuild || m.agent !== false).map(m => `<option value="${m.id}" ${m.id === sel ? "selected" : ""}>${m.label} ($${m.in} / $${m.out})</option>`).join(""); }
 async function post(url, body, method = "POST") {
   const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
@@ -76,7 +76,7 @@ async function load() {
   D = await r.json();
   document.getElementById("coname").textContent = D.company.name;
   document.getElementById("back").href = `/c/${SLUG}/`;
-  for (const role of ["propose", "build", "review"]) document.getElementById("m-" + role).innerHTML = opts(D.models[role]);
+  for (const role of ["propose", "build", "review"]) document.getElementById("m-" + role).innerHTML = opts(D.models[role], role === "build");
   document.getElementById("prices").innerHTML = `<tr><th>Model</th><th>In</th><th>Out</th><th>When</th></tr>` +
     D.models.list.map(m => `<tr><td><b>${m.label}</b> <span class="sub">${m.id}</span></td><td>$${m.in}</td><td>$${m.out}</td><td class="sub">${esc(m.note)}</td></tr>`).join("");
   document.getElementById("platformdocs").innerHTML = D.platformDocs.map(d => `<details class="doc card"><summary>${esc(d.name)}<span class="tag">platform, read-only</span></summary><pre>${esc(d.content)}</pre></details>`).join("");

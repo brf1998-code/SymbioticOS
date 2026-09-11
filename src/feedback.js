@@ -119,8 +119,9 @@ router.get("/api/c/:slug/board", async (req, res) => {
   res.json({
     company: co, feedback, runs, modules, screens, reviews,
     spend: await agent.monthlySpend(co.slug),
-    models: { list: agent.MODELS, build: await agent.modelFor(co.slug, "build") },
+    models: { list: agent.MODELS, build: (await agent.buildModelFor(co.slug, await agent.modelFor(co.slug, "build"))).model },
     role: req.sosRole,
+    boot: process.env.SOS_BOOT_ID,
     aiConfigured: agent.haveKey(),
     fakeAgent: agent.fakeMode(),
     maxRunUsd: agent.MAX_RUN_USD,

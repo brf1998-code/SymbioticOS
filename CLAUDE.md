@@ -70,6 +70,14 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   into `evidence.title` / `evidence.what_changed`; the title becomes the
   version's `notes` (shown in the Versions panel) and what_changed is the
   feedback outcome and the Done card text. `SOS_MODEL_SUMMARY` overrides.
+- **Build-agent models**: `MODELS[].agent === false` marks models the bundled
+  Claude Code CLI cannot run as the builder (Fable 5.1: the process exits 1
+  after its first reply). `agent.buildModelFor` substitutes the company build
+  model and the run log says so; build dropdowns leave those models out.
+  Fable stays available for proposals, cross-checks and system reviews.
+- **Boot id**: `SOS_BOOT_ID` is set at process start and returned by the
+  board API; the board reloads itself when it changes, so an open tab picks
+  up a redeploy instead of running old page code against new data.
 - **Run diagnostics**: when the agent process dies, the run log gets a `diag`
   entry (model, message count, whether init was seen, stderr tail, prompt
   sizes) and the error says at what stage it died.

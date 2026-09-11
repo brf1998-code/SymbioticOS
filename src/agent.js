@@ -29,8 +29,18 @@ const MODELS = [
   { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", in: 1, out: 5, note: "cheapest and fastest; fine for classifying feedback, weak for builds" },
   { id: "claude-sonnet-5", label: "Sonnet 5", in: 2, out: 10, note: "the default: good builds at a low price" },
   { id: "claude-opus-5", label: "Opus 5", in: 5, out: 25, note: "about 2.5x Sonnet 5; stronger on functionality builds and as an independent reviewer" },
-  { id: "claude-fable-5-1", label: "Fable 5.1", in: 10, out: 50, note: "about 5x Sonnet 5; most capable, for hard changes" },
+  { id: "claude-fable-5-1", label: "Fable 5.1", in: 10, out: 50, agent: false, note: "about 5x Sonnet 5; most capable. Proposals, system reviews and cross-checks only: the bundled Claude Code agent cannot run it as the builder" },
 ];
+// Models the build agent (Claude Code) can run. Others are for one-shot calls.
+const canBuild = (id) => { const m = MODELS.find((x) => x.id === id); return !m || m.agent !== false; };
+// Pick the model for the build agent: the requested one if it can build,
+// otherwise the company's build model. Returns { model, substituted }.
+async function buildModelFor(company, requested) {
+  if (requested && canBuild(requested)) return { model: requested, substituted: null };
+  let fallback = await modelFor(company, "build");
+  if (!canBuild(fallback)) fallback = "claude-sonnet-5";
+  return { model: fallback, substituted: requested || null };
+}
 const DEFAULT_MODELS = {
   propose: process.env.SOS_MODEL_PROPOSE || "claude-sonnet-5",
   build: process.env.SOS_MODEL_BUILD || process.env.SOS_MODEL || "claude-sonnet-5",
@@ -157,9 +167,10 @@ async function runAgent({ model, system, dir, prompt, readOnly = false }) {
       const lines = stderrTail.trim().split("\n").filter(Boolean);
       const detail = lines.slice(-3).join(" | ");
       const stage = !initSeen ? "the agent process died before it started" : seen < 3 ? "the agent process died right after starting" : `after ${seen} messages`;
-      const err = new Error(`build agent failed: ${e.message} (${stage}; model ${model}${detail ? `; ${detail}` : "; nothing on stderr"})`);
+      const said = text.trim() ? `; the model's last words: "${text.trim().slice(-200)}"` : "";
+      const err = new Error(`build agent failed: ${e.message} (${stage}; model ${model}${detail ? `; ${detail}` : "; nothing on stderr"}${said})`);
       err.costUsd = costUsd || estimate;
-      err.diag = { model, messages: seen, initSeen, stderr: stderrTail.slice(-4000), promptChars: prompt.length, systemChars: (system || "").length };
+      err.diag = { model, messages: seen, initSeen, stderr: stderrTail.slice(-4000), lastText: text.slice(-600), promptChars: prompt.length, systemChars: (system || "").length };
       throw err;
     }
   }
@@ -234,6 +245,6 @@ async function assertUnderCap() {
 }
 
 module.exports = {
-  runAgent, runStructured, haveKey, fakeMode, guidanceFor, platformDocs, modelFor, modelInfo,
+  runAgent, runStructured, haveKey, fakeMode, guidanceFor, platformDocs, modelFor, modelInfo, buildModelFor, canBuild,
   MODELS, DEFAULT_MODELS, MAX_RUN_USD, MONTHLY_CAP_USD, monthlySpend, assertUnderCap,
 };
