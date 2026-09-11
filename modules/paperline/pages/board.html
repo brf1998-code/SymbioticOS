@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paper Airplane Line</title>
+<style>
+  :root { --ink:#1c242e; --steel:#51606f; --line:#d5dbe3; --fog:#f2f4f7;
+          --run:#2e7d4f; --block:#c2620a; --down:#b3261e; --navy:#1f3a5f; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:system-ui, sans-serif; background:var(--fog); color:var(--ink); padding:16px; padding-bottom:90px; }
+  header { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:10px; }
+  h1 { font-size:22px; }
+  .links a { color:var(--navy); font-size:13px; font-weight:600; margin-right:10px; }
+  .top { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px; }
+  @media (max-width:760px) { .top { grid-template-columns:1fr; } }
+  .panel { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .timer { font-size:44px; font-weight:800; letter-spacing:.02em; }
+  .timer.off { color:var(--steel); }
+  .sub { color:var(--steel); font-size:13px; }
+  button { border:none; border-radius:8px; padding:12px 16px; font-size:14px; font-weight:700; cursor:pointer; margin:8px 6px 0 0; min-height:44px; }
+  .go { background:var(--run); color:#fff; } .stop { background:#fff; color:var(--down); border:1px solid var(--down); }
+  .quiet { background:#e5e9ee; color:var(--ink); }
+  .kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:6px; }
+  .kpi { background:var(--fog); border-radius:8px; padding:8px; }
+  .kpi b { display:block; font-size:22px; }
+  .kpi span { font-size:11.5px; color:var(--steel); text-transform:uppercase; letter-spacing:.05em; }
+  .stations { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:16px; }
+  .station { background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .station h2 { font-size:15px; }
+  .station .n { font-size:30px; font-weight:800; margin-top:4px; }
+  .status { display:inline-block; margin-top:6px; padding:4px 12px; border-radius:14px; color:#fff; font-size:12px; font-weight:700; cursor:pointer; user-select:none; }
+  .running { background:var(--run); } .blocked { background:var(--block); } .down { background:var(--down); }
+  .count { color:var(--steel); font-size:12px; margin-top:4px; }
+  h3 { font-size:15px; margin:14px 0 8px; }
+  table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  th, td { text-align:left; padding:8px 10px; font-size:13px; border-top:1px solid var(--line); }
+  th { color:var(--steel); font-size:11px; text-transform:uppercase; letter-spacing:.05em; border-top:none; }
+  .sw { display:inline-block; width:12px; height:12px; border-radius:3px; border:1px solid #bbb; vertical-align:-1px; margin-right:5px; }
+  .white { background:#fff; } .blue { background:#5b8def; } .yellow { background:#f4d35e; }
+  tr.h { cursor:pointer; }
+  .detail td { background:var(--fog); font-size:12.5px; }
+  .warnline { color:var(--block); font-weight:700; font-size:13px; margin-top:6px; }
+  .wrap { overflow-x:auto; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Paper Airplane Line</h1>
+    <span class="links" id="links"></span>
+  </header>
+
+  <div class="top">
+    <div class="panel">
+      <div class="sub" id="shiftlabel">No shift running</div>
+      <div class="timer off" id="timer">--:--</div>
+      <div id="controls"></div>
+      <div class="sub" id="settings"></div>
+    </div>
+    <div class="panel">
+      <div class="sub">This shift</div>
+      <div class="kpis" id="kpis"></div>
+      <div class="warnline" id="reqwarn"></div>
+      <div class="sub" id="lineinv" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <div class="stations" id="stations"></div>
+
+  <h3>Travelers on the line</h3>
+  <div class="wrap"><table>
+    <thead><tr><th>Job</th><th>Color</th><th>Fold</th><th>Clip</th><th>At station</th><th>Waiting</th></tr></thead>
+    <tbody id="travelers"></tbody>
+  </table></div>
+
+  <h3>Shift history</h3>
+  <div class="wrap"><table>
+    <thead><tr><th>Shift</th><th>Released</th><th>Completed</th><th>Scrap</th><th>Avg distance</th><th>Stockouts</th><th>WIP at end</th></tr></thead>
+    <tbody id="history"></tbody>
+  </table></div>
+<script>
+const base = location.pathname.replace(/\/$/, "");
+const NEXT = { running: "blocked", blocked: "down", down: "running" };
+let D = null, open = {};
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
+function mmss(sec) { sec = Math.max(0, Math.round(sec)); return String(Math.floor(sec/60)).padStart(2,"0") + ":" + String(sec%60).padStart(2,"0"); }
+async function post(url, body) {
+  const r = await fetch(base + url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) alert(j.error || "failed");
+  load();
+}
+function tickTimer() {
+  const el = document.getElementById("timer");
+  if (!D || !D.shift) { el.textContent = "--:--"; el.className = "timer off"; return; }
+  const left = (new Date(D.shift.ends_at) - Date.now()) / 1000;
+  el.textContent = mmss(left); el.className = "timer" + (left < 20 ? " off" : "");
+  if (left <= 0) load();
+}
+async function load() {
+  const r = await fetch(base + "/api/state");
+  if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
+  D = await r.json();
+  // shift buttons are shown to everyone; the server only accepts them from a manager session
+  document.getElementById("links").innerHTML =
+    D.stations.map(s => `<a href="${base}/station/${s.seq}">Station ${s.seq}</a>`).join("") + `<a href="${base}/stock">Stockroom</a><a href="/">Improvement board</a>`;
+  document.getElementById("shiftlabel").textContent = D.shift ? `Shift ${D.shift.number} running · ${D.shift.released} travelers released` : "No shift running";
+  document.getElementById("controls").innerHTML = D.shift
+    ? `<button class="stop" onclick="post('/api/shift/end')">End shift now</button>`
+    : `<button class="go" onclick="post('/api/shift/start')">Start shift</button><button class="quiet" onclick="settings()">Settings</button><button class="quiet" onclick="if(confirm('Clear all shifts and travelers and restock the line?'))post('/api/reset')">Reset demo</button>`;
+  document.getElementById("settings").textContent = `${D.settings.shift_seconds}s per shift · ${D.settings.release_per_shift} travelers released per shift`;
+  const s = D.shiftStats || {};
+  document.getElementById("kpis").innerHTML = [
+    [s.completed || 0, "Completed"], [s.scrapped || 0, "Scrapped"], [s.avg_distance ? s.avg_distance : "–", "Avg dist"], [D.travelers.length, "WIP"],
+  ].map(([v, l]) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`).join("");
+  document.getElementById("reqwarn").textContent = D.openRequests ? `${D.openRequests} material request(s) waiting on the stockroom` : "";
+  document.getElementById("lineinv").textContent = "At the line: " + D.line.map(i => `${i.item.replace("paper_", "")} ${i.qty}`).join(" · ");
+  document.getElementById("stations").innerHTML = D.stations.map(st => {
+    const here = D.travelers.filter(t => t.station_id === st.id);
+    return `<div class="station"><h2>${st.seq}. ${esc(st.name)}</h2>
+      <div class="n">${here.length}</div><div class="count">waiting here</div>
+      <span class="status ${st.status}" onclick="post('/api/stations/${st.id}/status',{status:'${NEXT[st.status]}'})">${st.status.toUpperCase()}</span></div>`;
+  }).join("");
+  const byId = Object.fromEntries(D.stations.map(s => [s.id, s.name]));
+  document.getElementById("travelers").innerHTML = D.travelers.map(t => `
+    <tr><td>${esc(t.job_num)}</td><td><span class="sw ${t.color}"></span>${t.color}</td><td>${t.fold_type}</td><td>${t.clip_pos}</td>
+        <td>${esc(byId[t.station_id] || "queued")}</td><td>${t.arrived_at ? mmss((Date.now() - new Date(t.arrived_at))/1000) : ""}</td></tr>`).join("")
+    || `<tr><td colspan="6" class="sub">nothing on the line</td></tr>`;
+  document.getElementById("history").innerHTML = D.history.map(h => {
+    const det = (h.summary && h.summary.stations || []).map(x => `${x.seq}. ${esc(x.name)}: ${x.completed} done, avg ${x.avg_seconds != null ? x.avg_seconds + "s" : "–"}, ${x.wip_end} left`).join(" · ");
+    return `<tr class="h" onclick="open[${h.id}]=!open[${h.id}];load()"><td>Shift ${h.number}</td><td>${h.released}</td><td>${h.completed}</td><td>${h.scrapped}</td><td>${h.avg_distance != null ? h.avg_distance : "–"}</td><td>${h.stockouts}</td><td>${h.wip_end}</td></tr>`
+      + (open[h.id] ? `<tr class="detail"><td colspan="7">${det || "no station data"}</td></tr>` : "");
+  }).join("") || `<tr><td colspan="7" class="sub">no shifts yet</td></tr>`;
+  tickTimer();
+}
+function settings() {
+  const secs = prompt("Seconds per shift:", D.settings.shift_seconds); if (secs == null) return;
+  const n = prompt("Travelers released per shift:", D.settings.release_per_shift); if (n == null) return;
+  post("/api/settings", { shift_seconds: secs, release_per_shift: n });
+}
+load();
+setInterval(load, 3000);
+setInterval(tickTimer, 500);
+</script>
+</body>
+</html>

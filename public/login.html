@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Symbiotic OS · Sign in</title>
+<style>
+  :root { --ink:#1c242e; --steel:#51606f; --line:#d5dbe3; --fog:#f2f4f7; --navy:#1f3a5f; --red:#b3261e; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); min-height:100vh; display:flex; align-items:center; justify-content:center; padding:16px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:24px; width:100%; max-width:360px; }
+  h1 { font-size:20px; margin-bottom:4px; }
+  .sub { color:var(--steel); font-size:13px; margin-bottom:18px; }
+  input { width:100%; font-size:18px; padding:12px; border:1px solid var(--line); border-radius:8px; font-family:inherit; }
+  button { width:100%; margin-top:12px; background:var(--navy); color:#fff; border:none; border-radius:8px; padding:14px; font-size:16px; font-weight:700; cursor:pointer; }
+  .err { color:var(--red); font-size:13px; margin-top:10px; display:none; }
+</style>
+</head>
+<body>
+  <form class="card" id="f">
+    <h1>Symbiotic OS</h1>
+    <div class="sub">Enter the password you were given. Floor and manager passwords both work here.</div>
+    <input id="pw" type="password" placeholder="Password" autofocus autocomplete="current-password">
+    <button type="submit">Sign in</button>
+    <div class="err" id="err">That password did not match.</div>
+  </form>
+<script>
+document.getElementById("f").onsubmit = async (e) => {
+  e.preventDefault();
+  const res = await fetch("/login", { method:"POST", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ password: document.getElementById("pw").value }) });
+  if (!res.ok) { document.getElementById("err").style.display = "block"; return; }
+  const next = new URLSearchParams(location.search).get("next");
+  location.href = next && next.startsWith("/") ? next : "/";
+};
+</script>
+</body>
+</html>

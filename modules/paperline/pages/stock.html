@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stockroom</title>
+<style>
+  :root { --ink:#1c242e; --steel:#51606f; --line:#d5dbe3; --fog:#f2f4f7;
+          --run:#2e7d4f; --block:#c2620a; --down:#b3261e; --navy:#1f3a5f; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:system-ui, sans-serif; background:var(--fog); color:var(--ink); padding:14px; padding-bottom:90px; max-width:640px; margin:0 auto; }
+  h1 { font-size:20px; margin-bottom:4px; }
+  .sub { color:var(--steel); font-size:13px; }
+  a { color:var(--navy); }
+  h3 { font-size:15px; margin:16px 0 8px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:8px; display:flex; align-items:center; gap:10px; }
+  .card b { font-size:16px; }
+  .card .who { color:var(--steel); font-size:12.5px; }
+  .grow { flex:1; }
+  button { border:none; border-radius:8px; padding:12px 16px; font-size:15px; font-weight:800; cursor:pointer; min-height:48px; background:var(--run); color:#fff; }
+  table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  th, td { text-align:left; padding:8px 10px; font-size:14px; border-top:1px solid var(--line); }
+  th { color:var(--steel); font-size:11px; text-transform:uppercase; letter-spacing:.05em; border-top:none; }
+  .low { color:var(--down); font-weight:800; }
+</style>
+</head>
+<body>
+  <h1>Stockroom</h1>
+  <div class="sub">Deliver what the stations ask for. Delivering moves it from the stockroom to the line.</div>
+  <h3>Open requests</h3>
+  <div id="requests"></div>
+  <h3>Inventory</h3>
+  <table><thead><tr><th>Item</th><th>At the line</th><th>In stock</th></tr></thead><tbody id="inv"></tbody></table>
+  <h3>Recently delivered</h3>
+  <div id="delivered" class="sub"></div>
+  <div class="sub" style="margin-top:14px"><a href="#" id="board">Line board</a> · <a href="#" id="stations">Stations</a></div>
+<script>
+const base = location.pathname.replace(/\/stock\/?$/, "");
+const LABEL = { paper_white: "White paper", paper_blue: "Blue paper", paper_yellow: "Yellow paper", clip: "Paper clips" };
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
+document.getElementById("board").href = base + "/";
+document.getElementById("stations").href = base + "/station";
+async function load() {
+  const r = await fetch(base + "/api/stock");
+  if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
+  const d = await r.json();
+  document.getElementById("requests").innerHTML = d.requests.map(q => `
+    <div class="card"><div class="grow"><b>${q.qty} × ${LABEL[q.item] || q.item}</b><div class="who">Station ${q.station_seq || "?"} ${esc(q.station_name || "")}${q.requested_by ? " · " + esc(q.requested_by) : ""} · ${new Date(q.requested_at).toLocaleTimeString()}</div></div>
+      <button onclick="deliver(${q.id})">Deliver</button></div>`).join("") || `<div class="sub">nothing requested</div>`;
+  const items = {};
+  for (const i of d.inventory) { (items[i.item] = items[i.item] || {})[i.location] = i.qty; }
+  document.getElementById("inv").innerHTML = Object.entries(items).map(([k, v]) =>
+    `<tr><td>${LABEL[k] || k}</td><td class="${(v.line || 0) <= 1 ? "low" : ""}">${v.line || 0}</td><td>${v.stock || 0}</td></tr>`).join("");
+  document.getElementById("delivered").innerHTML = d.delivered.map(q => `${q.qty} × ${LABEL[q.item] || q.item} to ${esc(q.station_name || "?")} at ${new Date(q.delivered_at).toLocaleTimeString()}`).join("<br>") || "none yet";
+}
+async function deliver(id) {
+  const r = await fetch(`${base}/api/requests/${id}/deliver`, { method:"POST" });
+  if (!r.ok) alert((await r.json().catch(() => ({}))).error || "failed");
+  load();
+}
+load();
+setInterval(load, 6000);
+</script>
+</body>
+</html>

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Station</title>
+<style>
+  :root { --ink:#1c242e; --steel:#51606f; --line:#d5dbe3; --fog:#f2f4f7;
+          --run:#2e7d4f; --block:#c2620a; --down:#b3261e; --navy:#1f3a5f; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:system-ui, sans-serif; background:var(--fog); color:var(--ink); padding:14px; padding-bottom:90px; max-width:560px; margin:0 auto; }
+  header { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  h1 { font-size:20px; flex:1; }
+  .timer { font-size:22px; font-weight:800; color:var(--navy); }
+  .timer.off { color:var(--steel); }
+  .sub { color:var(--steel); font-size:13px; }
+  a { color:var(--navy); }
+  .pick { display:grid; gap:10px; margin-top:14px; }
+  .pick a { display:block; background:#fff; border:1px solid var(--line); border-radius:10px; padding:18px; font-size:18px; font-weight:700; text-decoration:none; color:var(--ink); }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px; margin-top:12px; }
+  .job { font-size:26px; font-weight:800; }
+  .spec { display:flex; gap:10px; align-items:center; margin-top:6px; font-size:16px; }
+  .sw { display:inline-block; width:22px; height:22px; border-radius:5px; border:1px solid #bbb; vertical-align:middle; }
+  .white { background:#fff; } .blue { background:#5b8def; } .yellow { background:#f4d35e; }
+  .code { font-weight:800; font-size:18px; background:var(--fog); border-radius:6px; padding:2px 8px; }
+  .instr { font-size:17px; line-height:1.45; margin-top:12px; }
+  button { border:none; border-radius:10px; padding:16px; font-size:17px; font-weight:800; cursor:pointer; width:100%; min-height:56px; margin-top:12px; }
+  .done { background:var(--run); color:#fff; }
+  .scrap { background:#fff; color:var(--down); border:2px solid var(--down); }
+  .quiet { background:#e5e9ee; color:var(--ink); font-size:15px; min-height:48px; }
+  input { width:100%; font-size:18px; padding:12px; border:1px solid var(--line); border-radius:8px; font-family:inherit; margin-top:10px; }
+  .name { display:flex; gap:8px; align-items:center; margin-bottom:6px; }
+  .name input { margin:0; font-size:14px; padding:8px; }
+  .queue { margin-top:10px; font-size:13px; color:var(--steel); }
+  .err { background:#fdeceb; color:var(--down); border-radius:8px; padding:10px; margin-top:10px; font-weight:700; display:none; }
+  .req { margin-top:14px; }
+  .req select { font-size:16px; padding:10px; border:1px solid var(--line); border-radius:8px; width:100%; margin-top:8px; font-family:inherit; }
+  .inv { font-size:12.5px; color:var(--steel); margin-top:8px; }
+</style>
+</head>
+<body>
+  <div id="app"></div>
+<script>
+const m = location.pathname.match(/^(.*)\/station(?:\/(\d+))?\/?$/);
+const base = m[1];
+const seq = m[2] ? Number(m[2]) : null;
+let D = null;
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
+function mmss(sec) { sec = Math.max(0, Math.round(sec)); return String(Math.floor(sec/60)).padStart(2,"0") + ":" + String(sec%60).padStart(2,"0"); }
+function myName() { try { return localStorage.getItem("sos.name") || ""; } catch (e) { return ""; } }
+function setName(v) { try { localStorage.setItem("sos.name", v); } catch (e) {} }
+
+async function picker() {
+  const r = await fetch(base + "/api/state");
+  if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
+  const d = await r.json();
+  document.getElementById("app").innerHTML = `<header><h1>Pick your station</h1></header>
+    <div class="pick">${d.stations.map(s => `<a href="${base}/station/${s.seq}">${s.seq}. ${esc(s.name)}</a>`).join("")}
+    <a href="${base}/stock">Stockroom</a></div>`;
+}
+
+async function load() {
+  const r = await fetch(base + "/api/station/" + seq);
+  if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
+  D = await r.json();
+  const st = D.station;
+  const t = D.queue[0];
+  // don't wipe a name or distance someone is typing
+  const a = document.activeElement;
+  if (a && (a.id === "nm" || a.id === "dist") && t) { tickTimer(); return; }
+  const nameRow = `<div class="name"><span class="sub">Operator</span><input id="nm" placeholder="your name" value="${esc(myName())}" onchange="setName(this.value)"></div>`;
+  let html = `<header><h1>${st.seq}. ${esc(st.name)}</h1><span class="timer off" id="timer">--:--</span></header>${nameRow}`;
+  if (!t) {
+    html += `<div class="card"><div class="job">Nothing here yet</div><div class="sub">Work shows up when the station before you sends it on.</div></div>`;
+  } else {
+    const code = t.fold_type === "dart" ? "D" : "G";
+    const instr = t.fold_type === "dart" ? st.instruction_dart : st.instruction_glider;
+    html += `<div class="card">
+      <div class="job">${esc(t.job_num)}</div>
+      <div class="spec"><span class="sw ${t.color}"></span>${t.color} <span class="code">${code}</span></div>
+      <div class="instr">${esc(instr)}</div>
+      <div class="err" id="err"></div>`;
+    if (D.isLast) {
+      html += `<input id="dist" type="number" inputmode="decimal" placeholder="Distance">
+        <button class="done" onclick="complete(${t.id}, 'pass')">Pass</button>
+        <button class="scrap" onclick="complete(${t.id}, 'scrap')">Scrap</button>`;
+    } else {
+      html += `<button class="done" onclick="complete(${t.id})">Done, send to next station</button>`;
+    }
+    html += `</div>`;
+  }
+  html += `<div class="queue">${D.queue.length} waiting at this station${D.queue.length > 1 ? ": " + D.queue.map(x => esc(x.job_num)).join(", ") : ""}</div>`;
+  html += `<div class="req"><button class="quiet" onclick="document.getElementById('reqform').style.display='block'">Request material</button>
+    <div id="reqform" style="display:none">
+      <select id="item"><option value="paper_white">White paper</option><option value="paper_blue">Blue paper</option><option value="paper_yellow">Yellow paper</option><option value="clip">Paper clips</option></select>
+      <button class="quiet" onclick="request(${st.id})">Send request</button>
+    </div>
+    <div class="inv">At the line: ${D.line.map(i => `${i.item.replace("paper_", "")} ${i.qty}`).join(" · ")}${D.requests.length ? ` · ${D.requests.length} request(s) open` : ""}</div>
+  </div>
+  <div class="sub" style="margin-top:14px"><a href="${base}/station">Other stations</a> · <a href="${base}/">Line board</a></div>`;
+  document.getElementById("app").innerHTML = html;
+  tickTimer();
+}
+function tickTimer() {
+  const el = document.getElementById("timer");
+  if (!el) return;
+  if (!D || !D.shift) { el.textContent = "no shift"; el.className = "timer off"; return; }
+  const left = (new Date(D.shift.ends_at) - Date.now()) / 1000;
+  el.textContent = mmss(left); el.className = "timer" + (left < 20 ? " off" : "");
+}
+async function complete(id, qc) {
+  const body = { operator: (document.getElementById("nm") || {}).value || myName() };
+  if (qc) { body.qc = qc; body.distance_ft = (document.getElementById("dist") || {}).value; }
+  const r = await fetch(`${base}/api/travelers/${id}/complete`, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = document.getElementById("err"); if (e) { e.textContent = j.error || "failed"; e.style.display = "block"; } return; }
+  load();
+}
+async function request(stationId) {
+  const item = document.getElementById("item").value;
+  await fetch(`${base}/api/requests`, { method:"POST", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ station_id: stationId, item, requested_by: myName() }) });
+  load();
+}
+if (seq == null) picker(); else { load(); setInterval(load, 8000); setInterval(tickTimer, 500); }
+</script>
+</body>
+</html>

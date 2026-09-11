@@ -1,0 +1,6 @@
+node_modules/
+data/
+.env
+pat.md
+*.tgz
+.DS_Store

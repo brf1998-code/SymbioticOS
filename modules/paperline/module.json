@@ -1,0 +1,7 @@
+{
+  "name": "paperline",
+  "title": "Paper Airplane Line",
+  "entry": "routes.js",
+  "pages": { "/": "pages/board.html", "/station": "pages/station.html", "/station/:seq": "pages/station.html", "/stock": "pages/stock.html" },
+  "smoke": ["/api/state", "/api/station/1", "/api/stock", "/station/1", "/stock"]
+}

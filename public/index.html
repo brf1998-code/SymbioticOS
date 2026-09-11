@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Symbiotic OS · Improvement Board</title>
+<style>
+  :root { --ink:#1c242e; --steel:#51606f; --line:#d5dbe3; --fog:#f2f4f7;
+          --teal:#0e8a86; --tealSoft:#e3f2f1; --amber:#c2620a; --amberSoft:#fbefe0;
+          --navy:#1f3a5f; --green:#2e7d4f; --red:#b3261e; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); padding:18px; }
+  header { display:flex; align-items:baseline; gap:14px; margin-bottom:4px; flex-wrap:wrap; }
+  h1 { font-size:21px; }
+  .modules a { color:var(--navy); font-size:13px; margin-right:10px; font-weight:600; }
+  .right { margin-left:auto; color:var(--steel); font-size:12.5px; }
+  .right a { color:var(--navy); }
+  .warn { color:var(--amber); font-size:12.5px; margin:4px 0 12px; }
+  .info { color:var(--steel); font-size:12.5px; margin:4px 0 12px; }
+  .cols { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; align-items:start; }
+  @media (max-width: 1100px) { .cols { grid-template-columns:repeat(2,1fr); } }
+  @media (max-width: 640px) { .cols { grid-template-columns:1fr; } }
+  .col h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--steel); margin-bottom:8px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:10px; font-size:13px; }
+  .msg { font-weight:600; }
+  .meta { color:var(--steel); font-size:11.5px; margin-top:4px; }
+  .chip { display:inline-block; font-size:10.5px; font-weight:700; border-radius:10px; padding:2px 8px; color:#fff; margin-right:4px; }
+  .chip.ui { background:var(--teal); } .chip.functionality { background:var(--amber); }
+  .chip.rec { background:var(--steel); } .chip.platform { background:var(--navy); }
+  .prop { background:var(--fog); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; }
+  .req { background:var(--amberSoft); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; }
+  button { border:none; border-radius:7px; padding:8px 12px; font-size:12.5px; font-weight:700; cursor:pointer; margin:8px 6px 0 0; min-height:36px; }
+  .primary { background:var(--navy); color:#fff; } .go { background:var(--green); color:#fff; }
+  .quiet { background:#e5e9ee; color:var(--ink); } .no { background:#fff; color:var(--red); border:1px solid var(--red); }
+  .steps { margin-top:8px; font-size:12px; }
+  .step { display:flex; gap:6px; align-items:center; color:var(--steel); padding:2px 0; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--line); flex:none; }
+  .dot.done { background:var(--green); } .dot.now { background:var(--amber); } .dot.fail { background:var(--red); }
+  .outcome { background:#e4f1e9; color:var(--green); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; }
+  .fail-note { background:#fdeceb; color:var(--red); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; }
+  a.demo { color:var(--teal); font-weight:700; font-size:12.5px; }
+  .pulse { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--amber); margin-right:5px; animation:p 1s infinite alternate; }
+  @keyframes p { from { opacity:.3 } to { opacity:1 } }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Improvement Board</h1>
+    <span class="modules" id="modules"></span>
+    <span class="right" id="who"></span>
+  </header>
+  <div class="warn" id="aiwarn" style="display:none"></div>
+  <div class="info" id="spend"></div>
+  <div class="cols">
+    <div class="col"><h2>Feedback</h2><div id="col-new"></div></div>
+    <div class="col"><h2>Reviewing</h2><div id="col-reviewing"></div></div>
+    <div class="col"><h2>In Progress</h2><div id="col-in_progress"></div></div>
+    <div class="col"><h2>Done / Declined</h2><div id="col-done"></div></div>
+    <div class="col"><h2>Platform (built by Brendan)</h2><div id="col-platform"></div></div>
+  </div>
+<script>
+const LANES = {
+  ui: ["build", "visual_check", "await_deploy"],
+  functionality: ["confirm_requirement", "build", "cross_check", "test_run", "await_deploy"],
+};
+const STEP_LABEL = {
+  confirm_requirement: "Confirm requirement", build: "Agent build", cross_check: "Cross-check review",
+  visual_check: "Visual check", test_run: "Internal tests", await_deploy: "Manager deploy gate",
+};
+let DATA = null;
+const MGR = () => DATA && DATA.role === "manager";
+
+async function act(url, body) {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) alert(j.error || "action failed");
+  load();
+}
+
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
+
+function stepsHtml(run) {
+  const lane = LANES[run.lane] || [];
+  const idx = lane.indexOf(run.step);
+  return '<div class="steps">' + lane.map((s, i) => {
+    let cls = "";
+    if (i < idx || run.status === "deployed") cls = "done";
+    else if (i === idx) cls = run.status === "failed" ? "fail" : "now";
+    const spin = (i === idx && run.status === "running") ? '<span class="pulse"></span>' : "";
+    return `<div class="step"><span class="dot ${cls}"></span>${spin}${STEP_LABEL[s] || s}</div>`;
+  }).join("") + "</div>";
+}
+
+function card(fb) {
+  const run = DATA.runs.find(r => r.feedback_id === fb.id);
+  const isPlatform = !fb.module || fb.module === "platform";
+  let html = `<div class="card">`;
+  html += `<div class="msg">${esc(fb.message)}</div>`;
+  html += `<div class="meta">#${fb.id} · ${isPlatform ? '<span class="chip platform">PLATFORM</span>' : esc(fb.module)}${fb.page ? " · " + esc(fb.page) : ""} · ${esc(fb.name || "anonymous")}`
+       + (fb.recurrence > 1 ? ` · <span class="chip rec">x${fb.recurrence}</span>` : "") + `</div>`;
+
+  if (isPlatform) {
+    if (fb.status === "new") {
+      html += `<div class="meta">Goes to Brendan's build queue, not the in-app agent.</div>`;
+      html += `<button class="quiet" onclick="act('/api/feedback/${fb.id}/plusone')">+1 seen again</button>`;
+      if (MGR()) html += `<button class="no" onclick="closeItem(${fb.id}, true)">Decline</button>`;
+    } else if (fb.outcome) {
+      html += `<div class="${fb.status === "done" ? "outcome" : "fail-note"}">${esc(fb.outcome)}</div>`;
+    }
+    return html + "</div>";
+  }
+
+  if (fb.status === "new") {
+    if (MGR()) html += `<button class="primary" onclick="act('/api/feedback/${fb.id}/review')">Review with AI</button>`;
+    html += `<button class="quiet" onclick="act('/api/feedback/${fb.id}/plusone')">+1 seen again</button>`;
+  }
+
+  if (fb.status === "reviewing" && fb.proposal_id) {
+    html += `<div class="prop"><span class="chip ${fb.proposal_class}">${fb.proposal_class === "ui" ? "UI CHANGE" : "FUNCTIONALITY"}</span><br>${esc(fb.proposal_body)}</div>`;
+    if (fb.proposal_rationale) html += `<div class="meta">${esc(fb.proposal_rationale)}</div>`;
+    if (MGR()) {
+      html += `<button class="go" onclick="act('/api/proposals/${fb.proposal_id}/decide',{decision:'approve'})">Approve build</button>`;
+      html += `<button class="quiet" onclick="adjust(${fb.proposal_id})">Adjust</button>`;
+      html += `<button class="no" onclick="decline(${fb.proposal_id})">Decline</button>`;
+    } else {
+      html += `<div class="meta">Waiting on the manager.</div>`;
+    }
+  }
+
+  if (fb.status === "in_progress" && run) {
+    html += `<div class="meta" style="margin-top:6px"><span class="chip ${run.lane}">${run.lane === "ui" ? "UI LANE" : "FUNCTIONALITY LANE"}</span> run #${run.id} · v${run.from_version}${run.to_version ? " → v" + run.to_version : ""} · $${Number(run.cost_usd).toFixed(2)}</div>`;
+    html += stepsHtml(run);
+    if (run.step === "confirm_requirement" && run.status === "waiting") {
+      html += `<div class="req">${esc(run.requirement)}</div>`;
+      if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/confirm')">Confirm requirement</button>`;
+    }
+    if (run.step === "await_deploy" && run.status === "waiting") {
+      const ev = run.evidence || {};
+      if (ev.build_summary) html += `<div class="prop">${esc(ev.build_summary)}</div>`;
+      if (ev.test_run) html += `<div class="meta">tests: ${ev.test_run.ok ? "passed" : "failed"} (${(ev.test_run.checked || []).length} checks)</div>`;
+      if (ev.cross_check) html += `<div class="meta">cross-check: ${esc(ev.cross_check.verdict)} · ${esc(ev.cross_check.summary || "")}</div>`;
+      html += `<a class="demo" href="/staging/m/${esc(fb.module)}/" target="_blank">View staged demo</a><br>`;
+      if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/deploy')">Deploy to floor</button>`;
+    }
+    if (run.status === "failed") {
+      const last = (run.log || []).slice(-1)[0];
+      html += `<div class="fail-note">Stopped: ${esc(last ? last.note : "see log")}</div>`;
+      if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/retry')">Retry</button>`;
+    }
+  }
+
+  if (fb.status === "done" || fb.status === "declined") {
+    if (fb.outcome) html += `<div class="${fb.status === "done" ? "outcome" : "fail-note"}">${fb.status === "done" ? "You said / we did: " : "Declined: "}${esc(fb.outcome)}</div>`;
+    const modRow = DATA.modules.find(m => m.name === fb.module);
+    if (fb.status === "done" && run && run.status === "deployed" && MGR() && modRow && modRow.live_version === run.to_version) {
+      html += `<button class="no" onclick="act('/api/runs/${run.id}/rollback')">Roll back</button>`;
+    }
+  }
+  return html + "</div>";
+}
+
+function adjust(pid) {
+  const editedBody = prompt("Adjust the proposal (this replaces the text the agent will build from):");
+  if (editedBody == null) return;
+  const editedClass = confirm("Treat as a FUNCTIONALITY change? (Cancel = UI change)") ? "functionality" : "ui";
+  act(`/api/proposals/${pid}/decide`, { decision: "approve", editedBody, editedClass });
+}
+function decline(pid) {
+  const note = prompt("Reason (shown back to the reporter):") || "declined";
+  act(`/api/proposals/${pid}/decide`, { decision: "decline", note });
+}
+function closeItem(id, declined) {
+  const outcome = prompt(declined ? "Reason:" : "What shipped:") || (declined ? "declined" : "done");
+  act(`/api/feedback/${id}/close`, { outcome, declined });
+}
+
+async function load() {
+  const res = await fetch("/api/board");
+  if (res.status === 401) { location.href = "/login?next=/"; return; }
+  DATA = await res.json();
+  const w = document.getElementById("aiwarn");
+  if (!DATA.aiConfigured) { w.style.display = "block"; w.textContent = "AI is not configured on this instance (set ANTHROPIC_API_KEY). Proposals will be placeholders."; }
+  else if (DATA.fakeAgent) { w.style.display = "block"; w.textContent = "Fake agent mode (SOS_FAKE_AGENT=1): the loop runs but the agent only stamps a marker on pages."; }
+  else w.style.display = "none";
+  document.getElementById("spend").textContent =
+    `AI spend this month $${DATA.spend.usd.toFixed(2)} of $${DATA.spend.cap.toFixed(2)} cap · per-run cap $${Number(DATA.maxRunUsd).toFixed(2)} · model ${DATA.model}`;
+  document.getElementById("who").innerHTML = `signed in as <b>${esc(DATA.role)}</b> · <a href="/logout">sign out</a>`;
+  document.getElementById("modules").innerHTML =
+    DATA.modules.map(m => `<a href="/m/${m.name}/">${esc(m.title)} (v${m.live_version})</a>`).join("");
+  const buckets = { new: [], reviewing: [], in_progress: [], done: [], platform: [] };
+  for (const fb of DATA.feedback) {
+    if (!fb.module || fb.module === "platform") { buckets.platform.push(fb); continue; }
+    (buckets[fb.status === "declined" ? "done" : fb.status] || buckets.new).push(fb);
+  }
+  for (const k of ["new", "reviewing", "in_progress", "done", "platform"]) {
+    document.getElementById("col-" + k).innerHTML = buckets[k].map(card).join("") || '<div class="meta">empty</div>';
+  }
+}
+load();
+setInterval(load, 4000);
+</script>
+<script src="/assets/feedback-widget.js" data-module="platform"></script>
+</body>
+</html>
