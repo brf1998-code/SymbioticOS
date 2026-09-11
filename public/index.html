@@ -7,29 +7,45 @@
 <style>
   :root { --ink:#1c242e; --steel:#51606f; --line:#d5dbe3; --fog:#f2f4f7;
           --teal:#0e8a86; --tealSoft:#e3f2f1; --amber:#c2620a; --amberSoft:#fbefe0;
-          --navy:#1f3a5f; --green:#2e7d4f; --red:#b3261e; }
+          --navy:#1f3a5f; --green:#2e7d4f; --greenSoft:#e4f1e9; --red:#b3261e; --purple:#5b3a8a; }
   * { box-sizing:border-box; margin:0; }
-  body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); padding:18px; padding-bottom:56px; }
-  header { display:flex; align-items:baseline; gap:14px; margin-bottom:4px; flex-wrap:wrap; }
-  h1 { font-size:21px; }
-  h1 small { font-size:13px; color:var(--steel); font-weight:400; margin-left:6px; }
-  .modules a { color:var(--navy); font-size:13px; margin-right:12px; font-weight:600; }
-  .right { margin-left:auto; color:var(--steel); font-size:12.5px; }
-  .right a { color:var(--navy); }
-  .warn { color:var(--amber); font-size:12.5px; margin:4px 0 12px; }
-  .info { color:var(--steel); font-size:12.5px; margin:4px 0 12px; }
-  .cols { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; align-items:start; }
+  body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); padding:0 0 56px; }
+  a { color:var(--navy); }
+  .band { background:var(--navy); color:#fff; padding:14px 22px; }
+  .band .row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; max-width:1500px; margin:0 auto; }
+  .band h1 { font-size:20px; font-weight:800; letter-spacing:.01em; }
+  .band h1 small { font-size:12.5px; opacity:.75; font-weight:500; margin-left:8px; }
+  .band .right { margin-left:auto; font-size:12.5px; opacity:.9; }
+  .band .right a { color:#fff; }
+  .modstrip { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; max-width:1500px; margin-left:auto; margin-right:auto; }
+  .modcard { background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); border-radius:10px; padding:8px 12px; font-size:12.5px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .modcard b { font-size:13.5px; }
+  .modcard a { color:#fff; text-decoration:none; background:rgba(255,255,255,.14); border-radius:14px; padding:4px 10px; font-weight:600; }
+  .modcard a.amber { background:var(--amber); }
+  .modcard .v { opacity:.8; }
+  .wrap { max-width:1500px; margin:0 auto; padding:14px 22px 0; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:12px; }
+  .kpi { background:#fff; border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .kpi b { display:block; font-size:22px; line-height:1.1; }
+  .kpi span { font-size:11px; color:var(--steel); text-transform:uppercase; letter-spacing:.05em; }
+  .warn { color:var(--amber); font-size:12.5px; margin:0 0 10px; font-weight:600; }
+  .cols { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; align-items:start; }
   @media (max-width: 1100px) { .cols { grid-template-columns:repeat(2,1fr); } }
-  @media (max-width: 640px) { .cols { grid-template-columns:1fr; } }
-  .col h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--steel); margin-bottom:8px; }
-  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:10px; font-size:13px; }
-  .msg { font-weight:600; white-space:pre-wrap; }
-  .meta { color:var(--steel); font-size:11.5px; margin-top:4px; }
-  .chip { display:inline-block; font-size:10.5px; font-weight:700; border-radius:10px; padding:2px 8px; color:#fff; margin-right:4px; }
+  @media (max-width: 640px) { .cols { grid-template-columns:1fr; } .band, .wrap { padding-left:14px; padding-right:14px; } }
+  .col { background:#e9edf2; border-radius:12px; padding:10px; min-height:120px; }
+  .col h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--steel); margin:2px 4px 10px; display:flex; align-items:center; gap:8px; }
+  .col h2 .n { background:#fff; border-radius:10px; padding:1px 8px; font-size:11px; color:var(--ink); }
+  .col h2::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--steel); }
+  .col.c-new h2::before { background:var(--navy); } .col.c-reviewing h2::before { background:var(--amber); }
+  .col.c-in_progress h2::before { background:var(--teal); } .col.c-done h2::before { background:var(--green); }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:10px; font-size:13px; box-shadow:0 1px 2px rgba(28,36,46,.06); }
+  .msg { font-weight:600; white-space:pre-wrap; line-height:1.4; }
+  .meta { color:var(--steel); font-size:11.5px; margin-top:4px; line-height:1.5; }
+  .chip { display:inline-block; font-size:10.5px; font-weight:700; border-radius:10px; padding:2px 8px; color:#fff; margin-right:4px; vertical-align:middle; }
   .chip.ui { background:var(--teal); } .chip.functionality { background:var(--amber); }
   .chip.rec { background:var(--steel); } .chip.platform { background:var(--navy); }
-  .chip.screen { background:#e5e9ee; color:var(--ink); }
-  .prop { background:var(--fog); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; }
+  .chip.screen { background:#e5e9ee; color:var(--ink); } .chip.review { background:var(--purple); }
+  .prop { background:var(--fog); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; line-height:1.45; }
   .req { background:var(--amberSoft); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; }
   button { border:none; border-radius:7px; padding:8px 12px; font-size:12.5px; font-weight:700; cursor:pointer; margin:8px 6px 0 0; min-height:36px; }
   .primary { background:var(--navy); color:#fff; } .go { background:var(--green); color:#fff; }
@@ -38,43 +54,57 @@
   .step { display:flex; gap:6px; align-items:center; color:var(--steel); padding:2px 0; }
   .dot { width:9px; height:9px; border-radius:50%; background:var(--line); flex:none; }
   .dot.done { background:var(--green); } .dot.now { background:var(--amber); } .dot.fail { background:var(--red); }
-  .outcome { background:#e4f1e9; color:var(--green); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; }
+  .outcome { background:var(--greenSoft); color:var(--green); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; }
   .fail-note { background:#fdeceb; color:var(--red); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; }
   a.demo { display:inline-block; color:#fff; background:var(--amber); font-weight:700; font-size:12.5px; border-radius:7px; padding:8px 12px; margin-top:8px; text-decoration:none; }
-  .batchbar { position:sticky; top:0; z-index:5; background:#fff; border:1px solid var(--line); border-radius:10px; padding:8px 12px; margin-bottom:12px; font-size:13px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .batchbar { position:sticky; top:0; z-index:5; background:#fff; border:1px solid var(--line); border-radius:10px; padding:8px 12px; margin-bottom:12px; font-size:13px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; box-shadow:0 4px 12px rgba(28,36,46,.08); }
   .batchbar button { margin:0; }
   label.pick { display:block; font-size:12px; color:var(--steel); margin-top:8px; cursor:pointer; }
   select, textarea { font-family:inherit; font-size:12.5px; border:1px solid var(--line); border-radius:7px; padding:6px; }
   textarea { width:100%; min-height:90px; }
   .edit { margin-top:8px; display:grid; gap:6px; }
   .edit label { font-size:11.5px; color:var(--steel); }
-  .chip.review { background:#5b3a8a; }
   .reviewbar { background:#f3eefa; border:1px solid #cdb8e8; border-radius:10px; padding:10px 12px; margin-bottom:12px; font-size:13px; }
-  .reviewbar .sum { white-space:pre-wrap; margin-top:6px; color:var(--ink); }
+  .reviewbar .sum { white-space:pre-wrap; margin-top:6px; color:var(--ink); line-height:1.45; }
   .reviewbar button { margin:8px 6px 0 0; }
-  .toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:12.5px; color:var(--steel); margin:0 0 12px; }
+  .toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:12.5px; color:var(--steel); margin:0 0 12px; background:#fff; border:1px solid var(--line); border-radius:10px; padding:8px 12px; }
   .toolbar select { font-size:12.5px; }
+  .toolbar button { margin:0; }
+  details.platform { margin-top:16px; background:#fff; border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  details.platform summary { cursor:pointer; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--steel); font-weight:700; }
+  details.platform summary .n { background:var(--fog); border-radius:10px; padding:1px 8px; font-size:11px; color:var(--ink); margin-left:6px; }
+  details.platform .hint { font-size:12.5px; color:var(--steel); margin:8px 0; line-height:1.5; }
+  details.platform .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:10px; }
+  .empty { color:var(--steel); font-size:12.5px; padding:10px 4px; }
   .pulse { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--amber); margin-right:5px; animation:p 1s infinite alternate; }
   @keyframes p { from { opacity:.3 } to { opacity:1 } }
 </style>
 </head>
 <body>
-  <header>
-    <h1>Improvement Board <small id="coname"></small></h1>
-    <span class="modules" id="modules"></span>
-    <span class="right" id="who"></span>
-  </header>
-  <div class="warn" id="aiwarn" style="display:none"></div>
-  <div class="info" id="spend"></div>
-  <div class="toolbar" id="toolbar"></div>
-  <div id="reviews"></div>
-  <div class="batchbar" id="batchbar" style="display:none"></div>
-  <div class="cols">
-    <div class="col"><h2>Feedback</h2><div id="col-new"></div></div>
-    <div class="col"><h2>Reviewing</h2><div id="col-reviewing"></div></div>
-    <div class="col"><h2>In Progress</h2><div id="col-in_progress"></div></div>
-    <div class="col"><h2>Done / Declined</h2><div id="col-done"></div></div>
-    <div class="col"><h2>Platform (built by Brendan)</h2><div id="col-platform"></div></div>
+  <div class="band">
+    <div class="row">
+      <h1>Improvement Board <small id="coname"></small></h1>
+      <span class="right" id="who"></span>
+    </div>
+    <div class="modstrip" id="modules"></div>
+  </div>
+  <div class="wrap">
+    <div class="warn" id="aiwarn" style="display:none"></div>
+    <div class="kpis" id="kpis"></div>
+    <div class="toolbar" id="toolbar"></div>
+    <div id="reviews"></div>
+    <div class="batchbar" id="batchbar" style="display:none"></div>
+    <div class="cols">
+      <div class="col c-new"><h2>Feedback <span class="n" id="n-new">0</span></h2><div id="col-new"></div></div>
+      <div class="col c-reviewing"><h2>Reviewing <span class="n" id="n-reviewing">0</span></h2><div id="col-reviewing"></div></div>
+      <div class="col c-in_progress"><h2>In progress <span class="n" id="n-in_progress">0</span></h2><div id="col-in_progress"></div></div>
+      <div class="col c-done"><h2>Done and declined <span class="n" id="n-done">0</span></h2><div id="col-done"></div></div>
+    </div>
+    <details class="platform" id="platform-wrap">
+      <summary>Platform requests <span class="n" id="n-platform">0</span></summary>
+      <div class="hint">Feedback about this board, the agent settings, or the admin pages (the tool itself, not a module). The in-app agent does not rebuild its own platform; these go to Brendan and ship through the repo. They stay here so nothing gets lost.</div>
+      <div class="grid" id="col-platform"></div>
+    </details>
   </div>
 <script>
 const SLUG = location.pathname.split("/")[2];
@@ -306,11 +336,21 @@ async function load() {
   if (!DATA.aiConfigured) { w.style.display = "block"; w.textContent = "AI is not configured on this instance (set ANTHROPIC_API_KEY). Proposals will be placeholders."; }
   else if (DATA.fakeAgent) { w.style.display = "block"; w.textContent = "Fake agent mode (SOS_FAKE_AGENT=1): the loop runs but the agent only stamps a marker on pages."; }
   else w.style.display = "none";
-  document.getElementById("spend").textContent =
-    `AI spend this month $${DATA.spend.usd.toFixed(2)} of $${DATA.spend.cap.toFixed(2)} cap · per-run cap $${Number(DATA.maxRunUsd).toFixed(2)} · builds with ${modelLabel(DATA.models.build)}`;
-  document.getElementById("who").innerHTML = `signed in as <b>${esc(DATA.role)}</b>${DATA.role === "admin" ? ' · <a href="/admin">admin</a>' : ""} · <a href="/logout">sign out</a>`;
-  document.getElementById("modules").innerHTML =
-    DATA.modules.map(m => `<a href="/c/${SLUG}/m/${m.name}/">${esc(m.title)} (v${m.live_version})</a>`).join("") + (MGR() ? `<a href="/c/${SLUG}/agents">Agent settings</a>` : "");
+  document.getElementById("who").innerHTML = `signed in as <b>${esc(DATA.role)}</b>${DATA.role === "admin" ? ' · <a href="/admin">admin</a>' : ""}${MGR() ? ` · <a href="/c/${SLUG}/agents">agent settings</a>` : ""} · <a href="/logout">sign out</a>`;
+  document.getElementById("modules").innerHTML = DATA.modules.map(m =>
+    `<div class="modcard"><b>${esc(m.title)}</b><span class="v">v${m.live_version}</span>
+      <a href="/c/${SLUG}/m/${m.name}/">Open live</a>
+      ${m.staged_version ? `<a class="amber" href="/c/${SLUG}/staging/m/${m.name}/">Preview v${m.staged_version}</a>` : ""}
+      <a href="/c/${SLUG}/diagrams/${m.name}">Diagrams</a></div>`).join("");
+  const active = DATA.runs.filter(r => ["running", "waiting", "queued"].includes(r.status)).length;
+  const week = Date.now() - 7 * 86400000;
+  const deployed = DATA.runs.filter(r => r.status === "deployed" && new Date(r.updated_at) > week).length;
+  const openFb = DATA.feedback.filter(f => f.status === "new" && f.module !== "platform").length;
+  document.getElementById("kpis").innerHTML = [
+    [openFb, "new feedback"], [DATA.feedback.filter(f => f.status === "reviewing").length, "awaiting decision"],
+    [active, "building now"], [deployed, "deployed this week"],
+    [`$${DATA.spend.usd.toFixed(2)}`, `AI spend of $${DATA.spend.cap.toFixed(0)} cap`], [modelLabel(DATA.models.build), "build model"],
+  ].map(([v, l]) => `<div class="kpi"><b>${esc(v)}</b><span>${l}</span></div>`).join("");
   const buckets = { new: [], reviewing: [], in_progress: [], done: [], platform: [] };
   for (const fb of DATA.feedback) {
     if (!fb.module || fb.module === "platform") { buckets.platform.push(fb); continue; }
@@ -322,7 +362,8 @@ async function load() {
   for (const id of [...SEL]) if (!reviewing.has(id)) SEL.delete(id);
   renderBatchBar();
   for (const k of ["new", "reviewing", "in_progress", "done", "platform"]) {
-    document.getElementById("col-" + k).innerHTML = buckets[k].map(card).join("") || '<div class="meta">empty</div>';
+    document.getElementById("col-" + k).innerHTML = buckets[k].map(card).join("") || '<div class="empty">Nothing here.</div>';
+    document.getElementById("n-" + k).textContent = buckets[k].length;
   }
 }
 load();

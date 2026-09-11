@@ -63,8 +63,11 @@ through the repo, not the in-app agent.
 - `src/proposals.js` — feedback -> proposal + UI/functionality classification
 - `src/pipeline.js` — the two lanes as a state machine over build_runs
 - `src/agent.js` — Claude Agent SDK runner (cwd = draft version dir, file tools only), model roles and prices, guidance docs, cost caps, fake mode
-- `public/agents.html`, `public/admin.html` — per-company agent settings, instance admin
-- `principles/` — PRINCIPLES, GUARDRAILS, STYLE + per-module reference formats (fed to every agent run)
+- `src/review.js` — whole-module system review by a frontier model, filed as held proposals
+- `src/diagrams.js` — Mermaid data-flow and workflow diagrams drawn after every deploy, per version
+- `public/index.html` — the improvement board (module strip, KPIs, four columns, platform requests)
+- `public/agents.html`, `public/admin.html`, `public/diagrams.html` — per-company agent settings, instance admin, diagram viewer
+- `principles/` — PRINCIPLES, GUARDRAILS, STYLE, DIAGRAMS + per-module reference formats (fed to every agent run)
 - `modules/<name>/` — seed source for each module (manifest, routes, pages, migrations)
 
 ## Security posture

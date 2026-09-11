@@ -131,6 +131,16 @@ or Adjust items one by one, then "Select all held items for one batch" and
 build them as one change, with whichever model the batch bar shows. The
 review's summary stays on the board above the columns.
 
+**Diagrams.** Every deploy redraws two sets of diagrams for the new version:
+data flows (what each screen records and where) and one workflow per role
+(what the operator, the stockroom, the manager actually do, dead ends
+included). Open them from the **Diagrams** link on the module strip at the top
+of the board. Put the station workflow on the projector after a big change so
+the room can see the process they just changed, and use the version dropdown
+to flip between before and after. The drawing takes a minute or so after the
+deploy; the page refreshes on its own. The conventions the model follows are
+in `principles/DIAGRAMS.md`, adjust that file when a drawing is not useful.
+
 **Shift 2 and 3.** Same two minutes. Compare the history rows: completed,
 average distance, stockouts, WIP at end. Improvements should show up in the
 numbers, and if one does not, that is the conversation.

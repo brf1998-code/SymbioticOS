@@ -150,6 +150,19 @@ CREATE TABLE IF NOT EXISTS platform.reviews (
   finished_at  TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS platform.diagrams (
+  id          SERIAL PRIMARY KEY,
+  company     TEXT NOT NULL,
+  module      TEXT NOT NULL,
+  version     INTEGER NOT NULL,
+  model       TEXT,
+  status      TEXT NOT NULL DEFAULT 'running',     -- running|done|failed
+  content     JSONB,                               -- { overview, data_flows:[...], workflows:[...] }
+  cost_usd    NUMERIC(10,4) NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ
+);
+
 CREATE TABLE IF NOT EXISTS platform.events (
   id         SERIAL PRIMARY KEY,
   kind       TEXT NOT NULL,

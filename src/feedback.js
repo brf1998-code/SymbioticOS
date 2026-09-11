@@ -8,6 +8,7 @@ const pipeline = require("./pipeline");
 const registry = require("./registry");
 const agent = require("./agent");
 const review = require("./review");
+const diagrams = require("./diagrams");
 const { requireManager, requireAdmin } = require("./auth");
 
 const router = express.Router();
@@ -185,6 +186,22 @@ router.post("/api/c/:slug/reviews", requireManager, async (req, res) => {
 });
 router.get("/api/c/:slug/reviews", requireManager, async (req, res) => {
   res.json(await review.listReviews(req.params.slug));
+});
+
+// ---- diagrams: data flows and workflows per deployed version ---------------
+router.get("/api/c/:slug/diagrams/:module", async (req, res) => {
+  const row = await registry.getModule(req.params.slug, req.params.module);
+  if (!row) return res.status(404).json({ error: "unknown module" });
+  const v = req.query.version ? Number(req.query.version) : null;
+  const d = await diagrams.latest(req.params.slug, req.params.module, v);
+  res.json({ module: row, ...d, conventions: diagrams.conventions(), role: req.sosRole });
+});
+router.post("/api/c/:slug/diagrams/:module/regenerate", requireManager, async (req, res) => {
+  try {
+    const row = await registry.getModule(req.params.slug, req.params.module);
+    const out = await diagrams.generate(req.params.slug, req.params.module, row.live_version, { force: true, model: (req.body || {}).model });
+    res.json({ ok: true, ...out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ---- agent settings: models per role + guidance docs (manager) --------------

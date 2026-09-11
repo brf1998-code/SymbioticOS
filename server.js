@@ -8,6 +8,7 @@ const { initPlatformSchema, q } = require("./src/db");
 const registry = require("./src/registry");
 const platformApi = require("./src/feedback");
 const auth = require("./src/auth");
+const diagrams = require("./src/diagrams");
 
 const PORT = process.env.PORT || 3000;
 const page = (name) => path.join(__dirname, "public", name);
@@ -46,12 +47,19 @@ async function main() {
   app.get("/c/:slug/", (_req, res) => res.sendFile(page("index.html")));
   app.get("/c/:slug", (req, res) => res.redirect(`/c/${req.params.slug}/`));
   app.get("/c/:slug/agents", (_req, res) => res.sendFile(page("agents.html")));
+  app.get("/c/:slug/diagrams/:module", (_req, res) => res.sendFile(page("diagrams.html")));
   app.get("/admin", auth.requireAdmin, (_req, res) => res.sendFile(page("admin.html")));
 
   app.use(platformApi);      // /api/*
   registry.attach(app);      // /c/:slug/m/:module and /c/:slug/staging/m/:module
 
+  // every deploy redraws the module's diagrams for the new version
+  registry.hooks.deployed = (company, mod, version) => diagrams.generate(company, mod, version);
   await registry.loadAll();
+  // modules with no diagrams yet (first boot after this feature) get them now
+  for (const m of (await q("SELECT company, name, live_version FROM platform.modules WHERE live_version IS NOT NULL")).rows) {
+    diagrams.generate(m.company, m.name, m.live_version).catch((e) => console.error(`diagrams ${m.company}/${m.name}:`, e.message));
+  }
 
   app.listen(PORT, () => console.log(`Symbiotic OS instance on :${PORT} (auth ${auth.OPEN ? "OPEN: no passwords set" : "on"})`));
 }

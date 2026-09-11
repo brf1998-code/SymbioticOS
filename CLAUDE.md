@@ -39,6 +39,20 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   as a held feedback item (`review_id`, status reviewing) with a draft
   proposal (class, target_file, priority in rationale). Building the approved
   set is the normal batch run. One review per module at a time.
+- **Diagrams** (`src/diagrams.js`, `platform.diagrams`): after every deploy
+  (`registry.hooks.deployed`) the propose model draws two Mermaid sets for the
+  new version, data flows and one workflow per role, following
+  `principles/DIAGRAMS.md` (the adjustable conventions file; edit it when the
+  drawings are not landing). Shown at `/c/<slug>/diagrams/<module>` with a
+  version selector and a manager-only Redraw button (`POST
+  /api/c/<slug>/diagrams/<module>/regenerate`). Rendered client-side by
+  mermaid from cdnjs; if the CDN is unreachable the page shows the source.
+  Boot draws diagrams for any module version that has none.
+- **Board layout** (`public/index.html`): header band, module strip (Open
+  live / Preview vN / Diagrams per module), KPI strip, system review toolbar,
+  four columns. Platform feedback (about the tool itself, shipped from Cowork)
+  sits in a collapsed "Platform requests" strip under the columns, not a
+  column of its own.
 
 ## What this is
 
@@ -68,7 +82,7 @@ is the facilitator script.
    and pushes; Railway redeploys. This is for platform changes (anything under
    `src/`, `public/`, `server.js`, `principles/`) and for deliberate module
    revisions. Feedback filed about the platform itself lands in the
-   "Platform (built by Brendan)" column of the board and is readable from here:
+   "Platform requests" strip of the board and is readable from here:
    `GET /api/c/<slug>/feedback/platform` (manager session) or the
    `platform.feedback` table where `module='platform'`. Close them with
    `POST /api/feedback/:id/close {outcome}` after shipping.

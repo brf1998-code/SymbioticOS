@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Symbiotic OS · Diagrams</title>
+<style>
+  :root { --ink:#1c242e; --steel:#51606f; --line:#d5dbe3; --fog:#f2f4f7; --navy:#1f3a5f; --green:#2e7d4f; --amber:#c2620a; --red:#b3261e; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); padding:18px; padding-bottom:56px; max-width:1200px; margin:0 auto; }
+  header { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:6px; }
+  h1 { font-size:21px; } h1 small { font-size:13px; color:var(--steel); font-weight:400; margin-left:6px; }
+  a { color:var(--navy); }
+  .sub { color:var(--steel); font-size:13px; line-height:1.5; }
+  .overview { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px; margin:12px 0; font-size:14px; line-height:1.55; }
+  .tabs { display:flex; gap:6px; margin:14px 0 10px; flex-wrap:wrap; align-items:center; }
+  .tab { border:1px solid var(--line); background:#fff; border-radius:20px; padding:8px 14px; font-size:13px; font-weight:700; cursor:pointer; color:var(--steel); }
+  .tab.on { background:var(--navy); color:#fff; border-color:var(--navy); }
+  .tabs .right { margin-left:auto; display:flex; gap:8px; align-items:center; font-size:12.5px; color:var(--steel); }
+  select { font-family:inherit; font-size:12.5px; border:1px solid var(--line); border-radius:7px; padding:6px; }
+  button { border:none; border-radius:7px; padding:8px 12px; font-size:12.5px; font-weight:700; cursor:pointer; background:#e5e9ee; color:var(--ink); min-height:36px; }
+  .dia { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .dia h2 { font-size:16px; } .dia .role { font-size:12px; color:var(--steel); text-transform:uppercase; letter-spacing:.05em; margin-top:2px; }
+  .dia .notes { font-size:13.5px; color:var(--ink); line-height:1.5; margin:8px 0 10px; }
+  .canvas { overflow-x:auto; background:#fbfcfd; border:1px dashed var(--line); border-radius:8px; padding:10px; }
+  .canvas svg { max-width:100%; height:auto; }
+  .src { font-size:11.5px; color:var(--steel); margin-top:6px; cursor:pointer; }
+  pre { background:var(--fog); border-radius:8px; padding:10px; font-size:11.5px; white-space:pre-wrap; margin-top:6px; }
+  .empty { background:#fff; border:1px solid var(--line); border-radius:10px; padding:20px; color:var(--steel); font-size:14px; }
+  .pulse { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--amber); margin-right:5px; animation:p 1s infinite alternate; }
+  @keyframes p { from { opacity:.3 } to { opacity:1 } }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.15.0/mermaid.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1 id="title">Diagrams <small id="sub"></small></h1>
+    <span class="sub"><a id="back" href="#">Improvement board</a> · <a id="live" href="#">Live module</a></span>
+  </header>
+  <p class="sub">Two sets, redrawn from the module's source after every deploy: what the module records and where (data flows), and what each person does at their screen (workflows). Drawn to the conventions in <a href="#" onclick="toggleConv();return false">DIAGRAMS.md</a>.</p>
+  <pre id="conv" style="display:none"></pre>
+  <div class="overview" id="overview"></div>
+  <div class="tabs">
+    <button class="tab on" id="t-workflows" onclick="show('workflows')">Workflows</button>
+    <button class="tab" id="t-data_flows" onclick="show('data_flows')">Data flows</button>
+    <span class="right"><span id="meta"></span><select id="ver" onchange="load(this.value)"></select><button id="regen" onclick="regen()" style="display:none">Redraw for the live version</button></span>
+  </div>
+  <div id="out"></div>
+<script>
+const parts = location.pathname.split("/");
+const SLUG = parts[2], MOD = parts[4];
+let D = null, TAB = "workflows";
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
+if (window.mermaid) mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict", flowchart: { useMaxWidth: true, htmlLabels: true } });
+function toggleConv() { const el = document.getElementById("conv"); el.style.display = el.style.display === "none" ? "block" : "none"; }
+async function load(version) {
+  const r = await fetch(`/api/c/${SLUG}/diagrams/${MOD}${version ? "?version=" + version : ""}`);
+  if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
+  D = await r.json();
+  document.getElementById("sub").textContent = D.module.title;
+  document.getElementById("back").href = `/c/${SLUG}/`;
+  document.getElementById("live").href = `/c/${SLUG}/m/${MOD}/`;
+  document.getElementById("conv").textContent = D.conventions;
+  document.getElementById("regen").style.display = (D.role === "manager" || D.role === "admin") ? "inline-block" : "none";
+  const sel = document.getElementById("ver");
+  sel.innerHTML = D.versions.map(v => `<option value="${v}" ${D.current && D.current.version === v ? "selected" : ""}>version ${v}${v === D.module.live_version ? " (live)" : ""}</option>`).join("") || "<option>no diagrams yet</option>";
+  const c = D.current;
+  document.getElementById("meta").innerHTML = D.running ? `<span class="pulse"></span>drawing version ${D.running}` : (c ? `drawn ${new Date(c.finished_at || c.created_at).toLocaleString()} · ${esc(c.model || "")} · $${Number(c.cost_usd).toFixed(2)}` : "");
+  if (!c) { document.getElementById("overview").textContent = D.running ? "Diagrams are being drawn for this version. This page refreshes on its own." : "No diagrams yet for this module. They are drawn after the next deploy, or use the redraw button."; document.getElementById("out").innerHTML = ""; if (D.running) setTimeout(() => load(version), 5000); return; }
+  document.getElementById("overview").textContent = c.content.overview || "";
+  render();
+  if (D.running) setTimeout(() => load(version), 5000);
+}
+function show(tab) { TAB = tab; for (const t of ["workflows", "data_flows"]) document.getElementById("t-" + t).classList.toggle("on", t === tab); render(); }
+async function render() {
+  const list = (D.current.content[TAB] || []);
+  const out = document.getElementById("out");
+  out.innerHTML = list.map((d, i) => `<div class="dia">
+    <h2>${esc(d.title)}</h2>${d.role ? `<div class="role">${esc(d.role)}</div>` : ""}
+    <div class="notes">${esc(d.notes)}</div>
+    <div class="canvas" id="cv-${i}">rendering…</div>
+    <div class="src" onclick="const p=this.nextElementSibling;p.style.display=p.style.display==='none'?'block':'none'">show source</div><pre style="display:none">${esc(d.mermaid)}</pre>
+  </div>`).join("") || `<div class="empty">Nothing in this set.</div>`;
+  if (!window.mermaid) { for (let i = 0; i < list.length; i++) document.getElementById("cv-" + i).innerHTML = "<pre>" + esc(list[i].mermaid) + "</pre>"; return; }
+  for (let i = 0; i < list.length; i++) {
+    try {
+      const { svg } = await mermaid.render("m-" + TAB + "-" + i + "-" + Date.now(), list[i].mermaid);
+      document.getElementById("cv-" + i).innerHTML = svg;
+    } catch (e) {
+      document.getElementById("cv-" + i).innerHTML = `<div style="color:#b3261e;font-size:12.5px">This diagram did not render (${esc(e.message || e)}). The source is below; a redraw usually fixes it.</div><pre>${esc(list[i].mermaid)}</pre>`;
+    }
+  }
+}
+async function regen() {
+  if (!confirm("Redraw the diagrams for the live version now? Costs a few cents.")) return;
+  const r = await fetch(`/api/c/${SLUG}/diagrams/${MOD}/regenerate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) alert(j.error || "failed");
+  load();
+}
+load();
+</script>
+<script src="/assets/feedback-widget.js" data-module="platform"></script>
+</body>
+</html>

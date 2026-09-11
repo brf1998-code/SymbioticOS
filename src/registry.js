@@ -34,6 +34,8 @@ const PRINCIPLES_DIR = process.env.PRINCIPLES_DIR || path.join(__dirname, "..", 
 
 // in-memory mount table: "company/name" -> { live: router|null, staged: router|null }
 const mounts = new Map();
+// hooks.deployed(company, mod, version) runs after every deploy (set by server.js)
+const hooks = { deployed: null };
 const key = (company, mod) => `${company}/${mod}`;
 
 function versionDir(company, mod, version) {
@@ -321,6 +323,7 @@ async function deployVersion(company, mod, version) {
   await q("UPDATE platform.modules SET live_version=$3, staged_version=NULL WHERE company=$1 AND name=$2", [company, mod, version]);
   unmountStaged(company, mod);
   await logEvent("version_deployed", `${company}/${mod}`, { from: row.live_version, to: version, snapshot: snap });
+  if (hooks.deployed) Promise.resolve(hooks.deployed(company, mod, version)).catch((e) => console.error("deploy hook failed:", e.message));
   return { from: row.live_version, to: version };
 }
 
@@ -363,5 +366,5 @@ function attach(app) {
 module.exports = {
   MODULES_DIR, REPO_MODULES_DIR, versionDir, readManifest, pageEntries, screenFor, loadAll, attach,
   createDraftVersion, stageVersion, deployVersion, rollback, versionFiles, persistVersion, importFromRepo,
-  unstage, getModule, libraryModules, mountLiveIfNeeded: mountLive,
+  unstage, getModule, libraryModules, mountLiveIfNeeded: mountLive, hooks,
 };
