@@ -59,7 +59,10 @@ router.get("/api/board", async (req, res) => {
        LEFT JOIN LATERAL (SELECT * FROM platform.proposals WHERE feedback_id=f.id ORDER BY id DESC LIMIT 1) p ON true
       ORDER BY f.recurrence DESC, f.id DESC`)).rows;
   const runs = (await q(
-    `SELECT r.*, p.feedback_id FROM platform.build_runs r
+    `SELECT r.*, p.feedback_id,
+            (SELECT array_agg(feedback_id ORDER BY id) FROM platform.proposals
+              WHERE id = ANY(COALESCE(r.proposal_ids, ARRAY[r.proposal_id]))) AS feedback_ids
+       FROM platform.build_runs r
        JOIN platform.proposals p ON p.id = r.proposal_id
       ORDER BY r.id DESC`)).rows;
   const modules = (await q("SELECT * FROM platform.modules ORDER BY name")).rows;
@@ -101,6 +104,23 @@ router.post("/api/proposals/:id/decide", requireManager, async (req, res) => {
     }
     res.status(400).json({ error: "decision must be approve or decline" });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Batch: approve several reviewed proposals and build them in one run
+router.post("/api/runs/batch", requireManager, async (req, res) => {
+  const ids = ((req.body || {}).proposal_ids || []).map(Number).filter(Boolean);
+  if (!ids.length) return res.status(400).json({ error: "pick at least one proposal" });
+  try {
+    await q("UPDATE platform.proposals SET status='approved' WHERE id = ANY($1::int[]) AND status='draft'", [ids]);
+    const run = await pipeline.startRun(ids);
+    res.json({ ok: true, run });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Cancel a queued or failed run (proposals go back to review)
+router.post("/api/runs/:id/cancel", requireManager, async (req, res) => {
+  try { await pipeline.cancel(Number(req.params.id)); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Functionality lane: manager confirms the restated requirement

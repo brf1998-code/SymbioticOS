@@ -42,6 +42,15 @@
   .detail td { background:var(--fog); font-size:12.5px; }
   .warnline { color:var(--block); font-weight:700; font-size:13px; margin-top:6px; }
   .wrap { overflow-x:auto; }
+  .modal { position:fixed; inset:0; background:rgba(28,36,46,.55); display:none; align-items:center; justify-content:center; padding:16px; z-index:50; }
+  .modal.on { display:flex; }
+  .form { background:#fff; border-radius:12px; padding:20px; width:100%; max-width:440px; }
+  .form h2 { font-size:18px; margin-bottom:4px; }
+  .form .row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-top:1px solid var(--line); font-size:14px; }
+  .form .row:first-of-type { border-top:none; }
+  .form select, .form input[type=number] { font-size:15px; padding:8px; border:1px solid var(--line); border-radius:8px; font-family:inherit; min-width:110px; }
+  .form input[type=checkbox] { width:22px; height:22px; }
+  .form .hint { font-size:12px; color:var(--steel); }
 </style>
 </head>
 <body>
@@ -66,6 +75,24 @@
   </div>
 
   <div class="stations" id="stations"></div>
+
+  <div class="modal" id="setup">
+    <form class="form" id="setupform" onsubmit="return saveSetup(event)">
+      <h2>Demo setup</h2>
+      <div class="hint" style="margin-bottom:8px">Answer these and the line rebuilds to fit the room. Changing them later resets shifts and travelers.</div>
+      <div class="row"><span>How many people are in the demo?</span><select name="people" id="people" onchange="suggest()"></select></div>
+      <div class="row"><span>Stations on the line<br><span class="hint" id="stationhint"></span></span><select name="stations" id="stcount"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></div>
+      <div class="row"><span>Mix of paper colors?<br><span class="hint">Off: everything is white</span></span><input type="checkbox" name="mix_colors"></div>
+      <div class="row"><span>Mix of fold styles?<br><span class="hint">Off: darts only</span></span><input type="checkbox" name="mix_folds"></div>
+      <div class="row"><span>Paper clips?<br><span class="hint">Off: no clip step, no clip inventory</span></span><input type="checkbox" name="use_clips"></div>
+      <div class="row"><span>Limited inventory?<br><span class="hint">On: paper and clips run out, stations request more</span></span><input type="checkbox" name="inventory_limits"></div>
+      <div class="row"><span>Show fold instructions at each station?</span><input type="checkbox" name="show_instructions"></div>
+      <div class="row"><span>Seconds per shift</span><input type="number" name="shift_seconds" min="30" step="10"></div>
+      <div class="row"><span>Travelers released per shift</span><input type="number" name="release_per_shift" min="1"></div>
+      <button class="go" type="submit" style="width:100%">Save and rebuild the line</button>
+      <button class="quiet" type="button" style="width:100%" onclick="document.getElementById('setup').classList.remove('on')">Cancel</button>
+    </form>
+  </div>
 
   <h3>Travelers on the line</h3>
   <div class="wrap"><table>
@@ -107,8 +134,10 @@ async function load() {
   document.getElementById("shiftlabel").textContent = D.shift ? `Shift ${D.shift.number} running · ${D.shift.released} travelers released` : "No shift running";
   document.getElementById("controls").innerHTML = D.shift
     ? `<button class="stop" onclick="post('/api/shift/end')">End shift now</button>`
-    : `<button class="go" onclick="post('/api/shift/start')">Start shift</button><button class="quiet" onclick="settings()">Settings</button><button class="quiet" onclick="if(confirm('Clear all shifts and travelers and restock the line?'))post('/api/reset')">Reset demo</button>`;
-  document.getElementById("settings").textContent = `${D.settings.shift_seconds}s per shift · ${D.settings.release_per_shift} travelers released per shift`;
+    : `<button class="go" onclick="post('/api/shift/start')">Start shift</button><button class="quiet" onclick="openSetup()">Demo setup</button><button class="quiet" onclick="if(confirm('Clear all shifts and travelers and restock the line?'))post('/api/reset')">Reset demo</button>`;
+  const c = D.settings;
+  document.getElementById("settings").textContent = `${c.people} people · ${D.stations.length} station(s) · ${c.shift_seconds}s per shift · ${c.release_per_shift} travelers per shift · ${[c.mix_colors ? "colors" : "white only", c.mix_folds ? "darts and gliders" : "darts only", c.use_clips ? "clips" : "no clips", c.inventory_limits ? "limited inventory" : "unlimited inventory"].join(", ")}`;
+  if (!c.setup_done && !document.getElementById("setup").classList.contains("on") && !window._setupSeen) { window._setupSeen = true; openSetup(); }
   const s = D.shiftStats || {};
   document.getElementById("kpis").innerHTML = [
     [s.completed || 0, "Completed"], [s.scrapped || 0, "Scrapped"], [s.avg_distance ? s.avg_distance : "–", "Avg dist"], [D.travelers.length, "WIP"],
@@ -133,10 +162,34 @@ async function load() {
   }).join("") || `<tr><td colspan="7" class="sub">no shifts yet</td></tr>`;
   tickTimer();
 }
-function settings() {
-  const secs = prompt("Seconds per shift:", D.settings.shift_seconds); if (secs == null) return;
-  const n = prompt("Travelers released per shift:", D.settings.release_per_shift); if (n == null) return;
-  post("/api/settings", { shift_seconds: secs, release_per_shift: n });
+// people -> suggested station count (the rest run the stockroom or watch the board)
+function suggestStations(people) { return people <= 1 ? 1 : people <= 3 ? people : people <= 5 ? people - 1 : 5; }
+function suggest() {
+  const p = Number(document.getElementById("people").value);
+  const n = suggestStations(p);
+  document.getElementById("stcount").value = n;
+  document.getElementById("stationhint").textContent = p > n ? `${n} at stations, ${p - n} on stockroom or watching the board` : "everyone is at a station";
+}
+function openSetup() {
+  const f = document.getElementById("setupform"), c = D.settings;
+  const sel = document.getElementById("people");
+  sel.innerHTML = Array.from({ length: 15 }, (_, i) => `<option value="${i + 1}">${i + 1}</option>`).join("");
+  sel.value = c.people;
+  for (const k of ["mix_colors", "mix_folds", "use_clips", "inventory_limits", "show_instructions"]) f.elements[k].checked = !!c[k];
+  f.elements.shift_seconds.value = c.shift_seconds;
+  f.elements.release_per_shift.value = c.release_per_shift;
+  suggest();
+  if (c.setup_done) document.getElementById("stcount").value = D.stations.length;
+  document.getElementById("setup").classList.add("on");
+}
+function saveSetup(e) {
+  e.preventDefault();
+  const f = document.getElementById("setupform");
+  const body = { people: f.elements.people.value, stations: f.elements.stations.value, shift_seconds: f.elements.shift_seconds.value, release_per_shift: f.elements.release_per_shift.value };
+  for (const k of ["mix_colors", "mix_folds", "use_clips", "inventory_limits", "show_instructions"]) body[k] = f.elements[k].checked ? 1 : 0;
+  document.getElementById("setup").classList.remove("on");
+  post("/api/setup", body);
+  return false;
 }
 load();
 setInterval(load, 3000);

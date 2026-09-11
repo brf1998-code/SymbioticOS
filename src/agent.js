@@ -84,6 +84,7 @@ async function runAgent({ moduleName, dir, prompt, readOnly = false }) {
   let costUsd = 0;
   let estimate = 0;
   let aborted = false;
+  let stderrTail = "";
   const it = query({
     prompt,
     options: {
@@ -91,11 +92,18 @@ async function runAgent({ moduleName, dir, prompt, readOnly = false }) {
       model: MODEL,
       systemPrompt: principlesPrompt(moduleName),
       allowedTools: tools,
-      permissionMode: "bypassPermissions",
+      // acceptEdits auto-approves file edits inside cwd; the listed tools are
+      // pre-allowed. We deliberately avoid bypassPermissions: the bundled CLI
+      // refuses --dangerously-skip-permissions when running as root, which is
+      // how Railway containers run. IS_SANDBOX=1 covers the same check.
+      permissionMode: "acceptEdits",
       maxTurns: 40,
       abortController: abort,
+      env: { ...process.env, IS_SANDBOX: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
+      stderr: (data) => { stderrTail = (stderrTail + String(data)).slice(-2000); },
     },
   });
+  try {
   for await (const msg of it) {
     if (msg.type === "assistant" && msg.message && Array.isArray(msg.message.content)) {
       for (const block of msg.message.content) {
@@ -112,6 +120,15 @@ async function runAgent({ moduleName, dir, prompt, readOnly = false }) {
       if (msg.subtype && msg.subtype !== "success" && !aborted) {
         throw new Error(`agent run ended: ${msg.subtype}`);
       }
+    }
+  }
+  } catch (e) {
+    if (aborted) { /* fall through to the cap error below */ }
+    else {
+      const detail = stderrTail.trim().split("\n").filter(Boolean).slice(-3).join(" | ");
+      const err = new Error(`build agent failed: ${e.message}${detail ? ` (${detail})` : ""}`);
+      err.costUsd = costUsd || estimate;
+      throw err;
     }
   }
   if (aborted) {

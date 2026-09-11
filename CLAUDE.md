@@ -1,4 +1,4 @@
-# Symbiotic OS — Workspace Guide (current as of 2026-09-10)
+# Symbiotic OS — Workspace Guide (current as of 2026-09-11)
 
 **This file is the single source of truth for how this repo and the live
 instance are worked on.** Repo: `brf1998-code/SymbioticOS` (private). Live:
@@ -23,7 +23,12 @@ is the facilitator script.
    on a module page → manager clicks Review with AI → proposal → approve →
    agent builds a new module version into staging → manager deploys. This is
    what participants exercise. It only touches module files stored in the
-   database (`platform.module_versions.files`).
+   database (`platform.module_versions.files`). Several proposals can be
+   batched into one run (`POST /api/runs/batch`); one run is active per module
+   and the rest queue (`build_runs.status = queued`, kicked by `kickQueue`).
+   The agent runs with `permissionMode: acceptEdits` and `IS_SANDBOX=1`
+   because Railway containers run as root and Claude Code refuses
+   `--dangerously-skip-permissions` as root.
 2. **Cowork revisions (free).** Brendan asks Claude here; Claude edits the repo
    and pushes; Railway redeploys. This is for platform changes (anything under
    `src/`, `public/`, `server.js`, `principles/`) and for deliberate module
@@ -58,26 +63,30 @@ is the facilitator script.
 
 ## Deploying
 
-The Cowork sandbox has no npm registry access and cannot run git against the
-mounted folder. Procedure:
+The Cowork sandbox cannot push to this repo (its git proxy only injects
+credentials for repos attached to the session, and the SymbioticOS repo is
+not), and the Mac-side Cowork VM has no network. So the push is one command
+in Brendan's Terminal:
 
-1. Brendan drops a fine-grained PAT (Contents: read/write on SymbioticOS) in
-   `pat.md` at the Symbiotic Operating System folder root as `SymbioticOS: …`.
-   Gitignored. Extract with grep; **never print the token**.
-2. In the sandbox: `git clone https://<token>@github.com/brf1998-code/SymbioticOS.git /tmp/sos-remote`,
-   copy changed files over, inspect `git status` / `git diff --stat` for
-   accidental deletions, commit, push to `main`. Railway auto-deploys.
-3. Mirror the same files into the mounted folder `sos/` with
-   `device_commit_files` so Brendan's local copy matches (the folder is not a
-   git checkout; the repo is canonical).
-4. Watch the deploy: Railway MCP `list-deployments` / `get-logs`. Boot log
-   shows `[registry] ...` lines for module imports.
+1. Claude edits files in the mounted folder `sos/` (device_bash / commit_files)
+   and says what changed.
+2. Brendan runs, in Terminal:
+   `cd ~/Documents/Claude/Projects/Symbiotic\ Operating\ System/sos && ./scripts/push.sh "what changed"`
+   The script reads the PAT from `../pat.md` (gitignored, bare token or
+   `SymbioticOS: <token>`), initializes git on first run, refuses to commit
+   `pat.md`/`node_modules`, pushes `main`. Railway auto-deploys.
+3. Claude watches the deploy with the Railway MCP (`list-deployments`,
+   `get-logs`). Boot log shows `[registry] ...` lines for module imports.
+
+If a future session does have the repo attached as a source, pushing from the
+sandbox works the same way (`git push` from a clone) and the Terminal step
+goes away.
 
 `node_modules` exists in the mounted folder from an earlier local install; the
 sandbox can reuse it (tar without `@anthropic-ai/claude-agent-sdk`, stage,
 untar) to run the app locally against the sandbox's Postgres 16
 (`pg_ctlcluster 16 main start`, user/db `sos`/`sos`). `SOS_FAKE_AGENT=1` runs
-the whole loop with zero API spend.
+the whole loop with zero API spend. The sandbox has no npm registry access.
 
 ## Live instance env vars (Railway service `SymbioticOS`)
 

@@ -92,14 +92,16 @@ CREATE TABLE IF NOT EXISTS platform.build_runs (
   to_version    INTEGER,
   lane          TEXT NOT NULL,                     -- 'ui' | 'functionality'
   step          TEXT NOT NULL,                     -- lane-specific step name
-  status        TEXT NOT NULL DEFAULT 'running',   -- running|waiting|failed|succeeded|deployed|rolled_back
+  status        TEXT NOT NULL DEFAULT 'running',   -- queued|running|waiting|failed|deployed|rolled_back
   requirement   TEXT,                              -- agent-restated requirement (functionality lane)
   evidence      JSONB NOT NULL DEFAULT '{}'::jsonb, -- diff summary, test results, cross-check verdict
   log           JSONB NOT NULL DEFAULT '[]'::jsonb,
   cost_usd      NUMERIC(10,4) NOT NULL DEFAULT 0,
+  proposal_ids  INTEGER[],                        -- batch: every proposal built in this run
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE platform.build_runs ADD COLUMN IF NOT EXISTS proposal_ids INTEGER[];
 
 CREATE TABLE IF NOT EXISTS platform.events (
   id         SERIAL PRIMARY KEY,

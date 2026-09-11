@@ -39,6 +39,9 @@
   .outcome { background:#e4f1e9; color:var(--green); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; }
   .fail-note { background:#fdeceb; color:var(--red); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; }
   a.demo { color:var(--teal); font-weight:700; font-size:12.5px; }
+  .batchbar { position:sticky; top:0; z-index:5; background:#fff; border:1px solid var(--line); border-radius:10px; padding:8px 12px; margin-bottom:12px; font-size:13px; }
+  .batchbar button { margin:0 6px 0 0; }
+  label.pick { display:block; font-size:12px; color:var(--steel); margin-top:8px; cursor:pointer; }
   .pulse { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--amber); margin-right:5px; animation:p 1s infinite alternate; }
   @keyframes p { from { opacity:.3 } to { opacity:1 } }
 </style>
@@ -51,6 +54,7 @@
   </header>
   <div class="warn" id="aiwarn" style="display:none"></div>
   <div class="info" id="spend"></div>
+  <div class="batchbar" id="batchbar" style="display:none"></div>
   <div class="cols">
     <div class="col"><h2>Feedback</h2><div id="col-new"></div></div>
     <div class="col"><h2>Reviewing</h2><div id="col-reviewing"></div></div>
@@ -68,7 +72,19 @@ const STEP_LABEL = {
   visual_check: "Visual check", test_run: "Internal tests", await_deploy: "Manager deploy gate",
 };
 let DATA = null;
+const SEL = new Set();
 const MGR = () => DATA && DATA.role === "manager";
+function toggleSel(pid, on) { if (on) SEL.add(pid); else SEL.delete(pid); renderBatchBar(); }
+function renderBatchBar() {
+  const bar = document.getElementById("batchbar");
+  if (!SEL.size) { bar.style.display = "none"; return; }
+  bar.style.display = "block";
+  bar.innerHTML = `<b>${SEL.size}</b> proposal(s) selected · <button class="go" onclick="buildBatch()">Build together as one change</button><button class="quiet" onclick="SEL.clear();renderBatchBar();load()">Clear</button>`;
+}
+async function buildBatch() {
+  const ids = [...SEL]; SEL.clear(); renderBatchBar();
+  await act("/api/runs/batch", { proposal_ids: ids });
+}
 
 async function act(url, body) {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
@@ -92,7 +108,7 @@ function stepsHtml(run) {
 }
 
 function card(fb) {
-  const run = DATA.runs.find(r => r.feedback_id === fb.id);
+  const run = DATA.runs.find(r => (r.feedback_ids || [r.feedback_id]).includes(fb.id) && r.status !== "cancelled");
   const isPlatform = !fb.module || fb.module === "platform";
   let html = `<div class="card">`;
   html += `<div class="msg">${esc(fb.message)}</div>`;
@@ -119,6 +135,7 @@ function card(fb) {
     html += `<div class="prop"><span class="chip ${fb.proposal_class}">${fb.proposal_class === "ui" ? "UI CHANGE" : "FUNCTIONALITY"}</span><br>${esc(fb.proposal_body)}</div>`;
     if (fb.proposal_rationale) html += `<div class="meta">${esc(fb.proposal_rationale)}</div>`;
     if (MGR()) {
+      html += `<label class="pick"><input type="checkbox" ${SEL.has(fb.proposal_id) ? "checked" : ""} onchange="toggleSel(${fb.proposal_id}, this.checked)"> add to batch</label>`;
       html += `<button class="go" onclick="act('/api/proposals/${fb.proposal_id}/decide',{decision:'approve'})">Approve build</button>`;
       html += `<button class="quiet" onclick="adjust(${fb.proposal_id})">Adjust</button>`;
       html += `<button class="no" onclick="decline(${fb.proposal_id})">Decline</button>`;
@@ -128,7 +145,13 @@ function card(fb) {
   }
 
   if (fb.status === "in_progress" && run) {
-    html += `<div class="meta" style="margin-top:6px"><span class="chip ${run.lane}">${run.lane === "ui" ? "UI LANE" : "FUNCTIONALITY LANE"}</span> run #${run.id} · v${run.from_version}${run.to_version ? " → v" + run.to_version : ""} · $${Number(run.cost_usd).toFixed(2)}</div>`;
+    const others = (run.feedback_ids || []).filter(i => i !== fb.id);
+    html += `<div class="meta" style="margin-top:6px"><span class="chip ${run.lane}">${run.lane === "ui" ? "UI LANE" : "FUNCTIONALITY LANE"}</span> run #${run.id} · v${run.from_version}${run.to_version ? " → v" + run.to_version : ""} · $${Number(run.cost_usd).toFixed(2)}${others.length ? ` · <span class="chip rec">batch with #${others.join(", #")}</span>` : ""}</div>`;
+    if (run.status === "queued") {
+      html += `<div class="meta"><span class="pulse"></span>Queued: waiting for the current build on ${esc(run.module)} to finish.</div>`;
+      if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;
+      return html + "</div>";
+    }
     html += stepsHtml(run);
     if (run.step === "confirm_requirement" && run.status === "waiting") {
       html += `<div class="req">${esc(run.requirement)}</div>`;
@@ -145,7 +168,7 @@ function card(fb) {
     if (run.status === "failed") {
       const last = (run.log || []).slice(-1)[0];
       html += `<div class="fail-note">Stopped: ${esc(last ? last.note : "see log")}</div>`;
-      if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/retry')">Retry</button>`;
+      if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/retry')">Retry</button><button class="no" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;
     }
   }
 
@@ -192,6 +215,9 @@ async function load() {
     if (!fb.module || fb.module === "platform") { buckets.platform.push(fb); continue; }
     (buckets[fb.status === "declined" ? "done" : fb.status] || buckets.new).push(fb);
   }
+  const reviewing = new Set(buckets.reviewing.map(f => f.proposal_id));
+  for (const id of [...SEL]) if (!reviewing.has(id)) SEL.delete(id);
+  renderBatchBar();
   for (const k of ["new", "reviewing", "in_progress", "done", "platform"]) {
     document.getElementById("col-" + k).innerHTML = buckets[k].map(card).join("") || '<div class="meta">empty</div>';
   }

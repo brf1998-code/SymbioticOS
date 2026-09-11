@@ -2,10 +2,20 @@
 
 What this module is and how changes to it should be shaped.
 
-**Purpose.** A five-station production line that makes paper airplanes. Each
-airplane is a job traveler that moves station to station. Work happens in
-shifts of a fixed length (default 2 minutes). The line runs for real with
-people at the stations; this module is what they look at.
+**Purpose.** A production line of one to five stations that makes paper
+airplanes. Each airplane is a job traveler that moves station to station. Work
+happens in shifts of a fixed length (default 2 minutes). The line runs for real
+with people at the stations; this module is what they look at.
+
+**Demo setup.** The manager answers a few questions on the line board (people,
+station count, color mix, fold mix, clips, limited inventory, instructions,
+shift length, travelers per shift). The answers live in `settings` and the
+`stations` table is rebuilt from a fixed layout per station count (5 down to
+1, folds merged as the count drops). `GET /api/state` returns them as
+`settings`; `GET /api/station/:seq` returns them as `setup`. Pages must keep
+honoring these flags (no instruction text when `show_instructions` is 0, no
+material requests when `inventory_limits` is 0, no clip step when `use_clips`
+is 0).
 
 **Roles and pages.**
 - `/` line board: the manager starts and ends shifts, sees the timer, WIP by
@@ -28,7 +38,8 @@ release_per_shift).
 **Rules of the line.**
 - Station 1 consumes one sheet of the traveler's color from line inventory.
   The last station consumes one clip when clip_pos is not none. A missing item
-  blocks the step with a plain message and logs a stockout.
+  blocks the step with a plain message and logs a stockout. With
+  `inventory_limits` off nothing is consumed or blocked.
 - Steps only complete while a shift is running. WIP carries over between shifts.
 - Shift results are computed when the clock runs out (lazily, on the next request).
 

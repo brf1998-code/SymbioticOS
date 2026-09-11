@@ -78,7 +78,7 @@ async function load() {
     html += `<div class="card">
       <div class="job">${esc(t.job_num)}</div>
       <div class="spec"><span class="sw ${t.color}"></span>${t.color} <span class="code">${code}</span></div>
-      <div class="instr">${esc(instr)}</div>
+      ${D.setup.show_instructions ? `<div class="instr">${esc(instr)}</div>` : ""}
       <div class="err" id="err"></div>`;
     if (D.isLast) {
       html += `<input id="dist" type="number" inputmode="decimal" placeholder="Distance">
@@ -90,14 +90,14 @@ async function load() {
     html += `</div>`;
   }
   html += `<div class="queue">${D.queue.length} waiting at this station${D.queue.length > 1 ? ": " + D.queue.map(x => esc(x.job_num)).join(", ") : ""}</div>`;
-  html += `<div class="req"><button class="quiet" onclick="document.getElementById('reqform').style.display='block'">Request material</button>
+  if (D.setup.inventory_limits) html += `<div class="req"><button class="quiet" onclick="document.getElementById('reqform').style.display='block'">Request material</button>
     <div id="reqform" style="display:none">
       <select id="item"><option value="paper_white">White paper</option><option value="paper_blue">Blue paper</option><option value="paper_yellow">Yellow paper</option><option value="clip">Paper clips</option></select>
       <button class="quiet" onclick="request(${st.id})">Send request</button>
     </div>
     <div class="inv">At the line: ${D.line.map(i => `${i.item.replace("paper_", "")} ${i.qty}`).join(" · ")}${D.requests.length ? ` · ${D.requests.length} request(s) open` : ""}</div>
-  </div>
-  <div class="sub" style="margin-top:14px"><a href="${base}/station">Other stations</a> · <a href="${base}/">Line board</a></div>`;
+  </div>`;
+  html += `<div class="sub" style="margin-top:14px"><a href="${base}/station">Other stations</a> · <a href="${base}/">Line board</a></div>`;
   document.getElementById("app").innerHTML = html;
   tickTimer();
 }

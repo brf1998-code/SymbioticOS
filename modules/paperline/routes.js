@@ -25,6 +25,36 @@ module.exports = function makeRouter(ctx) {
     clip: { nose: 4, none: 4, middle: 2 },
   };
 
+  // Station layouts by station count. Fewer people, fewer stations, same plane.
+  const KIT = "Take one sheet of the color on the traveler. Fold it in half the long way, crease hard, then unfold it.";
+  const NOSE = "Fold the two top corners in to the center crease so the top comes to a point.";
+  const BODY_D = "Fold the two new slanted edges in to the center crease again. You get a long narrow point.";
+  const BODY_G = "Fold the pointed top down toward you so the tip lands about 2 inches above the bottom edge. Crease it flat.";
+  const WINGS_D = "Fold the plane in half along the center crease with the point on the outside. Fold each wing down so its edge lines up with the bottom edge.";
+  const WINGS_G = "Fold the plane in half along the center crease. Fold each wing down leaving about half an inch of body below the wing. Wide wings.";
+  const TEST = "Put the paper clip where the traveler says. Throw it once from the line. Enter the distance and pass or scrap it.";
+  const STATION_SETS = {
+    5: [["Kit and Crease", KIT, KIT], ["Nose Folds", NOSE, NOSE], ["Body Fold", BODY_D, BODY_G], ["Wings", WINGS_D, WINGS_G], ["Clip and Test", TEST, TEST]],
+    4: [["Kit and Crease", KIT, KIT], ["Nose and Body Folds", `${NOSE} Then: ${BODY_D}`, `${NOSE} Then: ${BODY_G}`], ["Wings", WINGS_D, WINGS_G], ["Clip and Test", TEST, TEST]],
+    3: [["Kit and Nose Folds", `${KIT} Then: ${NOSE}`, `${KIT} Then: ${NOSE}`], ["Body and Wings", `${BODY_D} Then: ${WINGS_D}`, `${BODY_G} Then: ${WINGS_G}`], ["Clip and Test", TEST, TEST]],
+    2: [["Fold", `${KIT} ${NOSE} ${BODY_D} ${WINGS_D}`, `${KIT} ${NOSE} ${BODY_G} ${WINGS_G}`], ["Clip and Test", TEST, TEST]],
+    1: [["Build and Test", `${KIT} ${NOSE} ${BODY_D} ${WINGS_D} ${TEST}`, `${KIT} ${NOSE} ${BODY_G} ${WINGS_G} ${TEST}`]],
+  };
+  const SETUP_DEFAULTS = {
+    people: 6, stations: 5, mix_colors: 1, mix_folds: 1, use_clips: 1,
+    inventory_limits: 1, show_instructions: 1, shift_seconds: 120, release_per_shift: 10, setup_done: 0,
+  };
+  async function setup() {
+    const rows = (await db("SELECT key, value FROM settings")).rows;
+    const out = { ...SETUP_DEFAULTS };
+    for (const r of rows) if (r.key in out) out[r.key] = Number(r.value);
+    return out;
+  }
+  async function saveSetting(key, value) {
+    const r = await db("UPDATE settings SET value=$2 WHERE key=$1", [key, String(value)]);
+    if (!r.rowCount) await db("INSERT INTO settings (key, value) VALUES ($1,$2)", [key, String(value)]);
+  }
+
   async function setting(key, def) {
     const r = (await db("SELECT value FROM settings WHERE key=$1", [key])).rows[0];
     return r ? r.value : def;
@@ -83,8 +113,33 @@ module.exports = function makeRouter(ctx) {
     res.json({
       now: new Date().toISOString(),
       shift, shiftStats, stations: sts, travelers, history, openRequests, line,
-      settings: { shift_seconds: Number(await setting("shift_seconds", 120)), release_per_shift: Number(await setting("release_per_shift", 10)) },
+      settings: await setup(),
     });
+  });
+
+  // ---- demo setup: a few questions, then the line is rebuilt to fit the room
+  router.post("/api/setup", requireManager, async (req, res) => {
+    const b = req.body || {};
+    const cfg = { ...(await setup()) };
+    for (const k of Object.keys(SETUP_DEFAULTS)) if (b[k] !== undefined && b[k] !== "") cfg[k] = Number(b[k]) ? Number(b[k]) : 0;
+    cfg.stations = Math.min(5, Math.max(1, cfg.stations || 5));
+    cfg.shift_seconds = Math.max(30, cfg.shift_seconds || 120);
+    cfg.release_per_shift = Math.max(1, cfg.release_per_shift || 10);
+    cfg.setup_done = 1;
+    if (await currentShift()) return res.status(409).json({ error: "end the running shift first" });
+    for (const [k, v] of Object.entries(cfg)) await saveSetting(k, v);
+    // rebuild the line for the chosen station count and start clean
+    await db("DELETE FROM traveler_log");
+    await db("DELETE FROM travelers");
+    await db("DELETE FROM material_requests");
+    await db("DELETE FROM shifts");
+    await db("DELETE FROM stations");
+    const set = STATION_SETS[cfg.stations];
+    for (let i = 0; i < set.length; i++) {
+      await db("INSERT INTO stations (seq, name, instruction_dart, instruction_glider) VALUES ($1,$2,$3,$4)", [i + 1, set[i][0], set[i][1], set[i][2]]);
+    }
+    await restock();
+    res.json({ ok: true, settings: cfg });
   });
 
   router.post("/api/settings", requireManager, async (req, res) => {
@@ -105,13 +160,14 @@ module.exports = function makeRouter(ctx) {
       "INSERT INTO shifts (number, ends_at, released) VALUES ($1, now() + ($2 || ' seconds')::interval, $3) RETURNING *",
       [number, String(seconds), n])).rows[0];
     const first = (await stations())[0];
+    const cfg = await setup();
     // release the whole shift's demand at once onto station 1
     for (let i = 1; i <= n; i++) {
       const job = `S${number}-${String(i).padStart(2, "0")}`;
       const t = (await db(
         `INSERT INTO travelers (job_num, shift_id, color, fold_type, clip_pos, station_id, state, arrived_at)
          VALUES ($1,$2,$3,$4,$5,$6,'at_station',now()) RETURNING id`,
-        [job, shift.id, pick(MIX.color), pick(MIX.fold), pick(MIX.clip), first.id])).rows[0];
+        [job, shift.id, cfg.mix_colors ? pick(MIX.color) : "white", cfg.mix_folds ? pick(MIX.fold) : "dart", cfg.use_clips ? pick(MIX.clip) : "none", first.id])).rows[0];
       await db("INSERT INTO traveler_log (traveler_id, station_id, shift_id, event) VALUES ($1,$2,$3,'arrived')", [t.id, first.id, shift.id]);
     }
     res.json({ ok: true, shift });
@@ -136,7 +192,13 @@ module.exports = function makeRouter(ctx) {
     const requests = (await db(
       "SELECT * FROM material_requests WHERE station_id=$1 AND status='open' ORDER BY id", [st.id])).rows;
     const count = (await db("SELECT count(*)::int AS n FROM stations")).rows[0].n;
-    res.json({ now: new Date().toISOString(), station: st, isLast: st.seq === count, shift, queue, line, requests });
+    const cfg = await setup();
+    if (!cfg.use_clips) {
+      st.instruction_dart = st.instruction_dart.replace("Put the paper clip where the traveler says. ", "");
+      st.instruction_glider = st.instruction_glider.replace("Put the paper clip where the traveler says. ", "");
+      if (st.name === "Clip and Test") st.name = "Test";
+    }
+    res.json({ now: new Date().toISOString(), station: st, isLast: st.seq === count, shift, queue, line, requests, setup: cfg });
   });
 
   router.post("/api/stations/:id/status", async (req, res) => {
@@ -161,7 +223,9 @@ module.exports = function makeRouter(ctx) {
     const here = sts[idx];
     const operator = String((req.body || {}).operator || "").slice(0, 60) || null;
 
+    const cfg = await setup();
     async function consume(item, label) {
+      if (!cfg.inventory_limits) return null;
       const inv = (await db("SELECT * FROM inventory WHERE item=$1 AND location='line'", [item])).rows[0];
       if (!inv || inv.qty <= 0) {
         await db("INSERT INTO traveler_log (traveler_id, station_id, shift_id, event, operator) VALUES ($1,$2,$3,'stockout',$4)", [t.id, here.id, shift.id, operator]);
@@ -242,10 +306,14 @@ module.exports = function makeRouter(ctx) {
     await db("DELETE FROM travelers");
     await db("DELETE FROM material_requests");
     await db("DELETE FROM shifts");
-    await db("UPDATE inventory SET qty = CASE item WHEN 'paper_white' THEN 4 WHEN 'paper_blue' THEN 1 WHEN 'paper_yellow' THEN 2 ELSE 3 END WHERE location='line'");
-    await db("UPDATE inventory SET qty = CASE item WHEN 'paper_white' THEN 60 WHEN 'clip' THEN 50 ELSE 40 END WHERE location='stock'");
+    await restock();
     res.json({ ok: true });
   });
+
+  async function restock() {
+    await db("UPDATE inventory SET qty = CASE item WHEN 'paper_white' THEN 4 WHEN 'paper_blue' THEN 1 WHEN 'paper_yellow' THEN 2 ELSE 3 END WHERE location='line'");
+    await db("UPDATE inventory SET qty = CASE item WHEN 'paper_white' THEN 60 WHEN 'clip' THEN 50 ELSE 40 END WHERE location='stock'");
+  }
 
   return router;
 };

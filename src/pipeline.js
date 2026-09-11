@@ -38,28 +38,65 @@ async function getRun(runId) {
   return (await q("SELECT * FROM platform.build_runs WHERE id=$1", [runId])).rows[0];
 }
 
-// ---- entry point: start a run from an approved proposal --------------------
-async function startRun(proposalId) {
-  const p = (await q("SELECT * FROM platform.proposals WHERE id=$1", [proposalId])).rows[0];
-  if (!p || p.status !== "approved") throw new Error("proposal not approved");
-  const fb = (await q("SELECT * FROM platform.feedback WHERE id=$1", [p.feedback_id])).rows[0];
-  const mod = fb.module;
+// ---- entry point: start a run from one or more approved proposals ----------
+// A batch = several approved proposals for the same module built together in
+// ONE agent run, one staged demo, one deploy. Only one run is active per
+// module at a time; further runs queue and start when the active one ends.
+async function loadProposals(ids) {
+  const rows = (await q("SELECT p.*, f.module, f.message, f.page, f.name FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id WHERE p.id = ANY($1::int[]) ORDER BY p.id", [ids])).rows;
+  if (rows.length !== ids.length) throw new Error("one or more proposals not found");
+  return rows;
+}
+
+async function activeRun(mod) {
+  return (await q(
+    "SELECT * FROM platform.build_runs WHERE module=$1 AND status IN ('running','waiting') ORDER BY id LIMIT 1", [mod])).rows[0];
+}
+
+async function startRun(proposalIds) {
+  const ids = (Array.isArray(proposalIds) ? proposalIds : [proposalIds]).map(Number);
+  const ps = await loadProposals(ids);
+  for (const p of ps) if (p.status !== "approved") throw new Error(`proposal #${p.id} is not approved`);
+  const mod = ps[0].module;
+  if (ps.some((p) => p.module !== mod)) throw new Error("a batch must be for one module");
   const modRow = (await q("SELECT * FROM platform.modules WHERE name=$1", [mod])).rows[0];
   if (!modRow) throw new Error(`feedback has no valid module (${mod})`);
   await assertUnderCap();
 
-  const lane = p.class === "ui" ? "ui" : "functionality";
+  const lane = ps.every((p) => p.class === "ui") ? "ui" : "functionality";
   const step = lane === "ui" ? "build" : "confirm_requirement";
+  const busy = await activeRun(mod);
   const r = await q(
-    `INSERT INTO platform.build_runs (proposal_id, module, from_version, lane, step, status)
-     VALUES ($1,$2,$3,$4,$5,'running') RETURNING *`,
-    [proposalId, mod, modRow.live_version, lane, step]);
+    `INSERT INTO platform.build_runs (proposal_id, proposal_ids, module, from_version, lane, step, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+    [ids[0], ids, mod, modRow.live_version, lane, step, busy ? "queued" : "running"]);
   const run = r.rows[0];
-  await q("UPDATE platform.feedback SET status='in_progress', updated_at=now() WHERE id=$1", [fb.id]);
-  await logEvent("run_started", run.id, { lane, module: mod });
-
+  await q("UPDATE platform.feedback SET status='in_progress', updated_at=now() WHERE id = ANY($1::int[])", [ps.map((p) => p.feedback_id)]);
+  await logEvent("run_started", run.id, { lane, module: mod, batch: ids, queued: Boolean(busy) });
+  if (busy) {
+    await log(run.id, { step, note: `queued behind run #${busy.id}` });
+    return run;
+  }
   advance(run.id).catch((e) => failRun(run.id, e));
   return run;
+}
+
+// Start the oldest queued run for a module once the active one has ended.
+async function kickQueue(mod) {
+  if (await activeRun(mod)) return;
+  const next = (await q(
+    "SELECT * FROM platform.build_runs WHERE module=$1 AND status='queued' ORDER BY id LIMIT 1", [mod])).rows[0];
+  if (!next) return;
+  const modRow = (await q("SELECT * FROM platform.modules WHERE name=$1", [mod])).rows[0];
+  await setRun(next.id, { status: "running", from_version: modRow.live_version });
+  await log(next.id, { step: next.step, note: "started from the queue" });
+  advance(next.id).catch((e) => failRun(next.id, e));
+}
+
+// Text block describing every proposal in the run, for prompts.
+async function proposalsText(run) {
+  const ps = await loadProposals(run.proposal_ids || [run.proposal_id]);
+  return ps.map((p, i) => `${ps.length > 1 ? `Change ${i + 1} of ${ps.length}` : "Approved proposal"} (${p.class}):\n${p.body}\nOriginal floor feedback: "${p.message}" (from page ${p.page || "unknown"}, by ${p.name || "anonymous"})`).join("\n\n");
 }
 
 async function failRun(runId, err) {
@@ -67,13 +104,16 @@ async function failRun(runId, err) {
   if (err && typeof err.costUsd === "number") await addCost(runId, err.costUsd);
   await log(runId, { step: "error", note: String(err.message || err) });
   await setRun(runId, { status: "failed" });
+  const run = await getRun(runId);
+  if (run) kickQueue(run.module).catch((e) => console.error("queue kick failed:", e));
 }
 
 // ---- the state machine -----------------------------------------------------
 async function advance(runId) {
   const run = await getRun(runId);
   const p = (await q("SELECT * FROM platform.proposals WHERE id=$1", [run.proposal_id])).rows[0];
-  const fb = (await q("SELECT * FROM platform.feedback WHERE id=$1", [p.feedback_id])).rows[0];
+  const batch = await proposalsText(run);
+  const isBatch = (run.proposal_ids || []).length > 1;
 
   try {
     if (run.step === "confirm_requirement") {
@@ -84,13 +124,13 @@ async function advance(runId) {
       if (haveKey()) {
         const out = await runStructured({
           system: "Restate a change requirement for a factory software module in plain language. The reader is a production manager. List concretely what will change and what will NOT change. No code talk.",
-          prompt: `Approved proposal:\n${p.body}\n\nOriginal floor feedback: "${fb.message}"\n\nRestate the requirement as: (1) what changes, (2) what stays the same, (3) how we will know it works.`,
+          prompt: `${batch}\n\nRestate the requirement${isBatch ? " for the whole batch, change by change," : ""} as: (1) what changes, (2) what stays the same, (3) how we will know it works.`,
           schema: { type: "object", properties: { requirement: { type: "string" } }, required: ["requirement"] },
           toolName: "requirement",
         });
         requirement = out.data.requirement; cost = out.costUsd;
       } else {
-        requirement = `[AI not configured] Requirement to confirm manually: ${p.body}`;
+        requirement = `[AI not configured] Requirement to confirm manually:\n${batch}`;
       }
       await addCost(runId, cost);
       await setRun(runId, { requirement, status: "waiting" });
@@ -108,19 +148,16 @@ async function advance(runId) {
         moduleName: run.module,
         dir: draft.dir,
         prompt:
-`You are implementing an approved change to the "${run.module}" module of a factory operating system. Work only inside this directory; it is a full copy of the live module version and will become the next version.
+`You are implementing ${isBatch ? "a batch of approved changes" : "an approved change"} to the "${run.module}" module of a factory operating system. Work only inside this directory; it is a full copy of the live module version and will become the next version.
 
-Approved proposal:
-${p.body}
+${batch}
 ${req}
-
-Original floor feedback that started this: "${fb.message}" (reported from page ${fb.page || "unknown"})
 
 Rules:
 - ${run.lane === "ui" ? "This is a UI-class change. Do NOT modify routes.js logic, module.json smoke list, or migrations. Touch pages/ and presentation only." : "This is a functionality-class change. If the data model must change, add a NEW migrations/NNN.sql file (additive only: CREATE TABLE / ALTER TABLE ADD COLUMN / CREATE INDEX / INSERT seed rows; bare table names, no schema prefixes). Never edit an existing migration file."}
-- Keep the module's existing style and structure. Plain HTML/JS, no frameworks.
+${isBatch ? "- Implement every change in the batch. Keep them independent where you can so one can be understood without the others.\n" : ""}- Keep the module's existing style and structure. Plain HTML/JS, no frameworks.
 - Make the smallest change that removes the reported friction.
-- When done, summarize in 3 short bullets what changed, in plain language for a production manager.`,
+- When done, summarize what changed in short bullets (one per change), in plain language for a production manager.`,
       });
       await addCost(runId, costUsd);
       await setRun(runId, { evidence: { ...run.evidence, build_summary: text } });
@@ -227,10 +264,14 @@ async function deploy(runId) {
   const result = await registry.deployVersion(run.module, run.to_version);
   await setRun(runId, { status: "deployed" });
   await log(runId, { step: "deploy", note: `v${result.from} -> v${result.to} live` });
-  const p = (await q("SELECT * FROM platform.proposals WHERE id=$1", [run.proposal_id])).rows[0];
-  await q(
-    "UPDATE platform.feedback SET status='done', outcome=$2, updated_at=now() WHERE id=$1",
-    [p.feedback_id, `Deployed v${result.to}: ${((run.evidence || {}).build_summary || p.body).slice(0, 500)}`]);
+  const ps = await loadProposals(run.proposal_ids || [run.proposal_id]);
+  const summary = ((run.evidence || {}).build_summary || "").slice(0, 600);
+  for (const p of ps) {
+    await q(
+      "UPDATE platform.feedback SET status='done', outcome=$2, updated_at=now() WHERE id=$1",
+      [p.feedback_id, `Deployed v${result.to}${ps.length > 1 ? ` (batch of ${ps.length})` : ""}: ${summary || p.body.slice(0, 500)}`]);
+  }
+  kickQueue(run.module).catch((e) => console.error("queue kick failed:", e));
   return result;
 }
 
@@ -239,9 +280,10 @@ async function rollbackRun(runId) {
   const result = await registry.rollback(run.module);
   await setRun(runId, { status: "rolled_back" });
   await log(runId, { step: "rollback", note: `restored v${result.to}` });
-  const p = (await q("SELECT * FROM platform.proposals WHERE id=$1", [run.proposal_id])).rows[0];
-  await q("UPDATE platform.feedback SET outcome=$2, updated_at=now() WHERE id=$1",
-    [p.feedback_id, `Rolled back to v${result.to}.`]);
+  const ps = await loadProposals(run.proposal_ids || [run.proposal_id]);
+  for (const p of ps) {
+    await q("UPDATE platform.feedback SET outcome=$2, updated_at=now() WHERE id=$1", [p.feedback_id, `Rolled back to v${result.to}.`]);
+  }
   return result;
 }
 
@@ -250,9 +292,22 @@ async function retry(runId) {
   const run = await getRun(runId);
   if (run.status !== "failed") throw new Error("only failed runs can be retried");
   const step = run.lane === "ui" || run.requirement ? "build" : "confirm_requirement";
-  await setRun(runId, { step, status: "running" });
-  await log(runId, { step, note: "manager retried the run" });
-  advance(runId).catch((e) => failRun(runId, e));
+  const busy = await activeRun(run.module);
+  const modRow = (await q("SELECT * FROM platform.modules WHERE name=$1", [run.module])).rows[0];
+  await setRun(runId, { step, status: busy ? "queued" : "running", from_version: modRow.live_version });
+  await log(runId, { step, note: busy ? `manager retried; queued behind run #${busy.id}` : "manager retried the run" });
+  if (!busy) advance(runId).catch((e) => failRun(runId, e));
 }
 
-module.exports = { startRun, confirmRequirement, deploy, rollbackRun, retry, getRun, smokeCheck };
+// Cancel a queued or failed run: proposals go back to reviewing.
+async function cancel(runId) {
+  const run = await getRun(runId);
+  if (!["queued", "failed"].includes(run.status)) throw new Error("only queued or failed runs can be cancelled");
+  await setRun(runId, { status: "cancelled" });
+  const ps = await loadProposals(run.proposal_ids || [run.proposal_id]);
+  await q("UPDATE platform.proposals SET status='draft' WHERE id = ANY($1::int[])", [ps.map((p) => p.id)]);
+  await q("UPDATE platform.feedback SET status='reviewing', updated_at=now() WHERE id = ANY($1::int[])", [ps.map((p) => p.feedback_id)]);
+  await log(runId, { step: run.step, note: "cancelled by manager; proposals back to review" });
+}
+
+module.exports = { startRun, confirmRequirement, deploy, rollbackRun, retry, cancel, getRun, smokeCheck, kickQueue };

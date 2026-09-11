@@ -22,13 +22,21 @@ site on a laptop with the manager password and keep two tabs: the line board
 (`/m/paperline/`) on a projector if you have one, and the improvement board
 (`/`).
 
-Headcount: 5 stations plus 1 stockroom plus you is the ideal 7. With fewer
-people, one person covers two adjacent stations by switching pages. With more,
-double up the slow stations (Body Fold and Wings usually) and let the extras
-watch the line board and call out what they see.
+Headcount: 5 stations plus 1 stockroom plus you is the full setup. Fewer
+people means fewer stations (set it in Demo setup, the folds merge). With
+more, double up the slow stations and let the extras watch the line board and
+call out what they see.
 
-Before the room arrives, on the line board click **Reset demo** so shift
-history and inventory are clean.
+Before the room arrives, on the line board click **Demo setup**. It asks how
+many people are in the room, how many stations (it suggests a number: everyone
+minus one for the stockroom, up to 5), whether to mix paper colors, mix fold
+styles, use paper clips, limit inventory, and show fold instructions, plus
+shift length and travelers per shift. Saving rebuilds the line for that
+station count and clears any old shifts. With 3 stations the folds are merged
+(Kit and Nose Folds, Body and Wings, Clip and Test); with 2 it is Fold then
+Clip and Test; with 1 it is one Build and Test station. Turning inventory
+limits off removes stockouts and material requests entirely, which is the
+right call for a first pass at developing the board itself.
 
 ## Stations
 
@@ -76,13 +84,18 @@ On the improvement board (manager tab):
 1. Each item appears under Feedback with the station page it came from.
    If two people report the same thing, use **+1 seen again** instead of a
    second card. Recurrence is the priority signal.
-2. Pick one or two. Click **Review with AI**. Read the proposal out loud and
-   point at the UI or FUNCTIONALITY tag: a UI change goes straight to build; a
-   functionality change makes the AI restate the requirement first and you
-   confirm it before anything is built.
-3. **Approve build.** Narrate the steps as they light up: agent build, visual
-   check or cross-check review, internal tests, then the manager deploy gate.
-   A UI change takes roughly one to two minutes; a functionality change a bit
+2. Click **Review with AI** on the ones worth doing. Read each proposal out
+   loud and point at the UI or FUNCTIONALITY tag: a UI change goes straight to
+   build; a functionality change makes the AI restate the requirement first
+   and you confirm it before anything is built.
+3. Build. Either **Approve build** on one card, or tick **add to batch** on
+   several and click **Build together as one change**: one agent run, one
+   staged demo, one deploy. Only one build runs on the line at a time; anything
+   approved while a build is running queues and starts on its own when the
+   first one deploys or fails (a queued card shows "Queued" and a Cancel
+   button). Narrate the steps as they light up: agent build, visual check or
+   cross-check review, internal tests, then the manager deploy gate. A UI
+   change takes roughly one to two minutes; a functionality change a bit
    longer. Run shift 2 while a slow build is in progress if you want to keep
    energy up.
 4. When it reaches the gate, open **View staged demo** on the projector. That
@@ -115,7 +128,9 @@ doing once on purpose so the room sees it is cheap.
 
 ## If something breaks
 
-- A build fails: the card says why in plain language. **Retry** re-runs it.
+- A build fails: the card says why in plain language (the agent's last error
+  lines are included). **Retry** re-runs it; **Cancel** puts the proposals
+  back in Reviewing.
 - Someone got locked out: the floor password is on the whiteboard, not in the app.
 - The line is in a weird state: manager can **End shift now** and, at worst,
   **Reset demo** (wipes shifts and travelers, restocks the line).
