@@ -1,6 +1,7 @@
 {
   "name": "paperline",
   "title": "Paper Airplane Line",
+  "description": "A five-station paper airplane line run in two-minute shifts: job travelers move station to station, stations run out of paper and clips and ask the stockroom, and every screen has the feedback button. Deliberately imperfect so a room feels the improvement loop.",
   "company": "demo",
   "entry": "routes.js",
   "pages": {

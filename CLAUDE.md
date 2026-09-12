@@ -95,6 +95,26 @@ One instance hosts many **companies**. Everything is scoped by company slug:
 - **Run diagnostics**: when the agent process dies, the run log gets a `diag`
   entry (model, message count, whether init was seen, stderr tail, prompt
   sizes) and the error says at what stage it died.
+- **Module library and tours** (`/admin` top card, `registry.libraryModules`,
+  `registry.tourFor`, `GET /api/c/<slug>/modules/<m>/tour`): the repo's
+  `modules/*` listed with description (module.json `description`), screens,
+  migrations, where it is live, and a Start tour link
+  (`/c/<slug>/m/<m>/?tour=1`). The tour engine lives in
+  `public/assets/feedback-widget.js`: steps from the module's `tour.json`
+  (the live version's copy if it has one, else the library copy), state in
+  sessionStorage so it follows across the module's pages, spotlight ring on
+  the target selector, centered card when the target is not on screen.
+  PRINCIPLES.md rule 8 tells agents to keep tour.json current.
+- **Repo imports no longer supersede agent work**: a changed repo module is
+  imported as a new version but deploys automatically only if the live
+  version is itself repo-sourced. Otherwise it is held (`module_import_held`
+  event, "FROM REPO, NOT LIVE" tag in the Versions panel) and the manager
+  can Switch to it. The old "export live first" advice still applies when
+  the intent is to carry agent changes into the repo copy.
+- **Reviews on the board**: only reviews with held items (or running, or
+  failed within the hour) stay above the columns; past ones sit under "Past
+  system reviews" in the Versions panel. "Build by screen" starts one queued
+  run per target file for a review's held items (`buildReviewByScreen`).
 - **Board layout** (`public/index.html`): header band, module strip (Open
   live / Preview vN / Diagrams per module), KPI strip, system review toolbar,
   four columns. Platform feedback (about the tool itself, shipped from Cowork)

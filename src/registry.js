@@ -200,7 +200,26 @@ function libraryModules() {
   if (!fs.existsSync(REPO_MODULES_DIR)) return [];
   return fs.readdirSync(REPO_MODULES_DIR)
     .filter((m) => fs.existsSync(path.join(REPO_MODULES_DIR, m, "module.json")))
-    .map((m) => ({ name: m, ...JSON.parse(fs.readFileSync(path.join(REPO_MODULES_DIR, m, "module.json"), "utf8")) }));
+    .map((m) => {
+      const dir = path.join(REPO_MODULES_DIR, m);
+      const manifest = JSON.parse(fs.readFileSync(path.join(dir, "module.json"), "utf8"));
+      const tourPath = path.join(dir, "tour.json");
+      const tour = fs.existsSync(tourPath) ? JSON.parse(fs.readFileSync(tourPath, "utf8")) : null;
+      const migrations = fs.existsSync(path.join(dir, "migrations")) ? fs.readdirSync(path.join(dir, "migrations")).filter((f) => f.endsWith(".sql")).length : 0;
+      return { name: m, ...manifest, screens: pageEntries(manifest), tour, migrations, hash: hashFiles(readTree(dir)) };
+    });
+}
+
+// The guided tour for a module: tour.json from the version on the floor if it
+// has one, else the library copy. Steps: { path, target, title, body }.
+async function tourFor(company, mod) {
+  const row = company ? await getModule(company, mod) : null;
+  if (row && row.live_version) {
+    const files = await versionFiles(company, mod, row.live_version);
+    if (files && files["tour.json"]) { try { return JSON.parse(files["tour.json"]); } catch (e) { /* fall through */ } }
+  }
+  const p = path.join(REPO_MODULES_DIR, mod, "tour.json");
+  return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : null;
 }
 
 // Seed the module's reference doc into the company's editable agent docs.
@@ -234,11 +253,22 @@ async function importFromRepo(company, mod) {
   await seedModuleDocs(company, mod);
   if (row.repo_hash === hash) return { version: row.live_version, changed: false };
 
-  // Repo source changed since last import: bring it in as a new version and
-  // deploy it through the normal path (snapshot first, migrations applied).
+  // Repo source changed since last import: bring it in as a new version. It
+  // deploys on its own only when the floor is still on a repo-sourced version.
+  // If the in-app agent has built versions since (the live version's source is
+  // "build"), the repo copy is behind that work, so the import waits in the
+  // Versions panel for the manager to Switch to it, and nothing is superseded.
   const version = await nextVersionNumber(company, mod);
   await insertVersion(company, mod, version, "repo", `imported from repo (${hash})`, files);
   await q("UPDATE platform.modules SET title=$3, repo_hash=$4 WHERE company=$1 AND name=$2", [company, mod, manifest.title, hash]);
+  const live = row.live_version
+    ? (await q("SELECT source FROM platform.module_versions WHERE company=$1 AND module=$2 AND version=$3", [company, mod, row.live_version])).rows[0]
+    : null;
+  if (row.live_version && live && live.source !== "repo") {
+    console.log(`[registry] ${company}/${mod}: repo change imported as v${version} but NOT deployed (v${row.live_version} on the floor was built in-app)`);
+    await logEvent("module_import_held", `${company}/${mod}`, { version, hash, live_version: row.live_version });
+    return { version, changed: true, held: true };
+  }
   if (row.live_version) {
     try {
       await deployVersion(company, mod, version);
@@ -406,5 +436,5 @@ function attach(app) {
 module.exports = {
   MODULES_DIR, REPO_MODULES_DIR, versionDir, readManifest, pageEntries, screenFor, loadAll, attach,
   createDraftVersion, stageVersion, deployVersion, rollback, goToVersion, versionHistory, versionFiles, persistVersion, importFromRepo,
-  unstage, getModule, libraryModules, mountLiveIfNeeded: mountLive, hooks, materialize,
+  unstage, getModule, libraryModules, tourFor, mountLiveIfNeeded: mountLive, hooks, materialize,
 };

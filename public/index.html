@@ -189,25 +189,52 @@ async function startReview() {
   if (!confirm(`Review ${mod} with ${modelLabel(model)}? It reads the whole module, the feedback and build history, and the live data, then files its recommendations as held proposals you approve one by one.`)) return;
   await act(`/api/c/${SLUG}/reviews`, { module: mod, model, requested_by: DATA.role });
 }
+function reviewCounts(r) {
+  const items = DATA.feedback.filter(f => f.review_id === r.id);
+  const counts = { reviewing: 0, in_progress: 0, done: 0, declined: 0 };
+  for (const f of items) counts[f.status] = (counts[f.status] || 0) + 1;
+  return { items, counts, open: items.filter(f => f.status === "reviewing") };
+}
+// Only reviews with something still to decide (or one that is running or just
+// failed in the last hour) stay on the board. The rest live in the Versions
+// panel, next to the versions they produced.
 function renderReviews() {
   const box = document.getElementById("reviews");
-  const done = (DATA.reviews || []).filter(r => r.status !== "running").slice(0, 3);
-  box.innerHTML = done.map(r => {
-    const items = DATA.feedback.filter(f => f.review_id === r.id);
-    const open = items.filter(f => f.status === "reviewing");
-    const counts = { reviewing: 0, in_progress: 0, done: 0, declined: 0 };
-    for (const f of items) counts[f.status] = (counts[f.status] || 0) + 1;
-    const collapsed = !open.length;
-    return `<details class="reviewbar" ${collapsed ? "" : "open"}><summary><b>System review #${r.id}</b> · ${esc(r.module)} v${r.version} · ${esc(modelLabel(r.model))} · ${r.status === "failed" ? "failed" : `${r.item_count} recommendations`} · $${Number(r.cost_usd).toFixed(2)} · ${new Date(r.created_at).toLocaleString()}
+  const recent = Date.now() - 3600000;
+  const live = (DATA.reviews || []).filter(r => r.status === "running" || reviewCounts(r).open.length || (r.status === "failed" && new Date(r.created_at) > recent));
+  box.innerHTML = live.map(r => {
+    const { counts, open } = reviewCounts(r);
+    if (r.status === "running") return `<details class="reviewbar" open><summary><b>System review #${r.id}</b> · ${esc(r.module)} v${r.version} · ${esc(modelLabel(r.model))} · <span class="pulse"></span>reading the module</summary></details>`;
+    if (r.status === "failed") return `<details class="reviewbar" open><summary><b>System review #${r.id}</b> · ${esc(r.module)} v${r.version} · ${esc(modelLabel(r.model))} · failed · ${new Date(r.created_at).toLocaleTimeString()}</summary><div class="sum fail-note">${esc(r.summary || "")}</div></details>`;
+    const byScreen = {};
+    for (const f of open) { const k = f.proposal_target || "?"; byScreen[k] = (byScreen[k] || 0) + 1; }
+    const groups = Object.keys(byScreen).length;
+    return `<details class="reviewbar" open><summary><b>System review #${r.id}</b> · ${esc(r.module)} v${r.version} · ${esc(modelLabel(r.model))} · ${r.item_count} recommendations · $${Number(r.cost_usd).toFixed(2)} · ${new Date(r.created_at).toLocaleString()}
         <span class="meta" style="display:inline">${counts.reviewing} held · ${counts.in_progress} building · ${counts.done} done · ${counts.declined} declined</span></summary>
       <div class="sum">${esc(r.summary || "")}</div>
-      ${open.length && MGR() ? `<button class="go" onclick="selectReview(${r.id})">Select all ${open.length} held items for one batch</button><button class="no" onclick="declineReview(${r.id})">Decline the rest</button>` : ""}
+      ${MGR() ? `<button class="go" onclick="selectReview(${r.id})">Select all ${open.length} held items for one batch</button>${groups > 1 ? `<button class="go" style="background:var(--navy)" onclick="buildReviewByScreen(${r.id})">Build by screen (${groups} runs, one after another)</button>` : ""}<button class="no" onclick="declineReview(${r.id})">Decline the rest</button>
+      <div class="meta">One batch is one agent run holding every change at once; past four or five changes the agent starts getting things wrong and the reviewer fails it. By screen keeps each run small: ${Object.entries(byScreen).map(([k, n]) => `${esc(screenLabel(r.module, k))} ${n}`).join(", ")}.</div>` : ""}
     </details>`;
   }).join("");
 }
 function selectReview(id) {
-  const r = (DATA.reviews || []).find(x => x.id === id);
   for (const f of DATA.feedback) if (f.review_id === id && f.status === "reviewing" && f.proposal_id) SEL.add(f.proposal_id);
+  load();
+}
+// One run per screen, queued behind each other, with the company build model.
+async function buildReviewByScreen(id) {
+  const open = DATA.feedback.filter(f => f.review_id === id && f.status === "reviewing" && f.proposal_id);
+  const groups = {};
+  for (const f of open) (groups[f.proposal_target || "?"] = groups[f.proposal_target || "?"] || []).push(f.proposal_id);
+  const n = Object.keys(groups).length;
+  const cap = Object.values(groups).reduce((a, g) => a + Math.min(DATA.maxRunUsd * g.length, DATA.maxBatchUsd || 6), 0);
+  if (!confirm(`Start ${n} builds, one per screen, with ${modelLabel(DATA.models.build)}? They run one after another. Together they stop themselves past about $${cap.toFixed(2)}.`)) return;
+  PENDING.set("batch", ACTION_LABELS.batch); renderBusy();
+  for (const ids of Object.values(groups)) {
+    const r = await fetch("/api/runs/batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ proposal_ids: ids }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || "failed"); break; }
+  }
+  PENDING.delete("batch"); renderBusy();
   load();
 }
 async function declineReview(id) {
@@ -452,9 +479,10 @@ async function openVersions(mod) {
   document.getElementById("vpanel").innerHTML = `<div class="vpanel">
     <h3>${esc(title)}: every version <span class="x" onclick="closeVersions()">close</span></h3>
     <p class="hint"><b>Switch</b> puts that version's screens and logic on the floor and keeps today's data (nothing is lost, an older version just ignores what it never knew about). <b>Restore</b> also puts the data back to the moment that version was last live, for when a change corrupted something; it is only offered while that snapshot still exists (the newest ten are kept). Either way the current state is saved first, so a jump can be undone with Restore.</p>
+    ${(() => { const past = (DATA.reviews || []).filter(r => r.module === mod && r.status !== "running" && !reviewCounts(r).open.length); return past.length ? `<details style="margin:4px 0 10px"><summary style="cursor:pointer;font-size:12.5px;font-weight:700;color:var(--navy)">Past system reviews (${past.length})</summary>${past.map(r => { const { counts } = reviewCounts(r); return `<div class="vrow"><span class="vn">#${r.id}</span><span class="vs">${r.status === "failed" ? "failed: " + esc((r.summary || "").slice(0, 120)) : `${r.item_count} recommendations on v${r.version} · ${esc(modelLabel(r.model))} · ${counts.done} done, ${counts.declined} declined, ${counts.in_progress} building`} · $${Number(r.cost_usd).toFixed(2)} · ${new Date(r.created_at).toLocaleString()}</span></div>`; }).join("")}</details>` : ""; })()}
     ${j.versions.map(v => `<div class="vrow">
       <span class="vn">v${v.version}</span>
-      ${v.version === j.live_version ? '<span class="live">LIVE</span>' : ""}${v.version === j.staged_version ? '<span class="live" style="background:var(--amber)">STAGED</span>' : ""}
+      ${v.version === j.live_version ? '<span class="live">LIVE</span>' : ""}${v.version === j.staged_version ? '<span class="live" style="background:var(--amber)">STAGED</span>' : ""}${v.source === "repo" && v.version > j.live_version ? '<span class="live" style="background:var(--steel)" title="A newer copy from the repo library, held because the floor is on an in-app build. Switch to it when you want it.">FROM REPO, NOT LIVE</span>' : ""}
       <span class="vs">${esc(v.notes && v.source !== "repo" ? v.notes : String(v.summary || v.notes || "Agent build").split(/\n|(?:^|\s)- /).map(x => x.trim()).filter(Boolean)[0] || "")} · ${new Date(v.created_at).toLocaleString()}</span>
       <button ${v.version === j.live_version ? "disabled" : ""} onclick="gotoVersion(${v.version}, false)">Switch to v${v.version}</button>
       <button ${v.version === j.live_version || !v.has_snapshot ? "disabled" : ""} title="${v.has_snapshot ? "" : "no data snapshot left for this version"}" onclick="gotoVersion(${v.version}, true)">Restore v${v.version} with its data</button>

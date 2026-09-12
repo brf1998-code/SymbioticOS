@@ -20,11 +20,24 @@
   button { border:none; border-radius:7px; padding:8px 12px; font-size:12.5px; font-weight:700; cursor:pointer; margin:8px 6px 0 0; min-height:36px; }
   .go { background:var(--green); color:#fff; } .quiet { background:#e5e9ee; color:var(--ink); }
   .links a { margin-right:12px; font-weight:600; }
+  .lib { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; margin-top:10px; }
+  .mod { border:1px solid var(--line); border-radius:10px; padding:12px; background:var(--fog); }
+  .mod h3 { font-size:15px; margin-bottom:4px; } .mod .desc { font-size:13px; line-height:1.45; margin:4px 0 8px; }
+  .mod .facts { font-size:12px; color:var(--steel); margin-bottom:6px; }
+  .mod .screens span { display:inline-block; background:#fff; border:1px solid var(--line); border-radius:12px; padding:2px 8px; font-size:11.5px; margin:2px 4px 2px 0; }
+  .mod .tour { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:12.5px; }
+  .mod .tour a { background:var(--navy); color:#fff; text-decoration:none; border-radius:14px; padding:6px 11px; font-weight:700; font-size:12.5px; }
+  .mod .tour .none { color:var(--steel); }
 </style>
 </head>
 <body>
   <h1>Admin</h1>
   <p class="sub" id="top"></p>
+  <div class="card" id="library-card">
+    <h2>Module library <small>what ships in the repo, before any company changes it</small></h2>
+    <p class="sub">Every module starts here as version 1. Start tour opens the module on a company's floor and walks a new operator through its screens, step by step, with the feedback button as the last stop. The tour is <code>tour.json</code> inside the module; agents can keep it current as the screens change.</p>
+    <div class="lib" id="library"></div>
+  </div>
   <div id="companies"></div>
   <div class="card">
     <h2>Add a company</h2>
@@ -48,6 +61,15 @@ async function load() {
   if (r.status === 403) { document.body.innerHTML = "<p style='padding:20px'>Admin login required.</p>"; return; }
   D = await r.json();
   document.getElementById("top").textContent = `${D.companies.length} compan${D.companies.length === 1 ? "y" : "ies"} · AI spend this month $${D.totalSpend.toFixed(2)} of $${D.monthlyCap.toFixed(2)} cap · defaults: propose ${ml(D.defaults.propose)}, build ${ml(D.defaults.build)}, review ${ml(D.defaults.review)}`;
+  document.getElementById("library").innerHTML = D.library.map(l => `<div class="mod">
+    <h3>${esc(l.title)} <small class="sub">(${l.name})</small></h3>
+    <div class="desc">${esc(l.description || "No description in module.json yet.")}</div>
+    <div class="facts">${l.screens.length} screens · ${l.migrations} migration file${l.migrations === 1 ? "" : "s"} · ${l.smoke} smoke checks · ${l.deployed.length ? "live at " + l.deployed.map(d => `${esc((D.companies.find(c => c.slug === d.company) || {}).name || d.company)} (v${d.live_version})`).join(", ") : "not deployed anywhere yet"}</div>
+    <div class="screens">${l.screens.map(s => `<span>${esc(s.label)}</span>`).join("")}</div>
+    <div class="tour">${l.tourSteps
+      ? `<b>Tour:</b> ${l.tourSteps} steps` + (l.deployed.length ? l.deployed.map(d => ` <a href="/c/${d.company}/m/${l.name}/?tour=1">Start tour at ${esc((D.companies.find(c => c.slug === d.company) || {}).name || d.company)}</a>`).join("") : ' <span class="none">(add it to a company to run the tour)</span>')
+      : '<span class="none">No tour.json in this module yet.</span>'}</div>
+  </div>`).join("") || '<div class="sub">No modules in the repo library.</div>';
   document.getElementById("companies").innerHTML = D.companies.map(c => `<div class="card">
     <h2>${esc(c.name)} <small>/c/${c.slug}/ · since ${new Date(c.created_at).toLocaleDateString()}</small></h2>
     <div class="links"><a href="/c/${c.slug}/">Improvement board</a><a href="/c/${c.slug}/agents">Agent settings and docs</a>${c.modules.map(m => `<a href="/c/${c.slug}/m/${m.name}/">${esc(m.title)} (v${m.live_version})</a>`).join("")}</div>

@@ -133,6 +133,12 @@ or Adjust items one by one, then "Select all held items for one batch" and
 build them as one change, with whichever model the batch bar shows. The
 review's summary stays on the board above the columns.
 
+**Tour (before the session, or for a newcomer).** `/admin` lists the module
+library; **Start tour** opens the line with a step-by-step walk through the
+three screens, ending at the feedback button. Two minutes, and it means you
+never have to explain the station page from the front of the room. Anyone
+signed in can run it with `?tour=1` on any page of the module.
+
 **Diagrams.** Every deploy redraws two sets of diagrams for the new version:
 data flows (what each screen records and where) and one workflow per role
 (what the operator, the stockroom, the manager actually do, dead ends

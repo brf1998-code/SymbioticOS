@@ -1,0 +1,15 @@
+{
+  "title": "Paper Airplane Line in five minutes",
+  "intro": "A short walk through the three screens people use on this line: the line board the manager runs the shift from, the station page each operator holds on a phone, and the stockroom page. Every screen has the same feedback button, and that button is the point of the whole thing.",
+  "steps": [
+    { "path": "/", "target": "#controls", "title": "The manager runs the shift from here", "body": "Start shift releases the travelers onto station 1 and starts the timer. Demo setup sets how many people and stations you have and whether inventory limits are on. Reset demo clears everything and restocks the line." },
+    { "path": "/", "target": "#stations", "title": "One tile per station", "body": "Each tile shows the station name, the fold it does, how many travelers are waiting there and who is on it. When a tile turns blocked, that station is out of material and has asked the stockroom for it." },
+    { "path": "/", "target": "#kpis", "title": "The numbers the shift is judged on", "body": "Completed, average flight distance, stockouts, and work in progress at the end. Compare these across shifts to see whether a change actually helped." },
+    { "path": "/", "target": "#history", "title": "Shift history", "body": "Every shift lands here with its numbers. Click a row for per-station throughput and average seconds per traveler. This is where the before and after of an improvement shows up." },
+    { "path": "/station/1", "target": "#app", "title": "The operator's page", "body": "Each operator opens this on a phone and picks their station. It shows the traveler in front of them: job number, paper color, fold code, and the instruction for that fold. Done sends the traveler to the next station." },
+    { "path": "/station/1", "target": ".req", "title": "Asking for material", "body": "When a station runs out of paper or clips, Request material sends a request to the stockroom page. The station is blocked until it is delivered." },
+    { "path": "/station/1", "target": "#sos-fb-btn", "title": "The feedback button, same on every screen", "body": "Something in the way? opens a small box. Operators type what got in their way, in their own words, from the screen where it happened. That goes straight to the improvement board, where the manager can turn it into a change to this very page." },
+    { "path": "/stock", "target": "#requests", "title": "The stockroom sees every request", "body": "Requests from the stations line up here with which station asked and what for. Deliver moves the material from the stockroom to that station's line inventory and unblocks it." },
+    { "path": "/stock", "target": "#inv", "title": "What is left", "body": "Stockroom inventory and what has been delivered recently. When this runs low, that is a conversation about the supply, not the software." }
+  ]
+}

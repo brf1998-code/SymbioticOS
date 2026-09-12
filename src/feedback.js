@@ -72,6 +72,15 @@ router.get("/api/c/:slug/modules/:name/version", async (req, res) => {
   res.set("Cache-Control", "no-store").json({ live_version: row.live_version, staged_version: row.staged_version });
 });
 
+// Guided tour steps for a module (any signed-in role; the widget drives it).
+router.get("/api/c/:slug/modules/:name/tour", async (req, res) => {
+  try {
+    const t = await registry.tourFor(req.params.slug, req.params.name);
+    if (!t) return res.status(404).json({ error: "no tour for this module" });
+    res.json(t);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // Version history and jumps (manager). Back or forward, with or without the
 // data as it was when that version was last live.
 router.get("/api/c/:slug/modules/:name/versions", requireManager, async (req, res) => {
@@ -302,7 +311,12 @@ router.get("/api/admin/overview", requireAdmin, async (_req, res) => {
       runs: runs.find((x) => x.company === c.slug) || { n: 0, deployed: 0 },
       spend_usd: Number((spend.find((x) => x.slug === c.slug) || {}).usd || 0),
     })),
-    library: registry.libraryModules().map((m) => ({ name: m.name, title: m.title })),
+    library: registry.libraryModules().map((m) => ({
+      name: m.name, title: m.title, description: m.description || "", screens: m.screens, migrations: m.migrations,
+      tourSteps: m.tour && m.tour.steps ? m.tour.steps.length : 0, tourTitle: m.tour ? m.tour.title : null,
+      smoke: (m.smoke || []).length,
+      deployed: modules.filter((x) => x.name === m.name).map((x) => ({ company: x.company, live_version: x.live_version })),
+    })),
     models: agent.MODELS,
     defaults: agent.DEFAULT_MODELS,
     monthlyCap: agent.MONTHLY_CAP_USD,
