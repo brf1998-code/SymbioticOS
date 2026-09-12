@@ -65,6 +65,15 @@
   .dot { width:9px; height:9px; border-radius:50%; background:var(--line); flex:none; }
   .dot.done { background:var(--green); } .dot.now { background:var(--amber); } .dot.fail { background:var(--red); }
   .card.batch { border-left:4px solid var(--navy); }
+  .card.busy { opacity:.75; }
+  .card.busy button, .card.busy .pick { pointer-events:none; opacity:.5; }
+  .working { display:inline-flex; align-items:center; gap:6px; background:var(--amberSoft); color:var(--amber); border-radius:8px; padding:6px 9px; font-size:12.5px; font-weight:700; margin-top:8px; }
+  .working .spin { width:12px; height:12px; border:2px solid var(--amber); border-right-color:transparent; border-radius:50%; animation:spin .8s linear infinite; display:inline-block; }
+  @keyframes spin { to { transform:rotate(360deg) } }
+  #global-busy { display:none; margin-left:12px; background:rgba(255,255,255,.18); border-radius:12px; padding:3px 10px; font-size:12px; }
+  #global-busy .spin { width:10px; height:10px; border:2px solid #fff; border-right-color:transparent; border-radius:50%; animation:spin .8s linear infinite; display:inline-block; margin-right:6px; vertical-align:-1px; }
+  .findings { background:#fdecea; color:#7a1d17; border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; max-height:260px; overflow:auto; line-height:1.45; }
+  .findings b { display:block; margin-bottom:4px; }
   .card.batch .bhead { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-weight:800; font-size:14px; }
   .card.batch .bhead .n { background:var(--navy); color:#fff; border-radius:12px; padding:2px 9px; font-size:12px; }
   .card.batch details { margin-top:8px; }
@@ -103,7 +112,7 @@
   <div class="band">
     <div class="row">
       <h1>Improvement Board <small id="coname"></small></h1>
-      <span class="right" id="who"></span>
+      <span class="right" id="who"></span><span id="global-busy"><span class="spin"></span><span id="global-busy-text">working</span></span>
     </div>
     <div class="modstrip" id="modules"></div>
   </div>
@@ -209,11 +218,36 @@ async function declineReview(id) {
   load();
 }
 
+// Every button click is acknowledged at once: the card it belongs to greys out
+// with a "working" line until the server answers, and the header shows a pill.
+const PENDING = new Map(); // key ("fb:12" or "run:7") -> label
+const ACTION_LABELS = { review: "Sending to the AI for a proposal", decide: "Recording your decision", confirm: "Confirming, the agent starts building", deploy: "Deploying to the floor", cancel: "Cancelling", retry: "Restarting the build", fix: "Sending the findings back to the agent", override: "Overriding the review, running tests", rollback: "Rolling back", plusone: "Counting it again", close: "Closing", batch: "Starting the batch build" };
+function pendingKey(url) {
+  let m;
+  if ((m = /\/api\/feedback\/(\d+)\/(\w+)/.exec(url))) return ["fb:" + m[1], ACTION_LABELS[m[2]] || "Working"];
+  if ((m = /\/api\/proposals\/(\d+)\//.exec(url))) { const fb = (DATA.feedback || []).find(f => f.proposal_id === Number(m[1])); return ["fb:" + (fb ? fb.id : m[1]), ACTION_LABELS.decide]; }
+  if ((m = /\/api\/runs\/(\d+)\/(\w+)/.exec(url))) return ["run:" + m[1], ACTION_LABELS[m[2]] || "Working"];
+  if (/\/api\/runs\/batch/.test(url)) return ["batch", ACTION_LABELS.batch];
+  return ["global", "Working"];
+}
+function pendingHtml(key) { const l = PENDING.get(key); return l ? `<div class="working"><span class="spin"></span>${esc(l)}…</div>` : ""; }
+function renderBusy() {
+  const el = document.getElementById("global-busy");
+  el.style.display = PENDING.size ? "inline-block" : "none";
+  document.getElementById("global-busy-text").textContent = PENDING.size ? [...PENDING.values()][0] : "";
+}
 async function act(url, body) {
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
-  const j = await res.json().catch(() => ({}));
-  if (!res.ok) alert(j.error || "action failed");
-  load();
+  const [key, label] = pendingKey(url);
+  PENDING.set(key, label); renderBusy();
+  // mark the card right away, before the round trip
+  for (const el of document.querySelectorAll(`[data-key="${key}"]`)) { el.classList.add("busy"); if (!el.querySelector(".working")) el.insertAdjacentHTML("beforeend", pendingHtml(key)); }
+  try {
+    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) alert(j.error || "action failed");
+  } catch (e) { alert("Could not reach the server: " + e.message); }
+  PENDING.delete(key); renderBusy();
+  await load();
 }
 
 function toggleSel(pid, on) { if (on) SEL.add(pid); else SEL.delete(pid); renderBatchBar(); }
@@ -221,7 +255,8 @@ function renderBatchBar() {
   const bar = document.getElementById("batchbar");
   if (!SEL.size) { bar.style.display = "none"; return; }
   bar.style.display = "flex";
-  bar.innerHTML = `<b>${SEL.size}</b> proposal(s) selected · build with <select id="batchmodel">${modelOptions(BATCH_MODEL || DATA.models.build)}</select>
+  const cap = Math.min(DATA.maxRunUsd * SEL.size, DATA.maxBatchUsd || 6);
+  bar.innerHTML = `<b>${SEL.size}</b> proposal(s) selected · build with <select id="batchmodel">${modelOptions(BATCH_MODEL || DATA.models.build)}</select> <span class="meta" style="display:inline">· stops itself past $${cap.toFixed(2)}</span>
     <button class="go" onclick="buildBatch()">Build together as one change</button><button class="quiet" onclick="SEL.clear();renderBatchBar();load()">Clear</button>`;
 }
 async function buildBatch() {
@@ -259,6 +294,29 @@ function submitEdit(pid, decision) {
   act(`/api/proposals/${pid}/decide`, body);
 }
 
+// What a failed run offers. A build that failed a check (cross-check, tests,
+// visual check) still has its draft version staged, so the manager can look at
+// the preview, send the findings back to the agent, override, retry from
+// scratch, or cancel. Any other failure (cost cap, agent died) offers retry or cancel.
+function failedHtml(run, cancelNote) {
+  const last = (run.log || []).filter(l => l.step === "error").slice(-1)[0];
+  const ev = run.evidence || {};
+  const failedCheck = ["cross_check", "test_run", "visual_check"].includes(run.step) && run.to_version;
+  const cc = ev.cross_check && ev.cross_check.verdict === "fail" ? ev.cross_check : null;
+  let html = "";
+  if (cc) html += `<div class="findings"><b>Independent review (${esc(modelLabel(cc.model))}) failed it. Findings:</b>${esc(cc.summary || "")}</div>`;
+  else html += `<div class="fail-note">Stopped: ${esc(last ? last.note : "see log")}</div>`;
+  if (failedCheck) html += `<a class="demo" href="/c/${SLUG}/staging/m/${esc(run.module)}/" target="_blank">Open preview of v${run.to_version} (not live)</a><br>`;
+  if (!MGR()) return html;
+  const round = ev.fix_round || 0;
+  if (failedCheck) {
+    if (round < (DATA.maxFixRounds || 2)) html += `<button class="go" onclick="act('/api/runs/${run.id}/fix')">Send findings back to the agent (fix round ${round + 1} of ${DATA.maxFixRounds || 2})</button>`;
+    if (cc) html += `<button class="quiet" onclick="if(confirm('Override the failed review? The change still runs the internal tests, then waits at the deploy gate. The findings stay on the record.'))act('/api/runs/${run.id}/override')">Override the review, go to the gate</button>`;
+  }
+  html += `<button class="quiet" onclick="act('/api/runs/${run.id}/retry')">Retry from scratch</button><button class="no" onclick="if(confirm('Cancel this build? ${esc(cancelNote)}'))act('/api/runs/${run.id}/cancel')">Cancel</button>`;
+  return html;
+}
+
 // One tile for a batch run (several proposals built as one change). Feedback
 // items in the batch are not shown as separate cards while the run exists.
 function batchCard(run) {
@@ -266,7 +324,8 @@ function batchCard(run) {
   const review = items.find(f => f.review_id);
   const ev = run.evidence || {};
   const mod = DATA.modules.find(m => m.name === run.module) || {};
-  let html = `<div class="card batch">`;
+  const pk = "run:" + run.id;
+  let html = `<div class="card batch ${PENDING.has(pk) ? "busy" : ""}" data-key="${pk}">${pendingHtml(pk)}`;
   html += `<div class="bhead"><span class="n">${items.length}</span>${ev.title ? esc(ev.title) : `${items.length} changes built as one`}${review ? `<span class="chip review">REVIEW #${review.review_id}</span>` : ""}<span class="chip ${run.lane}">${run.lane === "ui" ? "UI" : "FUNCTIONALITY"}</span></div>`;
   html += `<div class="meta">run #${run.id} · ${esc(mod.title || run.module)} · v${run.from_version}${run.to_version ? " → v" + run.to_version : ""} · ${esc(modelLabel(run.model))} · $${Number(run.cost_usd).toFixed(2)}</div>`;
   if (run.status === "deployed" || run.status === "rolled_back") {
@@ -286,15 +345,12 @@ function batchCard(run) {
   if (run.step === "await_deploy" && run.status === "waiting") {
     if (ev.what_changed || ev.build_summary) html += `<div class="prop">${esc(ev.what_changed || ev.build_summary)}</div>`;
     if (ev.test_run) html += `<div class="meta">tests: ${ev.test_run.ok ? "passed" : "failed"} (${(ev.test_run.checked || []).length} checks)</div>`;
-    if (ev.cross_check) html += `<div class="meta">cross-check (${esc(modelLabel(ev.cross_check.model))}): ${esc(ev.cross_check.verdict)} · ${esc(ev.cross_check.summary || "")}</div>`;
+    if (ev.cross_check) html += `<div class="meta">cross-check (${esc(modelLabel(ev.cross_check.model))}): ${esc(ev.cross_check.verdict)}${ev.cross_check.overridden ? " (overridden by the manager)" : ""} · ${esc((ev.cross_check.summary || "").slice(0, 400))}</div>`;
+    if (ev.fix_round) html += `<div class="meta">fixed by the agent in ${ev.fix_round} round(s) after a failed check</div>`;
     html += `<a class="demo" href="/c/${SLUG}/staging/m/${esc(run.module)}/" target="_blank">Open preview of v${run.to_version} (not live)</a><br>`;
     if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/deploy')">Deploy v${run.to_version} to floor</button><button class="no" onclick="if(confirm('Discard this build? The ${items.length} proposals go back to Reviewing.'))act('/api/runs/${run.id}/cancel')">Discard</button>`;
   }
-  if (run.status === "failed") {
-    const last = (run.log || []).filter(l => l.step === "error").slice(-1)[0];
-    html += `<div class="fail-note">Stopped: ${esc(last ? last.note : "see log")}</div>`;
-    if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/retry')">Retry</button><button class="no" onclick="act('/api/runs/${run.id}/cancel')">Cancel (back to Reviewing)</button>`;
-  }
+  if (run.status === "failed") html += failedHtml(run, `The ${items.length} proposals go back to Reviewing.`);
   if (run.status === "deployed" && MGR() && mod.live_version === run.to_version) {
     html += `<button class="no" onclick="act('/api/runs/${run.id}/rollback')">Roll back</button>`;
   }
@@ -304,7 +360,8 @@ function batchCard(run) {
 function card(fb) {
   const run = DATA.runs.find(r => (r.feedback_ids || [r.feedback_id]).includes(fb.id) && r.status !== "cancelled");
   const isPlatform = !fb.module || fb.module === "platform";
-  let html = `<div class="card">`;
+  const pk = run && fb.status === "in_progress" ? "run:" + run.id : "fb:" + fb.id;
+  let html = `<div class="card ${PENDING.has(pk) ? "busy" : ""}" data-key="${pk}">${pendingHtml(pk)}`;
   html += `<div class="msg">${esc(fb.message)}</div>`;
   html += `<div class="meta">#${fb.id} · ${isPlatform ? '<span class="chip platform">PLATFORM</span>' : esc(fb.module)} · ${esc(fb.name || "anonymous")}`
        + (fb.recurrence > 1 ? ` · <span class="chip rec">x${fb.recurrence}</span>` : "") + `</div>`;
@@ -357,16 +414,13 @@ function card(fb) {
       const ev = run.evidence || {};
       if (ev.what_changed || ev.build_summary) html += `<div class="prop">${esc(ev.what_changed || ev.build_summary)}</div>`;
       if (ev.test_run) html += `<div class="meta">tests: ${ev.test_run.ok ? "passed" : "failed"} (${(ev.test_run.checked || []).length} checks)</div>`;
-      if (ev.cross_check) html += `<div class="meta">cross-check (${esc(modelLabel(ev.cross_check.model))}): ${esc(ev.cross_check.verdict)} · ${esc(ev.cross_check.summary || "")}</div>`;
+      if (ev.cross_check) html += `<div class="meta">cross-check (${esc(modelLabel(ev.cross_check.model))}): ${esc(ev.cross_check.verdict)}${ev.cross_check.overridden ? " (overridden by the manager)" : ""} · ${esc((ev.cross_check.summary || "").slice(0, 400))}</div>`;
+      if (ev.fix_round) html += `<div class="meta">fixed by the agent in ${ev.fix_round} round(s) after a failed check</div>`;
       if (ev.docs) html += `<div class="meta">guided by: ${esc(ev.docs.join(", "))}</div>`;
       html += `<a class="demo" href="/c/${SLUG}/staging/m/${esc(fb.module)}/" target="_blank">Open preview of v${run.to_version} (not live)</a><br>`;
       if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/deploy')">Deploy v${run.to_version} to floor</button><button class="no" onclick="if(confirm('Discard this build? The proposals go back to Reviewing.'))act('/api/runs/${run.id}/cancel')">Discard</button>`;
     }
-    if (run.status === "failed") {
-      const last = (run.log || []).filter(l => l.step === "error").slice(-1)[0];
-      html += `<div class="fail-note">Stopped: ${esc(last ? last.note : "see log")}</div>`;
-      if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/retry')">Retry</button><button class="no" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;
-    }
+    if (run.status === "failed") html += failedHtml(run, "The proposal goes back to Reviewing.");
   }
 
   if (fb.status === "done" || fb.status === "declined") {
@@ -446,7 +500,7 @@ async function load() {
   document.getElementById("kpis").innerHTML = [
     [openFb, "new feedback"], [DATA.feedback.filter(f => f.status === "reviewing").length, "awaiting decision"],
     [active, "building now"], [deployed, "deployed this week"],
-    [`$${DATA.spend.usd.toFixed(2)}`, `AI spend of $${DATA.spend.cap.toFixed(0)} cap`], [modelLabel(DATA.models.build), "build model"],
+    [`$${DATA.spend.usd.toFixed(2)}`, `AI spend of $${DATA.spend.cap.toFixed(0)} monthly cap · $${Number(DATA.maxRunUsd).toFixed(2)} per change, $${Number(DATA.maxBatchUsd || 6).toFixed(0)} per run`], [modelLabel(DATA.models.build), "build model"],
   ].map(([v, l]) => `<div class="kpi"><b>${esc(v)}</b><span>${l}</span></div>`).join("");
   const buckets = { new: [], reviewing: [], in_progress: [], done: [], platform: [] };
   // batch runs render as one tile; their feedback items are folded into it

@@ -21,6 +21,9 @@ const { q, getSetting } = require("./db");
 
 const PRINCIPLES_DIR = process.env.PRINCIPLES_DIR || path.join(__dirname, "..", "principles");
 const MAX_RUN_USD = Number(process.env.SOS_MAX_RUN_USD || 1.5);
+// A batch gets MAX_RUN_USD per change, never more than this in one run.
+const MAX_BATCH_USD = Number(process.env.SOS_MAX_BATCH_USD || 6);
+const runCapUsd = (changes) => Math.min(MAX_RUN_USD * Math.max(1, changes || 1), MAX_BATCH_USD);
 const MONTHLY_CAP_USD = Number(process.env.SOS_MONTHLY_CAP_USD || 25);
 
 // Current Claude lineup (platform.claude.com/docs/en/models/overview, Sept 2026).
@@ -91,7 +94,9 @@ function fakeRunAgent({ dir, prompt }) {
   const pages = path.join(dir, "pages");
   const files = target && fs.existsSync(path.join(dir, target)) ? [path.join(dir, target)]
     : fs.existsSync(pages) ? fs.readdirSync(pages).map((f) => path.join(pages, f)) : [];
-  for (const p of files) fs.writeFileSync(p, fs.readFileSync(p, "utf8") + `\n<!-- revised by fake agent ${new Date().toISOString()} -->\n`);
+  // FAILCHECK in the feedback makes the first attempt fail the fake cross-check; a fix round clears it
+  const bad = /FAILCHECK/.test(prompt) && !/independent reviewer looked at your previous attempt/.test(prompt);
+  for (const p of files) fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace(/\n<!-- FAKE-BAD -->\n/g, "") + `\n<!-- revised by fake agent ${new Date().toISOString()} -->\n${bad ? "<!-- FAKE-BAD -->\n" : ""}`);
   if (/functionality-class/i.test(prompt)) {
     const migDir = path.join(dir, "migrations");
     fs.mkdirSync(migDir, { recursive: true });
@@ -108,14 +113,17 @@ function fakeStructured(toolName, prompt) {
   const canned = {
     proposal: { proposal: "Fake-mode proposal: apply the requested change as described in the feedback. (SOS_FAKE_AGENT=1)", class: /color|copy|text|label|layout|style|bigger|smaller|show|display|legend|see/i.test(quoted) ? "ui" : "functionality", target_file: target, rationale: "Deterministic fake classification for machinery testing." },
     requirement: { requirement: "Fake-mode requirement: (1) the change in the feedback will be applied, (2) everything else stays the same, (3) verified by smoke checks on staging. (SOS_FAKE_AGENT=1)" },
-    verdict: { verdict: "pass", summary: "Fake-mode cross-check: diff reviewed, no violations. (SOS_FAKE_AGENT=1)" },
+    verdict: /FAKE-BAD/.test(prompt)
+      ? { verdict: "fail", summary: "Fake-mode cross-check: the diff carries a FAKE-BAD marker, which stands in for a change that does not meet the requirement. (SOS_FAKE_AGENT=1)" }
+      : { verdict: "pass", summary: "Fake-mode cross-check: diff reviewed, no violations. (SOS_FAKE_AGENT=1)" },
     summary: { title: `Fake change to ${target || "the module"}`, what_changed: "Fake-mode summary: a marker was stamped on the page named in the feedback. Nothing else changed. (SOS_FAKE_AGENT=1)" },
   };
   return { data: canned[toolName] || {}, costUsd: 0 };
 }
 
 // Run an agent turn inside a version directory. Returns { text, costUsd }.
-async function runAgent({ model, system, dir, prompt, readOnly = false }) {
+async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd }) {
+  const cap = capUsd || MAX_RUN_USD;
   if (fakeMode()) return fakeRunAgent({ dir, prompt });
   if (!haveKey()) throw new Error("ANTHROPIC_API_KEY not configured on this instance");
   const { query } = require("@anthropic-ai/claude-agent-sdk");
@@ -154,7 +162,7 @@ async function runAgent({ model, system, dir, prompt, readOnly = false }) {
         const u = msg.message.usage || {};
         estimate += (u.input_tokens || 0) * price.inTok + (u.output_tokens || 0) * price.outTok
           + (u.cache_read_input_tokens || 0) * price.inTok * 0.1 + (u.cache_creation_input_tokens || 0) * price.inTok * 1.25;
-        if (estimate > MAX_RUN_USD && !aborted) { aborted = true; abort.abort(); }
+        if (estimate > cap && !aborted) { aborted = true; abort.abort(); }
       }
       if (msg.type === "result") {
         if (typeof msg.total_cost_usd === "number") costUsd = msg.total_cost_usd;
@@ -175,7 +183,7 @@ async function runAgent({ model, system, dir, prompt, readOnly = false }) {
     }
   }
   if (aborted) {
-    const e = new Error(`build stopped: run cost passed the $${MAX_RUN_USD.toFixed(2)} per-run cap`);
+    const e = new Error(`build stopped: run cost passed the $${cap.toFixed(2)} cap for this run`);
     e.costUsd = costUsd || estimate;
     throw e;
   }
@@ -246,5 +254,5 @@ async function assertUnderCap() {
 
 module.exports = {
   runAgent, runStructured, haveKey, fakeMode, guidanceFor, platformDocs, modelFor, modelInfo, buildModelFor, canBuild,
-  MODELS, DEFAULT_MODELS, MAX_RUN_USD, MONTHLY_CAP_USD, monthlySpend, assertUnderCap,
+  MODELS, DEFAULT_MODELS, MAX_RUN_USD, MAX_BATCH_USD, runCapUsd, MONTHLY_CAP_USD, monthlySpend, assertUnderCap,
 };

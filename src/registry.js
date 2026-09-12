@@ -406,5 +406,5 @@ function attach(app) {
 module.exports = {
   MODULES_DIR, REPO_MODULES_DIR, versionDir, readManifest, pageEntries, screenFor, loadAll, attach,
   createDraftVersion, stageVersion, deployVersion, rollback, goToVersion, versionHistory, versionFiles, persistVersion, importFromRepo,
-  unstage, getModule, libraryModules, mountLiveIfNeeded: mountLive, hooks,
+  unstage, getModule, libraryModules, mountLiveIfNeeded: mountLive, hooks, materialize,
 };

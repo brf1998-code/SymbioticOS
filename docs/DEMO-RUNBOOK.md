@@ -169,8 +169,16 @@ is saved before every jump, so a wrong jump is itself undoable.
 ## If something breaks
 
 - A build fails: the card says why in plain language (the agent's last error
-  lines are included). **Retry** re-runs it; **Cancel** puts the proposals
-  back in Reviewing.
+  lines are included). **Retry from scratch** re-runs it; **Cancel** puts the
+  proposals back in Reviewing.
+- The independent review fails a build: the findings are on the card and the
+  preview still opens. **Send findings back to the agent** makes it revise
+  the same draft (two rounds at most); **Override the review** skips to the
+  tests and the deploy gate if you have looked at the preview and disagree
+  with the reviewer. The override is written on the run.
+- A build stops on cost: each change gets $1.50 of agent time, a batch gets
+  that times its size up to $6, and the batch bar shows the figure before you
+  start. A big batch that trips it is better split in two.
 - Someone got locked out: the floor password is on the whiteboard, not in the app.
 - The line is in a weird state: manager can **End shift now** and, at worst,
   **Reset demo** (wipes shifts and travelers, restocks the line).

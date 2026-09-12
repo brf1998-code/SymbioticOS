@@ -78,6 +78,20 @@ One instance hosts many **companies**. Everything is scoped by company slug:
 - **Boot id**: `SOS_BOOT_ID` is set at process start and returned by the
   board API; the board reloads itself when it changes, so an open tab picks
   up a redeploy instead of running old page code against new data.
+- **Failed checks**: a build that fails the cross-check, the tests, or the
+  visual check keeps its draft staged (preview still opens). The manager can
+  `POST /api/runs/:id/fix` (agent revises the SAME draft version with the
+  findings; `evidence.fix_round`, max `SOS_MAX_FIX_ROUNDS` = 2),
+  `POST /api/runs/:id/override` (cross-check only; runs the tests, then the
+  deploy gate; `cross_check.overridden` recorded), retry from scratch, or
+  cancel (which now unstages the draft).
+- **Cost caps**: `SOS_MAX_RUN_USD` (1.50) is per change; a batch run gets
+  that times its change count, never above `SOS_MAX_BATCH_USD` (6). The
+  batch bar shows the figure; the run records `evidence.cap_usd`. Monthly
+  cap unchanged (`SOS_MONTHLY_CAP_USD`).
+- **Pending feedback on the board**: `act()` marks the card (greyed, spinner
+  line naming the action) and a header pill until the server answers, then
+  reloads. Runs in flight show the pulsing step as before.
 - **Run diagnostics**: when the agent process dies, the run log gets a `diag`
   entry (model, message count, whether init was seen, stderr tail, prompt
   sizes) and the error says at what stage it died.

@@ -125,6 +125,8 @@ router.get("/api/c/:slug/board", async (req, res) => {
     aiConfigured: agent.haveKey(),
     fakeAgent: agent.fakeMode(),
     maxRunUsd: agent.MAX_RUN_USD,
+    maxBatchUsd: agent.MAX_BATCH_USD,
+    maxFixRounds: pipeline.MAX_FIX_ROUNDS,
   });
 });
 
@@ -179,6 +181,14 @@ router.post("/api/runs/:id/confirm", requireManager, async (req, res) => {
 router.post("/api/runs/:id/deploy", requireManager, async (req, res) => {
   try { res.json(await pipeline.deploy(Number(req.params.id))); }
   catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.post("/api/runs/:id/fix", requireManager, async (req, res) => {
+  try { await pipeline.fix(Number(req.params.id)); res.json({ ok: true }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post("/api/runs/:id/override", requireManager, async (req, res) => {
+  try { await pipeline.override(Number(req.params.id)); res.json({ ok: true }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
 });
 router.post("/api/runs/:id/rollback", requireManager, async (req, res) => {
   try { res.json(await pipeline.rollbackRun(Number(req.params.id))); }

@@ -11,7 +11,7 @@
 // ONE agent run, one staged demo, one deploy. Only one run is active per
 // module at a time; further runs queue and start when the active one ends.
 const { q, logEvent } = require("./db");
-const { runAgent, runStructured, haveKey, assertUnderCap, modelFor, buildModelFor, guidanceFor, MODELS } = require("./agent");
+const { runAgent, runStructured, haveKey, assertUnderCap, modelFor, buildModelFor, guidanceFor, runCapUsd, MODELS } = require("./agent");
 const registry = require("./registry");
 
 const CROSS_CHECK_SCHEMA = {
@@ -163,15 +163,27 @@ async function advance(runId) {
 
     if (run.step === "build") {
       await assertUnderCap();
-      const draft = await registry.createDraftVersion(company, mod);
-      await setRun(runId, { to_version: draft.version });
-      await log(runId, { step: "build", note: `draft version v${draft.version} created` });
-      const req = run.requirement ? `\n\nConfirmed requirement:\n${run.requirement}` : "";
+      const ev0 = run.evidence || {};
+      let draft;
+      if (ev0.fix_round && run.to_version) {
+        // fix round: keep working in the same draft version
+        draft = { version: run.to_version, dir: await registry.materialize(company, mod, run.to_version) };
+        await log(runId, { step: "build", note: `fix round ${ev0.fix_round}: agent revises v${draft.version} against the reviewer's findings` });
+      } else {
+        draft = await registry.createDraftVersion(company, mod);
+        await setRun(runId, { to_version: draft.version });
+        await log(runId, { step: "build", note: `draft version v${draft.version} created` });
+      }
+      const nChanges = (run.proposal_ids || [run.proposal_id]).length;
+      const capUsd = runCapUsd(nChanges);
+      const req = (run.requirement ? `\n\nConfirmed requirement:\n${run.requirement}` : "")
+        + (ev0.fix_round && ev0.findings ? `\n\nAn independent reviewer looked at your previous attempt in this directory and found these problems. Fix exactly these, keep everything else as it is:\n${ev0.findings}` : "");
       const guidance = await guidanceFor(company, mod);
       const { model, substituted } = await buildModelFor(company, run.model);
       if (substituted) await log(runId, { step: "build", note: `${substituted} cannot run as the build agent; building with ${model} instead` });
       const { text, costUsd } = await runAgent({
         model,
+        capUsd,
         system: guidance.text,
         dir: draft.dir,
         prompt:
@@ -189,7 +201,7 @@ ${isBatch ? "- Implement every change in the batch. Keep them independent where 
       });
       await addCost(runId, costUsd);
       const cur = await getRun(runId);
-      await setRun(runId, { evidence: { ...cur.evidence, build_summary: text, docs: guidance.names, model } });
+      await setRun(runId, { evidence: { ...cur.evidence, build_summary: text, docs: guidance.names, model, cap_usd: capUsd } });
       await log(runId, { step: "build", note: `agent build complete (${model})` });
       // Plain-language title and summary for the version list, the Done card
       // and the feedback outcome. Cheap model; the agent's own final text is
@@ -338,11 +350,42 @@ async function retry(runId) {
   if (!busy) advance(runId).catch((e) => failRun(runId, e));
 }
 
+const MAX_FIX_ROUNDS = Number(process.env.SOS_MAX_FIX_ROUNDS || 2);
+
+// A failed check (cross-check, tests, visual check) can go back to the agent
+// with the findings, in the same draft version.
+async function fix(runId) {
+  const run = await getRun(runId);
+  if (run.status !== "failed" || !run.to_version || !["cross_check", "test_run", "visual_check"].includes(run.step)) throw new Error("only a build that failed a check can be sent back for fixes");
+  const ev = run.evidence || {};
+  const round = (ev.fix_round || 0) + 1;
+  if (round > MAX_FIX_ROUNDS) throw new Error(`already tried ${MAX_FIX_ROUNDS} fix rounds; retry from scratch, adjust the proposals, or override`);
+  const lastErr = (run.log || []).filter((l) => l.step === "error").slice(-1)[0];
+  const findings = (ev.cross_check && ev.cross_check.verdict === "fail" && ev.cross_check.summary) || (lastErr ? lastErr.note : "the previous attempt failed its checks");
+  const busy = await activeRun(run.company, run.module);
+  await setRun(runId, { step: "build", status: busy ? "queued" : "running", evidence: { ...ev, fix_round: round, findings, cross_check: undefined, test_run: undefined, visual_check: undefined } });
+  await log(runId, { step: "build", note: busy ? `fix round ${round} queued behind run #${busy.id}` : `manager sent the reviewer's findings back to the agent (fix round ${round} of ${MAX_FIX_ROUNDS})` });
+  if (!busy) advance(runId).catch((e) => failRun(runId, e));
+}
+
+// Manager overrides a failed cross-check: the change still has to pass the
+// internal tests, then waits at the deploy gate like any other build. The
+// override is recorded on the run.
+async function override(runId) {
+  const run = await getRun(runId);
+  if (run.status !== "failed" || run.step !== "cross_check" || !run.to_version) throw new Error("only a build that failed the cross-check can be overridden");
+  const ev = run.evidence || {};
+  await setRun(runId, { step: "test_run", status: "running", evidence: { ...ev, cross_check: { ...(ev.cross_check || {}), overridden: true } } });
+  await log(runId, { step: "cross_check", note: "manager overrode the failed cross-check; findings stay on the record" });
+  advance(runId).catch((e) => failRun(runId, e));
+}
+
 // Cancel a queued, failed, or gate-waiting run: proposals go back to reviewing.
 async function cancel(runId) {
   const run = await getRun(runId);
   if (!["queued", "failed", "waiting"].includes(run.status)) throw new Error("only queued, failed, or waiting runs can be cancelled");
-  if (run.status === "waiting" && run.step === "await_deploy") await registry.unstage(run.company, run.module);
+  const modRow = await registry.getModule(run.company, run.module);
+  if (run.to_version && modRow && modRow.staged_version === run.to_version) await registry.unstage(run.company, run.module);
   await setRun(runId, { status: "cancelled" });
   const ps = await loadProposals(run.proposal_ids || [run.proposal_id]);
   await q("UPDATE platform.proposals SET status='draft' WHERE id = ANY($1::int[])", [ps.map((p) => p.id)]);
@@ -351,4 +394,4 @@ async function cancel(runId) {
   kickQueue(run.company, run.module).catch((e) => console.error("queue kick failed:", e));
 }
 
-module.exports = { startRun, confirmRequirement, deploy, rollbackRun, retry, cancel, getRun, smokeCheck, kickQueue };
+module.exports = { startRun, confirmRequirement, deploy, rollbackRun, retry, cancel, fix, override, getRun, smokeCheck, kickQueue, MAX_FIX_ROUNDS };
