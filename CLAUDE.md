@@ -174,10 +174,19 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   page plus up to 5 stylesheets (browser UA; the build agent has no
   network), extracts title, meta, icons, logo imgs, hex/rgb colors by
   frequency, CSS custom properties, font stacks, visible text, and asks the
-  chosen model (Fable by default) for a BRAND.md guide plus structured
-  fields (primary/accent/background/ink, font, company_name, tone). The
-  guide is a company-wide agent doc (editable on the Agent settings page,
-  read by every run); the icon (largest apple-touch-icon, else favicon, as a
+  chosen model (Fable by default) to REWRITE the platform `principles/STYLE.md`
+  for the brand (same sections, same specificity) plus structured fields
+  (primary/accent/background/ink, font, company_name, tone). The result is
+  the company-wide agent doc `STYLE.md` (editable on the Agent settings
+  page). `agent.guidanceFor` drops the platform STYLE.md whenever a company
+  STYLE.md exists, so an agent never sees two style files (with both in the
+  prompt it kept the platform defaults; found 2026-09-14 with a Stanley
+  Black and Decker test). Boot renames any leftover BRAND.md to STYLE.md.
+  Site fetch: two tries at 30s for the page; when it still fails (bot
+  protection: SBD hangs, langmuirsystems.com answers 403) the guide is built
+  anyway from the model's knowledge of the brand, `brand.site_read=false`
+  and the admin card says so; icons fall back to the DuckDuckGo/Google
+  favicon services. The restyle proposal names the default hex values to replace; the icon (largest apple-touch-icon, else favicon, as a
   data URL) is served at `GET /api/c/<slug>/icon` (default SVG mark when
   none) and linked as favicon + apple-touch-icon on the board and on every
   module page (`registry.widgetInject`). The board band takes the primary
