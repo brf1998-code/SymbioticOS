@@ -1,0 +1,14 @@
+{
+  "title": "Plant KPIs in three minutes",
+  "intro": "One screen for the manager: the last eight weeks of the plant, drawn from the same data the line writes to, and Jonah, an operations agent that reads the same numbers.",
+  "steps": [
+    { "path": "/", "target": "#tiles", "title": "This week against last", "body": "Output per day, first-pass yield, lead time, on-time delivery, work in progress and overtime. Green and red arrows say which way each moved." },
+    { "path": "/", "target": "#live", "title": "Live from the line", "body": "When the Paper Airplane Line is running today, its real shifts show here: completed, scrapped, stockouts and work in progress by station. Same data stream, no copy." },
+    { "path": "/", "target": "#c-bullwhip", "title": "Demand, orders, production orders, purchases", "body": "End demand is nearly flat. Each step upstream swings more. That amplification is the bullwhip, and it is the first thing Jonah will point at." },
+    { "path": "/", "target": "#c-output", "title": "Daily output against takt", "body": "Bars by weekday against the takt line (what demand asks for). Fridays are pushed, Mondays idle. Overtime is drawn on top." },
+    { "path": "/", "target": "#c-wip", "title": "Work in progress by station", "body": "Where the pile grows is the constraint. Body Fold carries most of it, and lead time follows the pile." },
+    { "path": "/", "target": "#c-quality", "title": "Quality", "body": "Defect rate by day, by station and by kind. Watch how the rate climbs on the push days." },
+    { "path": "/", "target": "#jonah", "title": "Ask Jonah", "body": "Managers can ask what is going on, what to look for on the floor, and what one change to try this week. Each answer shows what it cost. Ask about a chart with the button under it." },
+    { "path": "/", "target": "#sos-fb-btn", "title": "Feedback, same as every screen", "body": "If a chart is missing or a number is wrong, say so here. It goes to the improvement board and can become a change to this very page." }
+  ]
+}

@@ -223,6 +223,39 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   all writes go through `db.upsertDoc`.
 - **Schema names** are sanitized (`migrate.ident`): a slug with a dash gets
   `_` in `mod_`/`stg_`/`snap_` names, so dashed slugs work.
+- **What the platform lends a module** (`registry.moduleServices`, on the
+  ctx handed to `routes.js`): `peer(name)` is a READ ONLY query function on
+  a sibling module's live tables (null if that module is not live for the
+  company), `agentDoc(name)` returns the company's editable copy of a module
+  doc, `ai.chat({model, system, messages, maxTokens, kind})` is a plain chat
+  call through `agent.runChat` under the monthly cap with the cost written
+  to `platform.ai_usage` (counted in `monthlySpend`), `ai.models`,
+  `ai.modelFor(role)`, `manifest`. A module declares chat personas in
+  module.json `agents: { id: { doc, label } }`; the doc file ships in the
+  module, is seeded as an editable module doc (`seedModuleDocs`), and
+  `guidanceFor` leaves it out of build prompts.
+- **Plant KPIs module** (`modules/kpis/`, company demo by default): the
+  manager's eight-week view plus **Jonah**, a chat agent for managers
+  (`JONAH.md`, TPS and Theory of Constraints voice: what the data says, what
+  it means, where to stand on the floor, one experiment). History is
+  seeded deterministically on first request (`routes.js buildSeed`, 40
+  working days ending yesterday) with the lean patterns baked in: flat
+  demand, lumpy orders, lumpier production orders (bullwhip), Friday push
+  and Monday idle, Body Fold as the constraint carrying the WIP and half
+  the defects, defects rising on push days, paper bought in 2400 lots, four
+  clip stockout days, lead time following WIP, on-time delivery sliding.
+  `GET /api/kpis` returns everything the page draws plus computed `flags`
+  and `live` (today's real paperline shifts and WIP through `peer`). Chat:
+  `GET/POST /api/chats`, manager only; system prompt is JONAH.md plus
+  `digest()` (a few thousand characters), default model the company's
+  propose model, dropdown to switch; each answer shows its cost. Page is
+  plain HTML with inline SVG helpers (line, bar, stacked area, h-bars);
+  chart ids `c-bullwhip c-output c-wip c-lead c-quality c-inventory` are
+  targets for the tour and the "Ask Jonah about this chart" buttons.
+  `POST /api/reseed` (manager) regenerates the eight weeks ending yesterday
+  before a demo. Migration files must avoid the word `updated_at` (the
+  validator's `UPDATE` check has no trailing word boundary); the chats
+  table uses `last_at`.
 
 ## What this is
 
@@ -234,7 +267,8 @@ See `docs/ROADMAP.md` for the vision and `README.md` for the run-it map.
 First module: **Paper Airplane Line** (`modules/paperline/`). A five-station
 line making paper airplanes in 2-minute shifts. It is deliberately a working but
 imperfect v1 so participants feel the improvement loop. `docs/DEMO-RUNBOOK.md`
-is the facilitator script.
+is the facilitator script. Second module: **Plant KPIs** (`modules/kpis/`),
+the manager's view of the same line over eight weeks, with Jonah.
 
 ## Two revision paths, and which one to use
 

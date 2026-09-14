@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plant KPIs</title>
+<style>
+  :root { --ink:#1c242e; --steel:#51606f; --line:#d5dbe3; --fog:#f2f4f7; --navy:#1f3a5f; --teal:#0e8a86; --amber:#c2620a; --green:#2e7d4f; --red:#b3261e; --purple:#5b3a8a; --amberSoft:#fbefe0; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:system-ui, sans-serif; background:var(--fog); color:var(--ink); padding:16px; padding-bottom:56px; }
+  header { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:10px; }
+  h1 { font-size:22px; }
+  .sub { color:var(--steel); font-size:13px; }
+  .links a { color:var(--navy); font-size:13px; font-weight:600; margin-right:10px; }
+  .layout { display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:14px; align-items:start; }
+  @media (max-width:1000px) { .layout { grid-template-columns:1fr; } #jonah { position:static; } }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; margin-bottom:12px; }
+  .tile { background:#fff; border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .tile b { display:block; font-size:22px; line-height:1.1; }
+  .tile span { font-size:11px; color:var(--steel); text-transform:uppercase; letter-spacing:.05em; }
+  .tile .d { font-size:12px; font-weight:700; margin-left:6px; } .up { color:var(--green); } .down { color:var(--red); } .flat { color:var(--steel); }
+  .live { background:#fff; border:1px solid var(--line); border-left:4px solid var(--green); border-radius:10px; padding:10px 12px; margin-bottom:12px; font-size:13px; display:flex; gap:16px; flex-wrap:wrap; align-items:center; }
+  .live.off { border-left-color:var(--steel); color:var(--steel); }
+  .live b { font-size:16px; }
+  .flags { background:var(--amberSoft); border:1px solid #f0d6b3; border-radius:10px; padding:10px 12px; margin-bottom:12px; font-size:13px; line-height:1.5; }
+  .flags b { display:block; font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--amber); margin-bottom:4px; }
+  .charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(360px,1fr)); gap:12px; }
+  .chart { background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .chart h2 { font-size:14px; margin-bottom:2px; }
+  .chart .hint { color:var(--steel); font-size:12px; margin-bottom:6px; line-height:1.4; }
+  .chart svg { width:100%; height:auto; display:block; }
+  .legend { display:flex; gap:10px; flex-wrap:wrap; font-size:11.5px; color:var(--steel); margin-top:4px; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:-1px; }
+  .ask { margin-top:6px; background:none; border:1px solid var(--line); color:var(--navy); border-radius:14px; padding:5px 10px; font-size:12px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .ask:hover { background:var(--fog); }
+  #jonah { position:sticky; top:12px; background:#fff; border:1px solid var(--line); border-radius:10px; display:flex; flex-direction:column; max-height:calc(100vh - 24px); }
+  #jonah .head { padding:12px 14px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  #jonah .head h2 { font-size:15px; }
+  #jonah .head .who { font-size:12px; color:var(--steel); flex:1 1 100%; line-height:1.4; }
+  #jonah select { font-family:inherit; font-size:12px; border:1px solid var(--line); border-radius:7px; padding:4px 6px; }
+  #jonah .small { background:none; border:1px solid var(--line); border-radius:7px; padding:4px 8px; font-size:12px; font-weight:600; cursor:pointer; font-family:inherit; color:var(--ink); }
+  #msgs { flex:1 1 auto; overflow:auto; padding:12px 14px; display:flex; flex-direction:column; gap:10px; min-height:220px; }
+  .m { max-width:100%; border-radius:10px; padding:9px 11px; font-size:13px; line-height:1.5; white-space:pre-wrap; }
+  .m.user { background:var(--navy); color:#fff; align-self:flex-end; max-width:92%; }
+  .m.jonah { background:var(--fog); }
+  .m .cost { display:block; font-size:11px; color:var(--steel); margin-top:6px; }
+  .m.thinking { color:var(--steel); font-style:italic; }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; padding:0 14px 8px; }
+  .chip { background:var(--fog); border:1px solid var(--line); border-radius:14px; padding:5px 10px; font-size:12px; cursor:pointer; font-family:inherit; color:var(--ink); text-align:left; }
+  .chip:hover { border-color:var(--navy); }
+  #ask { padding:10px 14px 12px; border-top:1px solid var(--line); display:flex; gap:8px; align-items:flex-end; }
+  #ask textarea { flex:1; min-height:44px; max-height:140px; border:1px solid var(--line); border-radius:8px; padding:8px; font-family:inherit; font-size:13px; resize:vertical; }
+  #ask button { background:var(--green); color:#fff; border:none; border-radius:8px; padding:0 14px; min-height:44px; font-weight:700; cursor:pointer; font-family:inherit; }
+  #ask button:disabled { opacity:.5; cursor:default; }
+  .prev { padding:0 14px 10px; font-size:12px; color:var(--steel); } .prev a { color:var(--navy); cursor:pointer; margin-right:8px; }
+  .locked { padding:14px; font-size:13px; color:var(--steel); line-height:1.5; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Plant KPIs</h1>
+    <span class="sub" id="range"></span>
+    <span class="links"><a id="linelink" href="#">Line board</a><a id="boardlink" href="#">Improvement board</a></span>
+  </header>
+  <div class="layout">
+    <div>
+      <div class="tiles" id="tiles"></div>
+      <div class="live off" id="live">Live from the line: checking…</div>
+      <div class="flags" id="flags" style="display:none"></div>
+      <div class="charts" id="charts"></div>
+    </div>
+    <div id="jonah">
+      <div class="head">
+        <h2>Ask Jonah</h2>
+        <select id="model"></select>
+        <button class="small" onclick="newChat()">New chat</button>
+        <div class="who">Operations advisor. Reads the same eight weeks and today's line, thinks in flow, constraints and leveling, and tells you where to stand on the floor.</div>
+      </div>
+      <div class="prev" id="prev"></div>
+      <div id="msgs"></div>
+      <div class="chips" id="chips"></div>
+      <div id="ask">
+        <textarea id="q" placeholder="What is going on, and what should I look at today?"></textarea>
+        <button id="send" onclick="send()">Ask</button>
+      </div>
+    </div>
+  </div>
+<script>
+const base = location.pathname.replace(/\/$/, "");
+const boardBase = base.replace(/\/(staging\/)?m\/[^/]+$/, "");
+document.getElementById("linelink").href = base.replace(/\/m\/[^/]+$/, "/m/paperline/");
+document.getElementById("boardlink").href = boardBase + "/";
+let K = null, CHAT = null, MODELS = [], MGR = false, BUSY = false;
+const C = { navy:"#1f3a5f", teal:"#0e8a86", amber:"#c2620a", purple:"#5b3a8a", green:"#2e7d4f", red:"#b3261e", steel:"#51606f", line:"#d5dbe3", gold:"#d9a400" };
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+const WD = ["", "Mon", "Tue", "Wed", "Thu", "Fri"];
+const fmtDay = d => { const [y, m, dd] = d.split("-"); return `${Number(m)}/${Number(dd)}`; };
+
+// ---- tiny SVG chart helpers (no library) ------------------------------------
+function scale(min, max, a, b) { const r = max - min || 1; return v => a + (v - min) / r * (b - a); }
+function niceMax(v) { const p = Math.pow(10, Math.floor(Math.log10(Math.max(1, v)))); const n = v / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p; }
+function frame(W, H, pad, yMax, yMin, yFmt, ticks) {
+  const y = scale(yMin, yMax, H - pad.b, pad.t);
+  let g = "";
+  for (let i = 0; i <= ticks; i++) {
+    const v = yMin + (yMax - yMin) * i / ticks, yy = y(v);
+    g += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${yy}" y2="${yy}" stroke="${C.line}" stroke-width="1"/><text x="${pad.l - 6}" y="${yy + 4}" font-size="10" fill="${C.steel}" text-anchor="end">${yFmt(v)}</text>`;
+  }
+  return { y, grid: g };
+}
+function xLabels(labels, x, H, pad, every) {
+  return labels.map((l, i) => (i % every === 0 ? `<text x="${x(i)}" y="${H - pad.b + 14}" font-size="10" fill="${C.steel}" text-anchor="middle">${esc(l)}</text>` : "")).join("");
+}
+function lineChart({ series, labels, yFmt = v => Math.round(v), height = 200, every = 5, yMin = 0, bands = [] }) {
+  const W = 620, H = height, pad = { l: 40, r: 10, t: 10, b: 26 };
+  const all = series.flatMap(s => s.values).filter(v => v != null);
+  const yMax = yMin ? Math.max(yMin + 1, Math.ceil(Math.max(...all) / 10) * 10) : niceMax(Math.max(...all) * 1.08);
+  const { y, grid } = frame(W, H, pad, yMax, yMin, yFmt, 4);
+  const x = scale(0, Math.max(1, labels.length - 1), pad.l, W - pad.r);
+  let body = bands.map(b => `<rect x="${x(b[0]) - (x(1) - x(0)) / 2}" y="${pad.t}" width="${x(b[1]) - x(b[0]) + (x(1) - x(0))}" height="${H - pad.t - pad.b}" fill="${b[2] || C.amber}" opacity=".08"/>`).join("");
+  for (const s of series) {
+    const pts = s.values.map((v, i) => (v == null ? null : `${x(i)},${y(v)}`)).filter(Boolean).join(" ");
+    body += `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="${s.width || 2}" ${s.dash ? 'stroke-dasharray="5 4"' : ""} stroke-linejoin="round"/>`;
+    if (s.dots) body += s.values.map((v, i) => (v == null ? "" : `<circle cx="${x(i)}" cy="${y(v)}" r="2.5" fill="${s.color}"/>`)).join("");
+  }
+  return `<svg viewBox="0 0 ${W} ${H}">${grid}${body}${xLabels(labels, x, H, pad, every)}</svg>`;
+}
+function barChart({ values, labels, colors, line, overlay, yFmt = v => Math.round(v), height = 200, every = 5, highlight }) {
+  const W = 620, H = height, pad = { l: 40, r: 10, t: 10, b: 26 };
+  const yMax = niceMax(Math.max(...values, ...(line || [0]), ...(overlay ? overlay.values : [0])) * 1.08);
+  const { y, grid } = frame(W, H, pad, yMax, 0, yFmt, 4);
+  const n = values.length, bw = (W - pad.l - pad.r) / n;
+  const x = i => pad.l + i * bw + bw / 2;
+  let body = values.map((v, i) => `<rect x="${pad.l + i * bw + 1}" y="${y(v)}" width="${bw - 2}" height="${H - pad.b - y(v)}" fill="${colors[i]}" ${highlight === i ? `stroke="${C.gold}" stroke-width="2"` : ""}/>`).join("");
+  if (line) body += `<polyline points="${line.map((v, i) => `${x(i)},${y(v)}`).join(" ")}" fill="none" stroke="${C.ink || "#1c242e"}" stroke-width="2" stroke-dasharray="5 4"/>`;
+  if (overlay) {
+    const oy = scale(0, overlay.max, H - pad.b, pad.t);
+    body += overlay.values.map((v, i) => (v ? `<rect x="${pad.l + i * bw + bw * 0.3}" y="${oy(v)}" width="${bw * 0.4}" height="${H - pad.b - oy(v)}" fill="${overlay.color}" opacity=".85"/>` : "")).join("");
+  }
+  return `<svg viewBox="0 0 ${W} ${H}">${grid}${body}${xLabels(labels, x, H, pad, every)}</svg>`;
+}
+function stackedArea({ layers, labels, height = 200, every = 5 }) {
+  const W = 620, H = height, pad = { l: 40, r: 10, t: 10, b: 26 };
+  const n = labels.length, totals = labels.map((_, i) => layers.reduce((a, l) => a + l.values[i], 0));
+  const yMax = niceMax(Math.max(...totals) * 1.08);
+  const { y, grid } = frame(W, H, pad, yMax, 0, v => Math.round(v), 4);
+  const x = scale(0, Math.max(1, n - 1), pad.l, W - pad.r);
+  let acc = new Array(n).fill(0), body = "";
+  for (const l of layers) {
+    const top = acc.map((a, i) => a + l.values[i]);
+    const up = top.map((v, i) => `${x(i)},${y(v)}`), down = acc.map((v, i) => `${x(i)},${y(v)}`).reverse();
+    body += `<polygon points="${up.concat(down).join(" ")}" fill="${l.color}" opacity=".85"/>`;
+    acc = top;
+  }
+  return `<svg viewBox="0 0 ${W} ${H}">${grid}${body}${xLabels(labels, x, H, pad, every)}</svg>`;
+}
+function hbars(rows, color, fmt = v => v) {
+  const max = Math.max(...rows.map(r => r.v), 1), W = 620, rowH = 22, H = rows.length * rowH + 4, lw = 170;
+  return `<svg viewBox="0 0 ${W} ${H}">` + rows.map((r, i) => {
+    const w = (W - lw - 60) * r.v / max, yy = i * rowH + 2;
+    return `<text x="${lw - 8}" y="${yy + 15}" font-size="11.5" fill="#1c242e" text-anchor="end">${esc(r.label)}</text><rect x="${lw}" y="${yy + 3}" width="${w}" height="${rowH - 8}" rx="3" fill="${r.color || color}"/><text x="${lw + w + 6}" y="${yy + 15}" font-size="11" fill="${C.steel}">${fmt(r.v)}</text>`;
+  }).join("") + "</svg>";
+}
+const legend = items => `<div class="legend">${items.map(([c, t]) => `<span><i style="background:${c}"></i>${esc(t)}</span>`).join("")}</div>`;
+
+// ---- render ------------------------------------------------------------------
+function tile(label, v, prev, fmt, goodUp = true, unit = "") {
+  const d = prev == null || !isFinite(prev) ? 0 : (v - prev) / (Math.abs(prev) || 1);
+  const cls = Math.abs(d) < 0.02 ? "flat" : ((d > 0) === goodUp ? "up" : "down");
+  const arrow = Math.abs(d) < 0.02 ? "→" : d > 0 ? "↑" : "↓";
+  return `<div class="tile"><b>${fmt(v)}${unit}<span class="d ${cls}">${arrow} ${Math.abs(d * 100).toFixed(0)}%</span></b><span>${label}</span></div>`;
+}
+function render() {
+  const k = K, d = k.daily, labels = d.map(x => fmtDay(x.day));
+  document.getElementById("range").textContent = `${d[0].day} to ${d[d.length - 1].day} · eight working weeks · ${k.live && !k.live.error ? "plus today from the line" : "line not connected today"}`;
+  const w = k.thisWeek, p = k.lastWeek;
+  document.getElementById("tiles").innerHTML = [
+    tile("output per day (this week vs last)", w.output_per_day, p.output_per_day, v => v.toFixed(0)),
+    tile("first-pass yield", w.fpy * 100, p.fpy * 100, v => v.toFixed(1), true, "%"),
+    tile("lead time (days)", w.lead_time, p.lead_time, v => v.toFixed(2), false),
+    tile("on-time delivery", w.on_time, p.on_time, v => v.toFixed(0), true, "%"),
+    tile("work in progress", w.wip, p.wip, v => v.toFixed(0), false),
+    tile("overtime hours this week", w.overtime, p.overtime, v => v.toFixed(0), false),
+    tile("backlog (units)", w.backlog, p.backlog, v => v.toFixed(0), false),
+    tile("changeovers per day", w.changeovers, p.changeovers, v => v.toFixed(1), true),
+  ].join("");
+  const live = document.getElementById("live");
+  if (k.live && !k.live.error) {
+    live.className = "live" + (k.live.shifts ? "" : " off");
+    live.innerHTML = `<span><b>Live from the line today</b> (${k.live.source}, same data stream)</span>` + (k.live.shifts
+      ? `<span><b>${k.live.shifts}</b> shift${k.live.shifts === 1 ? "" : "s"}${k.live.running ? " · one running now" : ""}</span><span><b>${k.live.completed}</b> completed</span><span><b>${k.live.scrapped}</b> scrapped</span><span><b>${k.live.stockouts}</b> stockouts</span><span><b>${k.live.open_requests}</b> open material requests</span><span>WIP now: ${k.live.wip.map(x => `${esc(x.name)} <b>${x.wip}</b>`).join(" · ")}</span>`
+      : `<span>no shift run yet today; start one on the line board and this row fills in</span>`);
+  } else { live.className = "live off"; live.textContent = "Live from the line: the Paper Airplane Line is not live for this company, so only the eight-week history is shown."; }
+  const fl = document.getElementById("flags");
+  if (k.flags.length) { fl.style.display = "block"; fl.innerHTML = `<b>What the platform noticed (ask Jonah to check)</b>` + k.flags.map(f => `<div>· ${esc(f)}</div>`).join(""); } else fl.style.display = "none";
+
+  const wdColor = { 1: "#9fb3c8", 2: C.teal, 3: C.teal, 4: C.teal, 5: C.amber };
+  const cvs = k.bullwhip;
+  const charts = [
+    { id: "c-bullwhip", title: "Demand, customer orders, production orders, purchases", hint: `Day-to-day swing (coefficient of variation): demand ${cvs.demand.toFixed(2)}, orders ${cvs.customer_orders.toFixed(2)}, production orders ${cvs.production_orders.toFixed(2)}, purchases ${cvs.purchases.toFixed(2)}. Each step upstream swings more than the one below it.`,
+      svg: lineChart({ series: [
+        { color: C.green, values: d.map(x => x.demand), width: 2.5 }, { color: C.teal, values: d.map(x => x.customer_orders) },
+        { color: C.amber, values: d.map(x => x.production_orders) }, { color: C.purple, values: d.map(x => Math.min(x.purchases, 400)), dash: true }], labels }),
+      leg: [[C.green, "end demand"], [C.teal, "customer orders"], [C.amber, "production orders"], [C.purple, "purchases (capped at 400 to fit)"]] },
+    { id: "c-output", title: "Daily output against takt, with overtime", hint: `Takt (dashed) is what demand asks for each day. Average by weekday, Mon to Fri: ${k.byWeekday.map(v => v.toFixed(0)).join(", ")}. Orange bars are Fridays; thin red bars are overtime hours.`,
+      svg: barChart({ values: d.map(x => x.produced), labels, colors: d.map(x => wdColor[x.weekday]), line: d.map(x => x.demand), overlay: { values: d.map(x => x.overtime_hours), max: 40, color: C.red } }),
+      leg: [["#9fb3c8", "Monday"], [C.teal, "Tue to Thu"], [C.amber, "Friday"], [C.red, "overtime hours (right scale, 0 to 40)"], ["#1c242e", "takt"]] },
+    { id: "c-wip", title: "Work in progress by station", hint: `Where the pile grows is the constraint. ${esc(k.constraint || "")} averages ${k.byStation.find(s => s.name === k.constraint)?.wip_avg.toFixed(0)} units waiting.`,
+      svg: stackedArea({ layers: k.byStation.map((s, i) => ({ color: [C.navy, C.teal, C.amber, C.purple, C.green][i], values: k.stations.filter(r => r.seq === s.seq).map(r => r.wip) })), labels }),
+      leg: k.byStation.map((s, i) => [[C.navy, C.teal, C.amber, C.purple, C.green][i], `${s.seq}. ${s.name}`]) },
+    { id: "c-lead", title: "Lead time and on-time delivery", hint: "Lead time is days of work in the pipe (work in progress divided by daily output). When the pile grows, on-time delivery slips a few days later.",
+      svg: lineChart({ series: [{ color: C.navy, values: d.map(x => x.lead_time_days), width: 2.5, dots: true }], labels, yFmt: v => v.toFixed(1) + " d", height: 130 })
+        + lineChart({ series: [{ color: C.green, values: d.map(x => x.on_time_pct), width: 2.5 }], labels, yFmt: v => Math.round(v) + "%", height: 110, yMin: 70 }),
+      leg: [[C.navy, "lead time (days)"], [C.green, "on-time delivery % (70 to 100)"]] },
+    { id: "c-quality", title: "Quality: defect rate by day, and where defects come from", hint: "Rate climbs on the push days. Below: defects by station over the eight weeks, then by kind.",
+      svg: lineChart({ series: [{ color: C.red, values: d.map(x => x.defects / Math.max(1, x.produced) * 100), width: 2.5, dots: true }], labels, yFmt: v => v.toFixed(1) + "%", height: 150 })
+        + hbars(k.byStation.map(s => ({ label: `${s.seq}. ${s.name}`, v: s.defects, color: s.name === k.constraint ? C.amber : C.steel })), C.steel)
+        + hbars(k.defects.map(x => ({ label: x.kind, v: x.qty })), C.red),
+      leg: [[C.red, "defect rate"], [C.amber, "constraint station"]] },
+    { id: "c-inventory", title: "Inventory: paper on hand and clip stockouts", hint: `Paper arrives in big lots and drains for weeks. Clips ran out on ${k.inventory.clip.filter(c => c.stockout).length} days (shaded).`,
+      svg: lineChart({ series: [{ color: C.navy, values: k.inventory.paper.map(x => x.on_hand), width: 2.5 }, { color: C.teal, values: k.inventory.clip.map(x => x.on_hand) }], labels,
+        bands: k.inventory.clip.map((c, i) => (c.stockout ? [i, i, C.red] : null)).filter(Boolean) }),
+      leg: [[C.navy, "paper sheets on hand"], [C.teal, "clips on hand"], [C.red, "clip stockout day"]] },
+  ];
+  document.getElementById("charts").innerHTML = charts.map(c => `<div class="chart" id="${c.id}"><h2>${esc(c.title)}</h2><div class="hint">${c.hint}</div>${c.svg}${legend(c.leg)}${MGR ? `<button class="ask" onclick="askAbout('${esc(c.title)}')">Ask Jonah about this chart</button>` : ""}</div>`).join("");
+}
+
+// ---- Jonah -------------------------------------------------------------------
+const SUGGESTED = ["What is going on in this plant, in three sentences?", "Where is the constraint and what should I look at on the floor today?", "Why are we ordering so much more than we sell?", "Why do defects go up on Fridays?", "What one change would you make this week?"];
+async function loadChats() {
+  const r = await fetch(base + "/api/chats");
+  if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
+  if (!r.ok) { MGR = false; document.getElementById("jonah").innerHTML = `<div class="head"><h2>Ask Jonah</h2></div><div class="locked">Jonah answers managers. Sign in with the manager password to ask what is going on and what to look for on the floor.</div>`; return; }
+  const j = await r.json(); MGR = true; MODELS = j.models;
+  const sel = document.getElementById("model");
+  if (!sel.options.length) sel.innerHTML = MODELS.map(m => `<option value="${m.id}" ${m.id === j.defaultModel ? "selected" : ""}>${esc(m.label)} ($${m.in}/$${m.out} per M)</option>`).join("");
+  document.getElementById("prev").innerHTML = j.chats.length ? "Earlier: " + j.chats.slice(0, 5).map(c => `<a onclick="openChat(${c.id})">${esc((c.title || "chat").slice(0, 32))} ($${Number(c.cost_usd).toFixed(2)})</a>`).join("") : "";
+  renderChips();
+}
+function renderChips() { document.getElementById("chips").innerHTML = CHAT && CHAT.messages.length ? "" : SUGGESTED.map(s => `<button class="chip" onclick="askText(${JSON.stringify(s).replace(/"/g, "&quot;")})">${esc(s)}</button>`).join(""); }
+function renderMsgs() {
+  const box = document.getElementById("msgs");
+  box.innerHTML = (CHAT ? CHAT.messages : []).map(m => `<div class="m ${m.role === "user" ? "user" : "jonah"}">${esc(m.content)}${m.role === "assistant" ? `<span class="cost">Jonah · ${esc(labelOf(m.model))} · $${Number(m.cost_usd || 0).toFixed(3)}</span>` : ""}</div>`).join("") + (BUSY ? `<div class="m jonah thinking">Jonah is reading the numbers…</div>` : "");
+  box.scrollTop = box.scrollHeight;
+  renderChips();
+}
+function labelOf(id) { const m = MODELS.find(x => x.id === id); return m ? m.label : (id || ""); }
+async function openChat(id) { const r = await fetch(base + "/api/chats/" + id); if (r.ok) { CHAT = await r.json(); renderMsgs(); } }
+function newChat() { CHAT = null; renderMsgs(); }
+function askText(t) { document.getElementById("q").value = t; send(); }
+let CHART = null;
+function askAbout(title) { CHART = title; document.getElementById("q").value = `What is going on in this chart, and what should I check on the floor?`; document.getElementById("q").focus(); document.getElementById("jonah").scrollIntoView({ behavior: "smooth", block: "start" }); send(); }
+async function send() {
+  const ta = document.getElementById("q"), text = ta.value.trim();
+  if (!text || BUSY) return;
+  BUSY = true; document.getElementById("send").disabled = true;
+  if (!CHAT) CHAT = { messages: [] };
+  CHAT.messages.push({ role: "user", content: CHART ? `[Looking at the chart "${CHART}"] ${text}` : text });
+  ta.value = ""; renderMsgs();
+  const body = { chat_id: CHAT.id || null, message: text, model: document.getElementById("model").value, chart: CHART };
+  CHART = null;
+  try {
+    const r = await fetch(base + "/api/chats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { CHAT.messages.push({ role: "assistant", content: "Could not answer: " + (j.error || r.status), cost_usd: 0 }); }
+    else { CHAT.id = j.chat_id; CHAT.messages = j.messages; }
+  } catch (e) { CHAT.messages.push({ role: "assistant", content: "Could not reach the server: " + e.message, cost_usd: 0 }); }
+  BUSY = false; document.getElementById("send").disabled = false; renderMsgs(); loadChats();
+}
+document.getElementById("q").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+
+async function load() {
+  const r = await fetch(base + "/api/kpis");
+  if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
+  K = await r.json();
+  await loadChats();
+  render();
+}
+load();
+setInterval(async () => { const r = await fetch(base + "/api/kpis"); if (r.ok) { K = await r.json(); render(); } }, 30000);
+</script>
+</body>
+</html>

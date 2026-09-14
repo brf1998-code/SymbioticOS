@@ -82,7 +82,14 @@ async function guidanceFor(company, moduleName) {
       ORDER BY module NULLS FIRST, name`, [company, moduleName])).rows;
   const companyStyle = rows.some((r) => !r.module && r.name === "STYLE.md");
   const docs = platformDocs().filter((d) => !(companyStyle && d.name === "STYLE.md")).map((d) => ({ scope: "platform", ...d }));
-  for (const r of rows) docs.push({ scope: r.module ? `module ${r.module}` : "company", name: r.name, content: r.content });
+  // a module's chat personas (module.json "agents") are not build guidance
+  const personas = new Set();
+  try {
+    const registry = require("./registry");
+    const row = await registry.getModule(company, moduleName);
+    if (row && row.live_version) for (const a of Object.values(registry.readManifest(company, moduleName, row.live_version).agents || {})) if (a && a.doc) personas.add(a.doc);
+  } catch (e) { /* no manifest, nothing to exclude */ }
+  for (const r of rows) if (!(r.module && personas.has(r.name))) docs.push({ scope: r.module ? `module ${r.module}` : "company", name: r.name, content: r.content });
   const text = docs.map((d) => `<!-- ${d.scope}: ${d.name} -->\n${d.content}`).join("\n\n---\n\n");
   return { text, names: docs.map((d) => `${d.scope}: ${d.name}`) };
 }
@@ -280,6 +287,30 @@ async function runStructured({ model, system, prompt, schema, toolName, maxToken
   return { data, costUsd };
 }
 
+// Plain chat call (no tools): a module's conversational agent. Returns
+// { text, costUsd }. Fake mode answers with a canned line.
+async function runChat({ model, system, messages, maxTokens }) {
+  if (fakeMode()) {
+    const last = [...messages].reverse().find((m) => m.role === "user");
+    return { text: `Fake-mode answer to "${String(last && last.content || "").slice(0, 80)}": the data digest was read; nothing else happened. (SOS_FAKE_AGENT=1)`, costUsd: 0 };
+  }
+  if (!haveKey()) throw new Error("ANTHROPIC_API_KEY not configured on this instance");
+  const Anthropic = require("@anthropic-ai/sdk");
+  const client = new Anthropic();
+  const resp = await client.messages.create({ model, max_tokens: maxTokens || 1500, system, messages });
+  const text = resp.content.filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
+  const usage = resp.usage || {};
+  const price = priceOf(model);
+  const costUsd = (usage.input_tokens || 0) * price.inTok + (usage.output_tokens || 0) * price.outTok;
+  return { text, costUsd };
+}
+
+// Spend that is not a build run, proposal, review or brand build (chat agents).
+async function recordUsage(company, moduleName, kind, model, costUsd, detail) {
+  await q("INSERT INTO platform.ai_usage (company, module, kind, model, cost_usd, detail) VALUES ($1,$2,$3,$4,$5,$6)",
+    [company, moduleName || null, kind, model || null, Number(costUsd || 0), JSON.stringify(detail || {})]);
+}
+
 // Month-to-date AI spend (runs + proposals), optionally per company.
 async function monthlySpend(company) {
   const r = (await q(`
@@ -287,7 +318,8 @@ async function monthlySpend(company) {
          + COALESCE((SELECT SUM(p.cost_usd) FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id
                       WHERE p.created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR f.company=$1)),0)
          + COALESCE((SELECT SUM(cost_usd) FROM platform.reviews WHERE created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR company=$1)),0)
-         + COALESCE((SELECT SUM((brand->>'cost_usd')::numeric) FROM platform.companies WHERE brand IS NOT NULL AND (brand->>'built_at')::timestamptz >= date_trunc('month', now()) AND ($1::text IS NULL OR slug=$1)),0) AS usd`, [company || null])).rows[0];
+         + COALESCE((SELECT SUM((brand->>'cost_usd')::numeric) FROM platform.companies WHERE brand IS NOT NULL AND (brand->>'built_at')::timestamptz >= date_trunc('month', now()) AND ($1::text IS NULL OR slug=$1)),0)
+         + COALESCE((SELECT SUM(cost_usd) FROM platform.ai_usage WHERE created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR company=$1)),0) AS usd`, [company || null])).rows[0];
   const usd = Number(r.usd || 0);
   return { usd, cap: MONTHLY_CAP_USD, capped: usd >= MONTHLY_CAP_USD };
 }
@@ -298,6 +330,6 @@ async function assertUnderCap() {
 }
 
 module.exports = {
-  runAgent, runStructured, haveKey, fakeMode, guidanceFor, platformDocs, modelFor, modelInfo, buildModelFor, canBuild,
+  runAgent, runStructured, runChat, recordUsage, haveKey, fakeMode, guidanceFor, platformDocs, modelFor, modelInfo, buildModelFor, canBuild,
   MODELS, DEFAULT_MODELS, MAX_RUN_USD, MAX_BATCH_USD, runCapUsd, MONTHLY_CAP_USD, monthlySpend, assertUnderCap,
 };

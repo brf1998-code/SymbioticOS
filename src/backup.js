@@ -13,7 +13,7 @@ const { q, pool } = require("./db");
 
 const PLATFORM_TABLES = [
   "companies", "settings", "modules", "module_versions", "feedback", "proposals", "build_runs",
-  "agent_docs", "reviews", "diagrams", "events", "schema_snapshots", "batches",
+  "agent_docs", "reviews", "diagrams", "events", "schema_snapshots", "batches", "ai_usage",
 ];
 
 async function columnInfo(schema, table) {

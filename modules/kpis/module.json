@@ -1,0 +1,14 @@
+{
+  "name": "kpis",
+  "title": "Plant KPIs",
+  "description": "The manager's view of the plant over the last eight weeks: demand against orders and production, daily output against takt, work in progress by station, quality, inventory and lead time, drawn from the same data stream the line writes to. Jonah, an operations agent tuned to Toyota Production System thinking, reads the same numbers and answers questions about what is going on and what to look for on the floor.",
+  "company": "demo",
+  "entry": "routes.js",
+  "pages": {
+    "/": { "file": "pages/dashboard.html", "label": "KPI dashboard (manager view)" }
+  },
+  "agents": {
+    "jonah": { "doc": "JONAH.md", "label": "Jonah", "role": "propose" }
+  },
+  "smoke": ["/api/kpis", "/api/chats"]
+}

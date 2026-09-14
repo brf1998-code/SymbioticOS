@@ -159,8 +159,47 @@ function buildRouter(company, mod, version, schema) {
   const makeRouter = require(entry);
   const requireManager = (req, res, next) =>
     ["manager", "admin"].includes(req.sosRole) ? next() : res.status(403).json({ error: "manager login required" });
-  router.use(makeRouter({ express, db: scopedDb(schema), moduleName: mod, company, requireManager }));
+  router.use(makeRouter({ express, db: scopedDb(schema), moduleName: mod, company, requireManager, ...moduleServices(company, mod, manifest) }));
   return router;
+}
+
+// What the platform lends a module beyond its own tables:
+//   peer(name)      read-only query function on a sibling module's LIVE tables
+//                   (the same data stream the floor writes to), or null if that
+//                   module is not live for this company
+//   agentDoc(name)  the company's editable copy of a module doc (agent_docs),
+//                   falling back to the file shipped in the module version
+//   ai.chat(...)    a plain chat call through the platform's model runner,
+//                   under the monthly cap, cost recorded against the company
+//   ai.models / ai.modelFor(role)
+function moduleServices(company, mod, manifest) {
+  const agent = require("./agent");
+  return {
+    manifest,
+    peer(name) {
+      const entry = mounts.get(key(company, name));
+      if (!entry || !entry.live) return null;
+      return scopedDb(liveSchema(company, name), { readOnly: true });
+    },
+    async agentDoc(name) {
+      const r = (await q("SELECT content FROM platform.agent_docs WHERE company=$1 AND module=$2 AND name=$3", [company, mod, name])).rows[0];
+      if (r) return r.content;
+      const row = await getModule(company, mod);
+      const files = row && row.live_version ? await versionFiles(company, mod, row.live_version) : null;
+      return files && files[name] ? files[name] : "";
+    },
+    ai: {
+      models: agent.MODELS,
+      modelFor: (role) => agent.modelFor(company, role),
+      async chat({ model, system, messages, maxTokens, kind, detail }) {
+        await agent.assertUnderCap();
+        const m = model && agent.MODELS.some((x) => x.id === model) ? model : await agent.modelFor(company, "propose");
+        const out = await agent.runChat({ model: m, system, messages, maxTokens });
+        await agent.recordUsage(company, mod, kind || "chat", m, out.costUsd, detail);
+        return { ...out, model: m };
+      },
+    },
+  };
 }
 
 async function mountLive(company, mod, version) {
@@ -225,11 +264,21 @@ async function tourFor(company, mod) {
   return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : null;
 }
 
-// Seed the module's reference doc into the company's editable agent docs.
+// Seed the module's reference doc into the company's editable agent docs,
+// plus any chat persona the module ships (module.json "agents": { id: { doc,
+// label } }; the doc file lives in the module and becomes an editable
+// module doc, left out of build guidance).
 async function seedModuleDocs(company, mod) {
   const p = path.join(PRINCIPLES_DIR, "module-formats", `${mod}.md`);
-  if (!fs.existsSync(p)) return;
-  await upsertDoc(company, mod, "reference.md", fs.readFileSync(p, "utf8"), "repo", true);
+  if (fs.existsSync(p)) await upsertDoc(company, mod, "reference.md", fs.readFileSync(p, "utf8"), "repo", true);
+  const row = await getModule(company, mod);
+  const files = row && row.live_version ? await versionFiles(company, mod, row.live_version) : null;
+  if (!files || !files["module.json"]) return;
+  let manifest = {};
+  try { manifest = JSON.parse(files["module.json"]); } catch (e) { return; }
+  for (const a of Object.values(manifest.agents || {})) {
+    if (a && a.doc && files[a.doc]) await upsertDoc(company, mod, a.doc, files[a.doc], "repo", true);
+  }
 }
 
 // Import the repo's seed source for a module into a company. New pairing -> v1

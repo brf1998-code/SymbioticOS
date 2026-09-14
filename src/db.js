@@ -21,12 +21,17 @@ async function q(text, params) {
 // A query function pinned to a module schema. Handed to module routers as ctx.db
 // so module code can only conveniently see its own tables. (Hard isolation comes
 // later with per-module DB roles; the MVP relies on search_path + review.)
-function scopedDb(schema) {
+// readOnly: every statement runs inside a READ ONLY transaction, for a module
+// reading a sibling module's tables (ctx.peer).
+function scopedDb(schema, { readOnly = false } = {}) {
   return async function scopedQuery(text, params) {
     const client = await pool.connect();
     try {
       await client.query(`SET search_path TO ${schema}, public`);
-      return await client.query(text, params);
+      if (!readOnly) return await client.query(text, params);
+      await client.query("BEGIN READ ONLY");
+      try { const r = await client.query(text, params); await client.query("COMMIT"); return r; }
+      catch (e) { await client.query("ROLLBACK"); throw e; }
     } finally {
       await client.query("SET search_path TO public");
       client.release();
@@ -171,6 +176,17 @@ CREATE TABLE IF NOT EXISTS platform.diagrams (
   cost_usd    NUMERIC(10,4) NOT NULL DEFAULT 0,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   finished_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS platform.ai_usage (
+  id         SERIAL PRIMARY KEY,
+  company    TEXT NOT NULL,
+  module     TEXT,
+  kind       TEXT NOT NULL,                        -- 'chat' | ...
+  model      TEXT,
+  cost_usd   NUMERIC(10,4) NOT NULL DEFAULT 0,
+  detail     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS platform.events (
