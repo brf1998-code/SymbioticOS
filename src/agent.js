@@ -121,6 +121,23 @@ function fakeStructured(toolName, prompt) {
   return { data: canned[toolName] || {}, costUsd: 0 };
 }
 
+// Environment handed to the Claude Code subprocess. An explicit allow-list, not
+// a spread of process.env: the agent reads feedback text typed by floor users,
+// so it must never see DATABASE_URL, SESSION_SECRET, the login passwords, or
+// the internal token. It only needs the API key, a PATH and HOME, and the
+// ANTHROPIC_*/CLAUDE_* knobs (base URL, model overrides).
+function agentEnv() {
+  const out = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v == null) continue;
+    if (["PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TZ", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS"].includes(k)) out[k] = v;
+    else if (/^(ANTHROPIC_|CLAUDE_)/.test(k)) out[k] = v;
+  }
+  out.IS_SANDBOX = "1";
+  out.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
+  return out;
+}
+
 // Run an agent turn inside a version directory. Returns { text, costUsd }.
 async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd }) {
   const cap = capUsd || MAX_RUN_USD;
@@ -149,7 +166,7 @@ async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd }
       permissionMode: "acceptEdits",
       maxTurns: 40,
       abortController: abort,
-      env: { ...process.env, IS_SANDBOX: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
+      env: agentEnv(),
       stderr: (data) => { stderrTail = (stderrTail + String(data)).slice(-4000); },
     },
   });

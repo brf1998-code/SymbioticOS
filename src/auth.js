@@ -12,6 +12,11 @@ const MANAGER = process.env.SOS_MANAGER_PASSWORD || "";
 const ADMIN = process.env.SOS_ADMIN_PASSWORD || "";
 const SECRET = process.env.SESSION_SECRET || crypto.randomBytes(24).toString("hex");
 const COOKIE = "sos_session";
+// sessions expire server-side after this long, regardless of what the browser does with Max-Age
+const SESSION_SECONDS = Number(process.env.SOS_SESSION_DAYS || 30) * 24 * 60 * 60;
+// failed logins per client IP before /login answers 429 for the rest of the window
+const LOGIN_MAX_FAILS = Number(process.env.SOS_LOGIN_MAX_FAILS || 10);
+const LOGIN_WINDOW_MS = Number(process.env.SOS_LOGIN_WINDOW_MIN || 15) * 60 * 1000;
 const OPEN = !FLOOR && !MANAGER;
 // token for the platform's own internal requests (smoke checks hit the staged
 // mount over HTTP); generated per process unless pinned by env
@@ -32,6 +37,10 @@ function verify(token) {
   const [role, ts, mac] = parts;
   const expect = crypto.createHmac("sha256", SECRET).update(`${role}.${ts}`).digest("base64url");
   if (mac.length !== expect.length || !crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(expect))) return null;
+  const issued = parseInt(ts, 36);
+  if (!Number.isFinite(issued)) return null;
+  const age = Date.now() - issued;
+  if (age < 0 || age > SESSION_SECONDS * 1000) return null;  // expired (or forged timestamp)
   return ["admin", "manager", "floor"].includes(role) ? role : null;
 }
 
@@ -77,11 +86,42 @@ function requireAdmin(req, res, next) {
   res.status(403).json({ error: "admin login required" });
 }
 
+// Login rate limit: in-memory, per client IP, failures only. Enough to stop a
+// password guesser against the shared floor password; resets on a successful
+// login. Cloudflare sits in front, so prefer its header over X-Forwarded-For
+// (the leftmost XFF entry is client-supplied and spoofable).
+const loginFails = new Map();  // ip -> { count, first }
+function clientIp(req) {
+  return String(req.headers["cf-connecting-ip"] || req.ip || req.socket?.remoteAddress || "unknown");
+}
+function loginBlocked(ip) {
+  const rec = loginFails.get(ip);
+  if (!rec) return 0;
+  if (Date.now() - rec.first > LOGIN_WINDOW_MS) { loginFails.delete(ip); return 0; }
+  return rec.count >= LOGIN_MAX_FAILS ? Math.ceil((rec.first + LOGIN_WINDOW_MS - Date.now()) / 1000) : 0;
+}
+function noteLoginFail(ip) {
+  const rec = loginFails.get(ip);
+  if (rec && Date.now() - rec.first <= LOGIN_WINDOW_MS) rec.count++;
+  else loginFails.set(ip, { count: 1, first: Date.now() });
+}
+setInterval(() => {
+  const cutoff = Date.now() - LOGIN_WINDOW_MS;
+  for (const [ip, rec] of loginFails) if (rec.first < cutoff) loginFails.delete(ip);
+}, 60 * 1000).unref();
+
 function loginHandler(req, res) {
+  const ip = clientIp(req);
+  const wait = loginBlocked(ip);
+  if (wait) {
+    res.set("Retry-After", String(wait));
+    return res.status(429).json({ error: `too many failed logins; try again in ${Math.ceil(wait / 60)} min` });
+  }
   const role = roleFor(String((req.body || {}).password || ""));
-  if (!role) return res.status(401).json({ error: "wrong password" });
+  if (!role) { noteLoginFail(ip); return res.status(401).json({ error: "wrong password" }); }
+  loginFails.delete(ip);
   const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
-  res.set("Set-Cookie", `${COOKIE}=${sign(role)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 30}${secure}`);
+  res.set("Set-Cookie", `${COOKIE}=${sign(role)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_SECONDS}${secure}`);
   res.json({ ok: true, role });
 }
 

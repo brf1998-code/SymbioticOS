@@ -144,7 +144,11 @@ is the facilitator script.
    and the rest queue (`build_runs.status = queued`, kicked by `kickQueue`).
    The agent runs with `permissionMode: acceptEdits` and `IS_SANDBOX=1`
    because Railway containers run as root and Claude Code refuses
-   `--dangerously-skip-permissions` as root.
+   `--dangerously-skip-permissions` as root. Its environment is an explicit
+   allow-list (`agentEnv()` in src/agent.js): API key, PATH/HOME, and
+   `ANTHROPIC_*`/`CLAUDE_*` only. Never spread `process.env` into it; the
+   agent reads floor-typed feedback, so it must not see `DATABASE_URL`,
+   `SESSION_SECRET`, passwords, or `SOS_INTERNAL_TOKEN`.
 2. **Cowork revisions (free).** Brendan asks Claude here; Claude edits the repo
    and pushes; Railway redeploys. This is for platform changes (anything under
    `src/`, `public/`, `server.js`, `principles/`) and for deliberate module
@@ -212,7 +216,10 @@ the whole loop with zero API spend. The sandbox has no npm registry access.
 (instance defaults: claude-sonnet-5 / claude-sonnet-5 / claude-opus-5;
 companies override on their Agent settings page), `SOS_MAX_RUN_USD` (per
 build run, default 1.50), `SOS_MONTHLY_CAP_USD` (default 25),
-`SOS_FAKE_AGENT` (0/1).
+`SOS_FAKE_AGENT` (0/1). Optional: `SOS_SESSION_DAYS` (default 30; sessions
+expire server-side, not just via cookie Max-Age), `SOS_LOGIN_MAX_FAILS`
+(default 10) and `SOS_LOGIN_WINDOW_MIN` (default 15) for the per-IP login
+limiter (in-memory, uses `cf-connecting-ip`).
 Passwords live only in Railway; never commit them.
 
 ## Hard rules
