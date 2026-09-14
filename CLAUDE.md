@@ -117,7 +117,13 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   run per target file for a review's held items (`buildReviewByScreen`).
 - **Board layout** (`public/index.html`): header band, module strip (Open
   live / Preview vN / Diagrams per module), KPI strip, system review toolbar,
-  four columns. Platform feedback (about the tool itself, shipped from Cowork)
+  four columns. The band's top right holds the company's **board QR code**
+  (`GET /api/c/<slug>/qr.svg?px=N`, drawn by `src/qrcode.js`, a dependency-free
+  byte-mode encoder at error correction M, versions 1 to 10). It encodes
+  `<proto>://<host>/c/<slug>/` from the request headers, so each company's code
+  opens that company's board (login first if the scanner has no session).
+  Clicking the tile opens a card with a large code, the link, Copy link and
+  Print; the print stylesheet prints just that card as a wall sign. Platform feedback (about the tool itself, shipped from Cowork)
   sits in a collapsed "Platform requests" strip under the columns, not a
   column of its own.
 

@@ -10,6 +10,7 @@ const agent = require("./agent");
 const review = require("./review");
 const diagrams = require("./diagrams");
 const { requireManager, requireAdmin } = require("./auth");
+const qrcode = require("./qrcode");
 
 const router = express.Router();
 router.use(express.json({ limit: "1mb" }));
@@ -98,6 +99,27 @@ router.post("/api/c/:slug/modules/:name/goto", requireManager, async (req, res) 
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+// ---- board QR code ---------------------------------------------------------
+// The board's own address as a scannable code, shown in the top right of the
+// board and printable for the wall. One code per company: it points at
+// /c/<slug>/, so whoever scans it lands on that company's board (and at the
+// login page first if they have no session).
+function boardUrl(req, slug) {
+  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https").split(",")[0].trim();
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  return `${proto}://${host}/c/${slug}/`;
+}
+router.get("/api/c/:slug/qr.svg", async (req, res) => {
+  const co = await company(req.params.slug);
+  if (!co) return res.status(404).json({ error: "unknown company" });
+  const px = Math.min(1200, Math.max(80, Number(req.query.px) || 240));
+  try {
+    res.type("image/svg+xml").set("Cache-Control", "no-cache").send(qrcode.svg(boardUrl(req, co.slug), { size: px }));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---- board data ------------------------------------------------------------
 router.get("/api/c/:slug/board", async (req, res) => {
   const co = await company(req.params.slug);
@@ -127,6 +149,7 @@ router.get("/api/c/:slug/board", async (req, res) => {
   const reviews = await review.listReviews(co.slug);
   res.json({
     company: co, feedback, runs, modules, screens, reviews,
+    boardUrl: boardUrl(req, co.slug),
     spend: await agent.monthlySpend(co.slug),
     models: { list: agent.MODELS, build: (await agent.buildModelFor(co.slug, await agent.modelFor(co.slug, "build"))).model },
     role: req.sosRole,

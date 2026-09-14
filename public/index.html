@@ -104,6 +104,26 @@
   details.platform .hint { font-size:12.5px; color:var(--steel); margin:8px 0; line-height:1.5; }
   details.platform .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:10px; }
   .empty { color:var(--steel); font-size:12.5px; padding:10px 4px; }
+  /* board QR: the tile in the band, and the big printable card behind it */
+  .qrtile { margin-left:14px; background:#fff; border-radius:10px; padding:6px 6px 4px; text-align:center; cursor:pointer; border:1px solid rgba(255,255,255,.35); line-height:0; }
+  .qrtile img { width:88px; height:88px; display:block; }
+  .qrtile span { display:block; font-size:9.5px; line-height:1.2; color:var(--steel); font-weight:700; text-transform:uppercase; letter-spacing:.04em; margin-top:4px; }
+  .qrtile:hover, .qrtile:focus { outline:2px solid rgba(255,255,255,.6); }
+  #qrmodal { display:none; position:fixed; inset:0; background:rgba(28,36,46,.55); z-index:20; align-items:center; justify-content:center; padding:20px; }
+  #qrmodal.on { display:flex; }
+  .qrcard { background:#fff; border-radius:14px; padding:22px; width:100%; max-width:420px; text-align:center; }
+  .qrcard h2 { font-size:17px; }
+  .qrcard .sub { font-size:12.5px; color:var(--steel); margin:2px 0 14px; }
+  .qrcard img { width:260px; height:260px; max-width:100%; }
+  .qrcard .url { font-size:12.5px; color:var(--steel); word-break:break-all; margin-top:10px; }
+  .qrcard .actions { display:flex; gap:6px; justify-content:center; flex-wrap:wrap; }
+  @media print {
+    body > *:not(#qrmodal) { display:none !important; }
+    #qrmodal { display:flex !important; position:static; background:none; padding:0; }
+    .qrcard { max-width:none; padding:0; }
+    .qrcard img { width:440px; height:440px; }
+    .qrcard .actions { display:none; }
+  }
   .pulse { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--amber); margin-right:5px; animation:p 1s infinite alternate; }
   @keyframes p { from { opacity:.3 } to { opacity:1 } }
 </style>
@@ -113,6 +133,10 @@
     <div class="row">
       <h1>Improvement Board <small id="coname"></small></h1>
       <span class="right" id="who"></span><span id="global-busy"><span class="spin"></span><span id="global-busy-text">working</span></span>
+      <div class="qrtile" id="qrtile" role="button" tabindex="0" title="Scan to open this board"
+           onclick="openQr()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openQr();}">
+        <img id="qrimg" alt="QR code that opens this board"><span>Scan for<br>this board</span>
+      </div>
     </div>
     <div class="modstrip" id="modules"></div>
   </div>
@@ -134,6 +158,19 @@
       <div class="hint">Feedback about this board, the agent settings, or the admin pages (the tool itself, not a module). The in-app agent does not rebuild its own platform; these go to Brendan and ship through the repo. They stay here so nothing gets lost.</div>
       <div class="grid" id="col-platform"></div>
     </details>
+  </div>
+  <div id="qrmodal" onclick="if(event.target===this)closeQr()">
+    <div class="qrcard">
+      <h2 id="qrco"></h2>
+      <p class="sub">Scan to open this improvement board</p>
+      <img id="qrbig" alt="QR code that opens this board">
+      <p class="url" id="qrurl"></p>
+      <div class="actions">
+        <button class="quiet" id="qrcopy" onclick="copyQr()">Copy link</button>
+        <button class="primary" onclick="window.print()">Print</button>
+        <button class="quiet" onclick="closeQr()">Close</button>
+      </div>
+    </div>
   </div>
 <script>
 const SLUG = location.pathname.split("/")[2];
@@ -502,6 +539,25 @@ async function gotoVersion(version, restore) {
   await load();
   openVersions(VMOD);
 }
+// ---- board QR --------------------------------------------------------------
+// The code encodes this company's board address. The tile in the band opens a
+// bigger card with the link and a Print button, for taping to the wall.
+function boardLink() { return (DATA && DATA.boardUrl) || (location.origin + "/c/" + SLUG + "/"); }
+function openQr() {
+  const big = document.getElementById("qrbig");
+  if (!big.getAttribute("src")) big.src = `/api/c/${SLUG}/qr.svg?px=520`;
+  document.getElementById("qrco").textContent = DATA ? DATA.company.name : "";
+  document.getElementById("qrurl").textContent = boardLink();
+  document.getElementById("qrmodal").classList.add("on");
+}
+function closeQr() { document.getElementById("qrmodal").classList.remove("on"); }
+async function copyQr() {
+  const b = document.getElementById("qrcopy");
+  try { await navigator.clipboard.writeText(boardLink()); b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy link"; }, 1500); }
+  catch (e) { b.textContent = "Copy failed"; setTimeout(() => { b.textContent = "Copy link"; }, 1500); }
+}
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeQr(); });
+
 async function load() {
   const res = await fetch(`/api/c/${SLUG}/board`);
   if (res.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
@@ -511,6 +567,8 @@ async function load() {
   window.BOOT = DATA.boot;
   document.title = `${DATA.company.name} · Improvement Board`;
   document.getElementById("coname").textContent = DATA.company.name;
+  const qrimg = document.getElementById("qrimg");
+  if (!qrimg.getAttribute("src")) qrimg.src = `/api/c/${SLUG}/qr.svg?px=264`;  // set once; a reload must not reflow the band
   const w = document.getElementById("aiwarn");
   if (!DATA.aiConfigured) { w.style.display = "block"; w.textContent = "AI is not configured on this instance (set ANTHROPIC_API_KEY). Proposals will be placeholders."; }
   else if (DATA.fakeAgent) { w.style.display = "block"; w.textContent = "Fake agent mode (SOS_FAKE_AGENT=1): the loop runs but the agent only stamps a marker on pages."; }
