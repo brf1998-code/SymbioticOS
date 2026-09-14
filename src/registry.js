@@ -24,7 +24,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const express = require("express");
-const { q, scopedDb, logEvent } = require("./db");
+const { q, scopedDb, logEvent, upsertDoc } = require("./db");
 const migrate = require("./migrate");
 const { liveSchema, stagingSchema, applyMigrations, rebuildStagingClone } = migrate;
 
@@ -133,6 +133,9 @@ function screenFor(manifest, pagePath) {
 // deploy and reload itself, and flag itself when it is the staged preview.
 function widgetInject(html, company, mod, version, mount) {
   const tag = `<script src="/assets/feedback-widget.js" data-company="${company}" data-module="${mod}" data-version="${version}" data-mount="${mount}"></script>`;
+  // tab and home-screen icon: the company's brand icon when it has one
+  const icon = `<link rel="icon" href="/api/c/${company}/icon"><link rel="apple-touch-icon" href="/api/c/${company}/icon">`;
+  html = html.includes("</head>") ? html.replace("</head>", `${icon}\n</head>`) : icon + html;
   return html.includes("</body>") ? html.replace("</body>", `${tag}\n</body>`) : html + tag;
 }
 
@@ -226,9 +229,7 @@ async function tourFor(company, mod) {
 async function seedModuleDocs(company, mod) {
   const p = path.join(PRINCIPLES_DIR, "module-formats", `${mod}.md`);
   if (!fs.existsSync(p)) return;
-  await q(
-    `INSERT INTO platform.agent_docs (company, module, name, content, source) VALUES ($1,$2,'reference.md',$3,'repo')
-     ON CONFLICT (company, module, name) DO NOTHING`, [company, mod, fs.readFileSync(p, "utf8")]);
+  await upsertDoc(company, mod, "reference.md", fs.readFileSync(p, "utf8"), "repo", true);
 }
 
 // Import the repo's seed source for a module into a company. New pairing -> v1
@@ -285,8 +286,7 @@ async function importFromRepo(company, mod) {
 async function seedCompanyDocs() {
   const rows = (await q("SELECT slug, name FROM platform.companies")).rows;
   for (const c of rows) {
-    await q(`INSERT INTO platform.agent_docs (company, module, name, content, source) VALUES ($1,NULL,'COMPANY.md',$2,'repo') ON CONFLICT DO NOTHING`,
-      [c.slug, `# ${c.name}\n\nWhat the agents should know about this company: what it makes, who is on the floor, what matters most (safety, throughput, quality), vocabulary the floor uses, anything to avoid.\n`]);
+    await upsertDoc(c.slug, null, "COMPANY.md", `# ${c.name}\n\nWhat the agents should know about this company: what it makes, who is on the floor, what matters most (safety, throughput, quality), vocabulary the floor uses, anything to avoid.\n`, "repo", true);
   }
 }
 
@@ -328,6 +328,23 @@ async function createDraftVersion(company, mod) {
   const files = await versionFiles(company, mod, row.live_version);
   await insertVersion(company, mod, next, "build", null, files);
   return { version: next, dir: versionDir(company, mod, next) };
+}
+
+// Remove a draft version that never reached staging (an aborted build).
+async function dropDraftVersion(company, mod, version) {
+  const row = await getModule(company, mod);
+  if (!row || row.live_version === version || row.staged_version === version) throw new Error("version is in use");
+  const v = (await q("SELECT source FROM platform.module_versions WHERE company=$1 AND module=$2 AND version=$3", [company, mod, version])).rows[0];
+  if (!v || v.source !== "build") return;
+  await q("DELETE FROM platform.module_versions WHERE company=$1 AND module=$2 AND version=$3", [company, mod, version]);
+  fs.rmSync(versionDir(company, mod, version), { recursive: true, force: true });
+  await logEvent("draft_dropped", `${company}/${mod}`, { version });
+}
+
+// Forget every mount of a company (company deletion).
+function unmountCompany(company) {
+  for (const k of [...mounts.keys()]) if (k.startsWith(`${company}/`)) mounts.delete(k);
+  fs.rmSync(path.join(MODULES_DIR, company), { recursive: true, force: true });
 }
 
 async function stageVersion(company, mod, version) {
@@ -436,5 +453,5 @@ function attach(app) {
 module.exports = {
   MODULES_DIR, REPO_MODULES_DIR, versionDir, readManifest, pageEntries, screenFor, loadAll, attach,
   createDraftVersion, stageVersion, deployVersion, rollback, goToVersion, versionHistory, versionFiles, persistVersion, importFromRepo,
-  unstage, getModule, libraryModules, tourFor, mountLiveIfNeeded: mountLive, hooks, materialize,
+  unstage, getModule, libraryModules, tourFor, mountLiveIfNeeded: mountLive, hooks, materialize, dropDraftVersion, unmountCompany,
 };

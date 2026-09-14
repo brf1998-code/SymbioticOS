@@ -119,9 +119,19 @@ async function plainSummary(batch, agentText, isBatch) {
   return { title: String(data.title || "").slice(0, 80), what_changed: String(data.what_changed || "").slice(0, 600), costUsd };
 }
 
+// The AbortController of every build agent in flight, by run id, so a manager
+// can abort a run that is stuck or wrong instead of waiting on the cost cap.
+const ACTIVE = new Map();
+
 async function failRun(runId, err) {
-  console.error(`run ${runId} failed:`, err);
   if (err && typeof err.costUsd === "number") await addCost(runId, err.costUsd);
+  const before = await getRun(runId);
+  if (before && before.status === "cancelled") {
+    // the manager aborted it; cancel() already recorded that
+    await log(runId, { step: before.step, note: "agent stopped" });
+    return;
+  }
+  console.error(`run ${runId} failed:`, err);
   if (err && err.diag) await log(runId, { step: "diag", note: JSON.stringify(err.diag) });
   await log(runId, { step: "error", note: String(err.message || err) });
   await setRun(runId, { status: "failed" });
@@ -141,22 +151,39 @@ async function advance(runId) {
     if (run.step === "confirm_requirement") {
       // Agent restates the requirement in plain language; manager must confirm
       // before any code is written.
-      let requirement;
+      // Three layers so the manager actually reads it: one BLUF sentence, one
+      // sentence per change (each gets a check box on the board), and the full
+      // text behind "see more" (editable before confirming).
+      let requirement, bluf = "", items = [];
       let cost = 0;
+      const n = (run.proposal_ids || [run.proposal_id]).length;
       if (haveKey()) {
         const out = await runStructured({
           model: await modelFor(company, "propose"),
-          system: "Restate a change requirement for a factory software module in plain language. The reader is a production manager. List concretely what will change, on which screen, and what will NOT change. No code talk.",
-          prompt: `${batch}\n\nRestate the requirement${isBatch ? " for the whole batch, change by change," : ""} as: (1) what changes and where, (2) what stays the same, (3) how we will know it works.`,
-          schema: { type: "object", properties: { requirement: { type: "string" } }, required: ["requirement"] },
+          system: "Restate a change requirement for a factory software module in plain language. The reader is a production manager who will skim. No code talk. Never use em or en dashes.",
+          prompt: `${batch}\n\nProduce three things.\n1. bluf: ONE sentence, at most 25 words, saying what will be different for the floor after this ${isBatch ? "batch" : "change"}.\n2. items: exactly ${n} entries, one per change in order (change 1 first). Each summary is ONE sentence, at most 20 words, naming the screen and what changes on it.\n3. requirement: the full statement: (1) what changes and where, (2) what stays the same, (3) how we will know it works${isBatch ? ", change by change" : ""}.`,
+          schema: {
+            type: "object",
+            properties: {
+              bluf: { type: "string" },
+              items: { type: "array", items: { type: "object", properties: { change: { type: "integer" }, summary: { type: "string" } }, required: ["change", "summary"] } },
+              requirement: { type: "string" },
+            },
+            required: ["bluf", "items", "requirement"],
+          },
           toolName: "requirement",
         });
-        requirement = out.data.requirement; cost = out.costUsd;
+        requirement = out.data.requirement; bluf = out.data.bluf || ""; items = Array.isArray(out.data.items) ? out.data.items : []; cost = out.costUsd;
       } else {
         requirement = `[AI not configured] Requirement to confirm manually:\n${batch}`;
+        bluf = "AI is not configured; read the proposals below and confirm by hand.";
       }
+      // one line per change, whatever the model returned
+      const ps = await loadProposals(run.proposal_ids || [run.proposal_id]);
+      items = ps.map((p, i) => ({ change: i + 1, summary: String((items[i] && items[i].summary) || p.body.split(/(?<=[.!?])\s/)[0]).slice(0, 240) }));
       await addCost(runId, cost);
-      await setRun(runId, { requirement, status: "waiting" });
+      const cur0 = await getRun(runId);
+      await setRun(runId, { requirement, status: "waiting", evidence: { ...cur0.evidence, req_bluf: bluf.slice(0, 400), req_items: items } });
       await log(runId, { step: "confirm_requirement", note: "requirement drafted, waiting on manager confirmation" });
       return; // resumes via confirmRequirement()
     }
@@ -181,9 +208,14 @@ async function advance(runId) {
       const guidance = await guidanceFor(company, mod);
       const { model, substituted } = await buildModelFor(company, run.model);
       if (substituted) await log(runId, { step: "build", note: `${substituted} cannot run as the build agent; building with ${model} instead` });
-      const { text, costUsd } = await runAgent({
+      const ctl = new AbortController();
+      ACTIVE.set(runId, ctl);
+      let agentOut;
+      try {
+        agentOut = await runAgent({
         model,
         capUsd,
+        signal: ctl.signal,
         system: guidance.text,
         dir: draft.dir,
         prompt:
@@ -197,8 +229,11 @@ Rules:
 - ${run.lane === "ui" ? "This is a UI-class change. Do NOT modify routes.js logic, module.json smoke list, or migrations. Touch pages/ and presentation only." : "This is a functionality-class change. If the data model must change, add a NEW migrations/NNN.sql file (additive only: CREATE TABLE / ALTER TABLE ADD COLUMN / CREATE INDEX / INSERT seed rows; bare table names, no schema prefixes). Never edit an existing migration file."}
 ${isBatch ? "- Implement every change in the batch. Keep them independent where you can so one can be understood without the others.\n" : ""}- Keep the module's existing style and structure. Plain HTML/JS, no frameworks.
 - Make the smallest change that removes the reported friction.
+- Mark what you touched so the preview can highlight it: put data-changed="v${draft.version}" on every HTML element you add or visibly change (the element itself, not its parent). One attribute per element, nothing else; it costs nothing at runtime and the preview outlines those elements.
 - Your final message must be ONLY a short bullet list of what changed (one bullet per change, naming the screen), in plain language for a production manager. No preamble, no headings, no code talk.`,
-      });
+        });
+      } finally { ACTIVE.delete(runId); }
+      const { text, costUsd } = agentOut;
       await addCost(runId, costUsd);
       const cur = await getRun(runId);
       await setRun(runId, { evidence: { ...cur.evidence, build_summary: text, docs: guidance.names, model, cap_usd: capUsd } });
@@ -274,7 +309,7 @@ async function runStructuredCrossCheck(run, proposal, cur, model) {
   } catch (e) { diff = e.stdout || ""; } // diff exits 1 when files differ
   return runStructured({
     model,
-    system: "You are an independent reviewer of a code change to a factory software module. You did not write this change. Review it strictly against the confirmed requirement. Fail it if it changes anything beyond the requirement, lands on a different screen than the one named, breaks existing behavior, edits an existing migration, or uses forbidden SQL operations.",
+    system: "You are an independent reviewer of a code change to a factory software module. You did not write this change. Review it strictly against the confirmed requirement. Fail it if it changes anything beyond the requirement, lands on a different screen than the one named, breaks existing behavior, edits an existing migration, or uses forbidden SQL operations. One thing is expected and never a violation: data-changed=\"vN\" attributes on the elements the builder touched (the preview uses them to highlight what is new).",
     prompt: `Confirmed requirement:\n${cur.requirement || proposal.body}\n\nUnified diff of the change (v${run.from_version} -> v${cur.to_version}):\n${diff.slice(0, 40000) || "(no textual diff found)"}`,
     schema: CROSS_CHECK_SCHEMA,
     toolName: "verdict",
@@ -319,7 +354,7 @@ async function deploy(runId) {
   const ev = run.evidence || {};
   const summary = (ev.what_changed || ev.build_summary || "").slice(0, 600);
   for (const p of ps) {
-    await q("UPDATE platform.feedback SET status='done', outcome=$2, updated_at=now() WHERE id=$1",
+    await q("UPDATE platform.feedback SET status='done', outcome=$2, batch_id=NULL, updated_at=now() WHERE id=$1",
       [p.feedback_id, `Deployed v${result.to}${ps.length > 1 ? ` (batch of ${ps.length})` : ""}: ${summary || p.body.slice(0, 500)}`]);
   }
   kickQueue(run.company, run.module).catch((e) => console.error("queue kick failed:", e));
@@ -380,18 +415,45 @@ async function override(runId) {
   advance(runId).catch((e) => failRun(runId, e));
 }
 
-// Cancel a queued, failed, or gate-waiting run: proposals go back to reviewing.
+// Cancel a queued, failed, or gate-waiting run, or ABORT one that is running
+// (the agent process is killed; whatever it wrote in the draft is dropped).
+// Proposals go back to reviewing; the items leave whatever batch they were in.
 async function cancel(runId) {
   const run = await getRun(runId);
-  if (!["queued", "failed", "waiting"].includes(run.status)) throw new Error("only queued, failed, or waiting runs can be cancelled");
+  if (!["queued", "failed", "waiting", "running"].includes(run.status)) throw new Error("this run has already ended");
+  const wasRunning = run.status === "running";
+  await setRun(runId, { status: "cancelled" });
+  if (wasRunning) {
+    const ctl = ACTIVE.get(runId);
+    if (ctl) ctl.abort();
+    await log(runId, { step: run.step, note: `aborted by manager during ${run.step}${ctl ? "; agent process stopped" : ""}` });
+  }
   const modRow = await registry.getModule(run.company, run.module);
   if (run.to_version && modRow && modRow.staged_version === run.to_version) await registry.unstage(run.company, run.module);
-  await setRun(runId, { status: "cancelled" });
+  // a draft that was never staged is a dead version; drop it so the Versions panel stays honest
+  if (run.to_version && modRow && modRow.live_version !== run.to_version && modRow.staged_version !== run.to_version) {
+    await registry.dropDraftVersion(run.company, run.module, run.to_version).catch((e) => console.error("drop draft failed:", e.message));
+  }
   const ps = await loadProposals(run.proposal_ids || [run.proposal_id]);
   await q("UPDATE platform.proposals SET status='draft' WHERE id = ANY($1::int[])", [ps.map((p) => p.id)]);
-  await q("UPDATE platform.feedback SET status='reviewing', updated_at=now() WHERE id = ANY($1::int[])", [ps.map((p) => p.feedback_id)]);
-  await log(runId, { step: run.step, note: "cancelled by manager; proposals back to review" });
+  await q("UPDATE platform.feedback SET status='reviewing', batch_id=NULL, updated_at=now() WHERE id = ANY($1::int[])", [ps.map((p) => p.feedback_id)]);
+  if (!wasRunning) await log(runId, { step: run.step, note: "cancelled by manager; proposals back to review" });
   kickQueue(run.company, run.module).catch((e) => console.error("queue kick failed:", e));
 }
 
-module.exports = { startRun, confirmRequirement, deploy, rollbackRun, retry, cancel, fix, override, getRun, smokeCheck, kickQueue, MAX_FIX_ROUNDS };
+// Boot: a run that was "running" when the platform restarted has no process
+// behind it any more. Mark it failed so the board offers retry or cancel
+// instead of a spinner that never ends, then let the queue move.
+async function sweepOrphans() {
+  const rows = (await q("SELECT id, company, module, step FROM platform.build_runs WHERE status='running'")).rows;
+  for (const r of rows) {
+    await log(r.id, { step: "error", note: "the platform restarted while this build was running; nothing was deployed. Retry or cancel." });
+    await setRun(r.id, { status: "failed" });
+    console.log(`[pipeline] run #${r.id} (${r.company}/${r.module}) was running at restart; marked failed`);
+  }
+  const mods = (await q("SELECT DISTINCT company, module FROM platform.build_runs WHERE status='queued'")).rows;
+  for (const m of mods) kickQueue(m.company, m.module).catch((e) => console.error("queue kick failed:", e));
+  return rows.length;
+}
+
+module.exports = { startRun, confirmRequirement, deploy, rollbackRun, retry, cancel, fix, override, getRun, smokeCheck, kickQueue, sweepOrphans, MAX_FIX_ROUNDS };

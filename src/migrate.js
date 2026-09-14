@@ -18,8 +18,10 @@ const { q, pool, logEvent } = require("./db");
 
 const KEEP_SNAPSHOTS = Number(process.env.SOS_KEEP_SNAPSHOTS || 10);
 
-function liveSchema(company, mod) { return `mod_${company}_${mod}`; }
-function stagingSchema(company, mod) { return `stg_${company}_${mod}`; }
+// Schema names must be bare SQL identifiers; slugs may carry dashes.
+const ident = (s) => String(s).replace(/[^a-z0-9_]/gi, "_");
+function liveSchema(company, mod) { return `mod_${ident(company)}_${ident(mod)}`; }
+function stagingSchema(company, mod) { return `stg_${ident(company)}_${ident(mod)}`; }
 
 // ---- validation -----------------------------------------------------------
 // Allowed statement shapes (whitespace-insensitive, case-insensitive):
@@ -139,7 +141,7 @@ async function rebuildStagingClone(company, mod) {
 
 // ---- snapshots (in-database) ----------------------------------------------
 async function snapshotSchema(company, mod, version) {
-  const name = `snap_${company}_${mod}_${Date.now()}`;
+  const name = `snap_${ident(company)}_${ident(mod)}_${Date.now()}`;
   await cloneSchema(liveSchema(company, mod), name);
   return name;
 }

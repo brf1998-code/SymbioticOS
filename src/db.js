@@ -43,7 +43,16 @@ CREATE TABLE IF NOT EXISTS platform.companies (
   model_propose TEXT,
   model_build   TEXT,
   model_review  TEXT,
+  brand         JSONB,                             -- { url, status, colors, font, icon (data url), cost_usd, built_at }
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS platform.batches (
+  id         SERIAL PRIMARY KEY,
+  company    TEXT NOT NULL,
+  module     TEXT NOT NULL,
+  run_id     INTEGER,                              -- set when the batch was built; NULL = still open
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS platform.settings (
@@ -85,6 +94,7 @@ CREATE TABLE IF NOT EXISTS platform.feedback (
   name       TEXT,
   status     TEXT NOT NULL DEFAULT 'new',          -- new|reviewing|in_progress|done|declined
   recurrence INTEGER NOT NULL DEFAULT 1,
+  batch_id   INTEGER,                              -- open batch this item sits in (platform.batches)
   outcome    TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -189,6 +199,8 @@ const UPGRADES = [
   "ALTER TABLE platform.feedback ADD COLUMN IF NOT EXISTS screen TEXT",
   "ALTER TABLE platform.feedback ADD COLUMN IF NOT EXISTS target_file TEXT",
   "ALTER TABLE platform.feedback ADD COLUMN IF NOT EXISTS review_id INTEGER",
+  "ALTER TABLE platform.feedback ADD COLUMN IF NOT EXISTS batch_id INTEGER",
+  "ALTER TABLE platform.companies ADD COLUMN IF NOT EXISTS brand JSONB",
   "ALTER TABLE platform.proposals ADD COLUMN IF NOT EXISTS target_file TEXT",
   "ALTER TABLE platform.proposals ADD COLUMN IF NOT EXISTS model TEXT",
   "ALTER TABLE platform.proposals ADD COLUMN IF NOT EXISTS cost_usd NUMERIC(10,4) NOT NULL DEFAULT 0",
@@ -203,6 +215,33 @@ async function initPlatformSchema() {
   await q(PLATFORM_SCHEMA);
   for (const u of UPGRADES) await q(u);
   await upgradeSingleTenant();
+  await dedupeCompanyDocs();
+}
+
+// UNIQUE (company, module, name) never fired for company-wide docs because
+// module is NULL there, so every boot seeded another COMPANY.md and every save
+// of a company-wide doc added a row. Keep one per (company, name): the newest
+// user-edited copy if there is one, else the oldest; then a partial unique
+// index stops it happening again.
+async function dedupeCompanyDocs() {
+  const dups = (await q(`
+    SELECT company, name, array_agg(id ORDER BY (source='user') DESC, updated_at DESC, id ASC) AS ids
+      FROM platform.agent_docs WHERE module IS NULL GROUP BY company, name HAVING count(*) > 1`)).rows;
+  for (const d of dups) {
+    await q("DELETE FROM platform.agent_docs WHERE id = ANY($1::int[])", [d.ids.slice(1)]);
+    console.log(`[db] removed ${d.ids.length - 1} duplicate ${d.name} for ${d.company}`);
+  }
+  await q("CREATE UNIQUE INDEX IF NOT EXISTS agent_docs_company_wide ON platform.agent_docs (company, name) WHERE module IS NULL");
+}
+
+// Insert or update one agent doc. seedOnly: leave an existing doc alone.
+async function upsertDoc(company, mod, name, content, source, seedOnly) {
+  const cur = (await q("SELECT id FROM platform.agent_docs WHERE company=$1 AND module IS NOT DISTINCT FROM $2 AND name=$3", [company, mod || null, name])).rows[0];
+  if (cur) {
+    if (seedOnly) return cur;
+    return (await q("UPDATE platform.agent_docs SET content=$2, source=$3, updated_at=now() WHERE id=$1 RETURNING *", [cur.id, content, source])).rows[0];
+  }
+  return (await q("INSERT INTO platform.agent_docs (company, module, name, content, source) VALUES ($1,$2,$3,$4,$5) RETURNING *", [company, mod || null, name, content, source])).rows[0];
 }
 
 // First boot after the multi-company change: the original release kept
@@ -253,4 +292,4 @@ async function setSetting(key, value) {
   await q("INSERT INTO platform.settings (key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [key, String(value)]);
 }
 
-module.exports = { pool, q, scopedDb, initPlatformSchema, logEvent, getSetting, setSetting, DATABASE_URL };
+module.exports = { pool, q, scopedDb, initPlatformSchema, logEvent, getSetting, setSetting, upsertDoc, DATABASE_URL };

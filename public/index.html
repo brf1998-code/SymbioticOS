@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<link rel="icon" id="favicon" href="/api/c/demo/icon"><link rel="apple-touch-icon" id="touchicon" href="/api/c/demo/icon">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Symbiotic OS · Improvement Board</title>
 <style>
@@ -11,13 +12,16 @@
   * { box-sizing:border-box; margin:0; }
   body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); padding:0 0 56px; }
   a { color:var(--navy); }
-  .band { background:var(--navy); color:#fff; padding:14px 22px; }
-  .band .row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; max-width:1500px; margin:0 auto; }
-  .band h1 { font-size:20px; font-weight:800; letter-spacing:.01em; }
-  .band h1 small { font-size:12.5px; opacity:.75; font-weight:500; margin-left:8px; }
+  .band { background:var(--navy); color:#fff; padding:12px 22px; }
+  .band .inner { display:flex; align-items:center; gap:18px; max-width:1500px; margin:0 auto; }
+  .band .main { flex:1 1 auto; min-width:0; }
+  .band .row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .band h1 { font-size:20px; font-weight:800; letter-spacing:.01em; display:flex; align-items:center; gap:10px; }
+  .band h1 small { font-size:12.5px; opacity:.75; font-weight:500; }
+  .band h1 img.mark { width:26px; height:26px; border-radius:6px; background:#fff; display:none; }
   .band .right { margin-left:auto; font-size:12.5px; opacity:.9; }
   .band .right a { color:#fff; }
-  .modstrip { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; max-width:1500px; margin-left:auto; margin-right:auto; }
+  .modstrip { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
   .modcard { background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); border-radius:10px; padding:8px 12px; font-size:12.5px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .modcard b { font-size:13.5px; }
   .modcard a { color:#fff; text-decoration:none; background:rgba(255,255,255,.14); border-radius:14px; padding:4px 10px; font-weight:600; }
@@ -85,9 +89,22 @@
   .outcome { background:var(--greenSoft); color:var(--green); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; }
   .fail-note { background:#fdeceb; color:var(--red); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; }
   a.demo { display:inline-block; color:#fff; background:var(--amber); font-weight:700; font-size:12.5px; border-radius:7px; padding:8px 12px; margin-top:8px; text-decoration:none; }
-  .batchbar { position:sticky; top:0; z-index:5; background:#fff; border:1px solid var(--line); border-radius:10px; padding:8px 12px; margin-bottom:12px; font-size:13px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; box-shadow:0 4px 12px rgba(28,36,46,.08); }
-  .batchbar button { margin:0; }
-  label.pick { display:block; font-size:12px; color:var(--steel); margin-top:8px; cursor:pointer; }
+  /* batches: a card in a batch is marked; the column header carries the batch actions */
+  .card.inbatch { border-left:4px solid var(--purple); }
+  .chip.batch { background:var(--purple); }
+  .colbatch { background:#f3eefa; border:1px solid #cdb8e8; border-radius:9px; padding:8px 10px; margin:0 0 10px; font-size:12.5px; }
+  .colbatch b { display:block; margin-bottom:4px; }
+  .colbatch button { margin:6px 6px 0 0; min-height:32px; padding:6px 10px; }
+  .colbatch select { font-size:12px; margin-top:6px; }
+  .colbatch .meta { margin-top:2px; }
+  button:disabled, button[disabled] { opacity:.4; cursor:not-allowed; }
+  /* requirement gate: BLUF, one check box per change, full text behind see more */
+  .req .bluf { font-weight:800; font-size:13.5px; margin-bottom:6px; white-space:normal; }
+  .req .item { display:flex; gap:8px; align-items:flex-start; padding:5px 0; border-top:1px solid rgba(0,0,0,.06); white-space:normal; line-height:1.4; }
+  .req .item input { margin-top:3px; width:16px; height:16px; flex:none; }
+  .req details { margin-top:6px; white-space:normal; } .req details summary { cursor:pointer; font-weight:700; color:var(--navy); font-size:12px; }
+  .req details .full { white-space:pre-wrap; margin-top:6px; font-size:12.5px; }
+  .req .gate { font-size:11.5px; color:var(--steel); margin-top:6px; white-space:normal; }
   select, textarea { font-family:inherit; font-size:12.5px; border:1px solid var(--line); border-radius:7px; padding:6px; }
   textarea { width:100%; min-height:90px; }
   .edit { margin-top:8px; display:grid; gap:6px; }
@@ -104,11 +121,12 @@
   details.platform .hint { font-size:12.5px; color:var(--steel); margin:8px 0; line-height:1.5; }
   details.platform .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:10px; }
   .empty { color:var(--steel); font-size:12.5px; padding:10px 4px; }
-  /* board QR: the tile in the band, and the big printable card behind it */
-  .qrtile { margin-left:14px; background:#fff; border-radius:10px; padding:6px 6px 4px; text-align:center; cursor:pointer; border:1px solid rgba(255,255,255,.35); line-height:0; }
-  .qrtile img { width:88px; height:88px; display:block; }
+  /* board QR: the tile at the right end of the band (spans title and module strip), and the big printable card behind it */
+  .qrtile { flex:none; align-self:stretch; background:#fff; border-radius:10px; padding:6px 6px 5px; text-align:center; cursor:pointer; border:1px solid rgba(255,255,255,.35); line-height:0; display:flex; flex-direction:column; justify-content:center; }
+  .qrtile img { width:112px; height:112px; display:block; margin:0 auto; }
   .qrtile span { display:block; font-size:9.5px; line-height:1.2; color:var(--steel); font-weight:700; text-transform:uppercase; letter-spacing:.04em; margin-top:4px; }
   .qrtile:hover, .qrtile:focus { outline:2px solid rgba(255,255,255,.6); }
+  @media (max-width: 640px) { .band .inner { flex-wrap:wrap; } .qrtile { align-self:auto; order:2; } .qrtile img { width:88px; height:88px; } }
   #qrmodal { display:none; position:fixed; inset:0; background:rgba(28,36,46,.55); z-index:20; align-items:center; justify-content:center; padding:20px; }
   #qrmodal.on { display:flex; }
   .qrcard { background:#fff; border-radius:14px; padding:22px; width:100%; max-width:420px; text-align:center; }
@@ -130,15 +148,19 @@
 </head>
 <body>
   <div class="band">
-    <div class="row">
-      <h1>Improvement Board <small id="coname"></small></h1>
-      <span class="right" id="who"></span><span id="global-busy"><span class="spin"></span><span id="global-busy-text">working</span></span>
+    <div class="inner">
+      <div class="main">
+        <div class="row">
+          <h1><img class="mark" id="comark" alt="">Improvement Board <small id="coname"></small></h1>
+          <span class="right" id="who"></span><span id="global-busy"><span class="spin"></span><span id="global-busy-text">working</span></span>
+        </div>
+        <div class="modstrip" id="modules"></div>
+      </div>
       <div class="qrtile" id="qrtile" role="button" tabindex="0" title="Scan to open this board"
            onclick="openQr()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openQr();}">
         <img id="qrimg" alt="QR code that opens this board"><span>Scan for<br>this board</span>
       </div>
     </div>
-    <div class="modstrip" id="modules"></div>
   </div>
   <div class="wrap">
     <div class="warn" id="aiwarn" style="display:none"></div>
@@ -146,10 +168,9 @@
     <div class="kpis" id="kpis"></div>
     <div class="toolbar" id="toolbar"></div>
     <div id="reviews"></div>
-    <div class="batchbar" id="batchbar" style="display:none"></div>
     <div class="cols">
-      <div class="col c-new"><h2>Feedback <span class="n" id="n-new">0</span></h2><div id="col-new"></div></div>
-      <div class="col c-reviewing"><h2>Reviewing <span class="n" id="n-reviewing">0</span></h2><div id="col-reviewing"></div></div>
+      <div class="col c-new"><h2>Feedback <span class="n" id="n-new">0</span></h2><div id="batch-new"></div><div id="col-new"></div></div>
+      <div class="col c-reviewing"><h2>Reviewing <span class="n" id="n-reviewing">0</span></h2><div id="batch-reviewing"></div><div id="col-reviewing"></div></div>
       <div class="col c-in_progress"><h2>In progress <span class="n" id="n-in_progress">0</span></h2><div id="col-in_progress"></div></div>
       <div class="col c-done"><h2>Done and declined <span class="n" id="n-done">0</span></h2><div id="col-done"></div></div>
     </div>
@@ -183,9 +204,8 @@ const STEP_LABEL = {
   visual_check: "Visual check", test_run: "Internal tests", await_deploy: "Manager deploy gate",
 };
 let DATA = null;
-const SEL = new Set();
-let BATCH_MODEL = null; // per-batch override; the batch bar defaults to the company build model
-let EDITING = null;
+let EDITING = null;            // proposal id being adjusted, or "req:<runId>" while a requirement is being edited; pauses the reload
+const CHECKED = new Set();     // "runId:i" boxes the manager has ticked at the requirement gate (survives the 4s reload)
 const MGR = () => DATA && (DATA.role === "manager" || DATA.role === "admin");
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
 function modelLabel(id) { const m = (DATA.models.list || []).find(x => x.id === id); return m ? m.label : (id || ""); }
@@ -249,14 +269,14 @@ function renderReviews() {
     return `<details class="reviewbar" open><summary><b>System review #${r.id}</b> · ${esc(r.module)} v${r.version} · ${esc(modelLabel(r.model))} · ${r.item_count} recommendations · $${Number(r.cost_usd).toFixed(2)} · ${new Date(r.created_at).toLocaleString()}
         <span class="meta" style="display:inline">${counts.reviewing} held · ${counts.in_progress} building · ${counts.done} done · ${counts.declined} declined</span></summary>
       <div class="sum">${esc(r.summary || "")}</div>
-      ${MGR() ? `<button class="go" onclick="selectReview(${r.id})">Select all ${open.length} held items for one batch</button>${groups > 1 ? `<button class="go" style="background:var(--navy)" onclick="buildReviewByScreen(${r.id})">Build by screen (${groups} runs, one after another)</button>` : ""}<button class="no" onclick="declineReview(${r.id})">Decline the rest</button>
+      ${MGR() ? `<button class="go" onclick="selectReview(${r.id})">Put all ${open.length} held items in the batch</button>${groups > 1 ? `<button class="go" style="background:var(--navy)" onclick="buildReviewByScreen(${r.id})">Build by screen (${groups} runs, one after another)</button>` : ""}<button class="no" onclick="declineReview(${r.id})">Decline the rest</button>
       <div class="meta">One batch is one agent run holding every change at once; past four or five changes the agent starts getting things wrong and the reviewer fails it. By screen keeps each run small: ${Object.entries(byScreen).map(([k, n]) => `${esc(screenLabel(r.module, k))} ${n}`).join(", ")}.</div>` : ""}
     </details>`;
   }).join("");
 }
-function selectReview(id) {
-  for (const f of DATA.feedback) if (f.review_id === id && f.status === "reviewing" && f.proposal_id) SEL.add(f.proposal_id);
-  load();
+async function selectReview(id) {
+  const ids = DATA.feedback.filter(f => f.review_id === id && f.status === "reviewing" && f.proposal_id).map(f => f.id);
+  await act(`/api/c/${SLUG}/batch/add`, { feedback_ids: ids });
 }
 // One run per screen, queued behind each other, with the company build model.
 async function buildReviewByScreen(id) {
@@ -291,7 +311,8 @@ function pendingKey(url) {
   if ((m = /\/api\/feedback\/(\d+)\/(\w+)/.exec(url))) return ["fb:" + m[1], ACTION_LABELS[m[2]] || "Working"];
   if ((m = /\/api\/proposals\/(\d+)\//.exec(url))) { const fb = (DATA.feedback || []).find(f => f.proposal_id === Number(m[1])); return ["fb:" + (fb ? fb.id : m[1]), ACTION_LABELS.decide]; }
   if ((m = /\/api\/runs\/(\d+)\/(\w+)/.exec(url))) return ["run:" + m[1], ACTION_LABELS[m[2]] || "Working"];
-  if (/\/api\/runs\/batch/.test(url)) return ["batch", ACTION_LABELS.batch];
+  if (/\/api\/runs\/batch/.test(url) || /\/batch\/\d+\/build/.test(url)) return ["batch", ACTION_LABELS.batch];
+  if (/\/batch\//.test(url)) return ["batch", "Updating the batch"];
   return ["global", "Working"];
 }
 function pendingHtml(key) { const l = PENDING.get(key); return l ? `<div class="working"><span class="spin"></span>${esc(l)}…</div>` : ""; }
@@ -314,18 +335,52 @@ async function act(url, body) {
   await load();
 }
 
-function toggleSel(pid, on) { if (on) SEL.add(pid); else SEL.delete(pid); renderBatchBar(); }
-function renderBatchBar() {
-  const bar = document.getElementById("batchbar");
-  if (!SEL.size) { bar.style.display = "none"; return; }
-  bar.style.display = "flex";
-  const cap = Math.min(DATA.maxRunUsd * SEL.size, DATA.maxBatchUsd || 6);
-  bar.innerHTML = `<b>${SEL.size}</b> proposal(s) selected · build with <select id="batchmodel">${modelOptions(BATCH_MODEL || DATA.models.build)}</select> <span class="meta" style="display:inline">· stops itself past $${cap.toFixed(2)}</span>
-    <button class="go" onclick="buildBatch()">Build together as one change</button><button class="quiet" onclick="SEL.clear();renderBatchBar();load()">Clear</button>`;
+// ---- batches ----------------------------------------------------------------
+// A batch lives on the server (one open batch per module). Cards join or leave
+// it at any station; the panels at the top of the Feedback and Reviewing
+// columns carry the actions: review every new item in the batch, build every
+// reviewed item together, clear.
+function batchOf(fb) { return fb.batch_id ? (DATA.batches || []).find(b => b.id === fb.batch_id) : null; }
+function inBatch(fb) { return Boolean(batchOf(fb)); }
+function batchItems(b) { return DATA.feedback.filter(f => f.batch_id === b.id); }
+function renderColumnBatches() {
+  const newBox = document.getElementById("batch-new"), revBox = document.getElementById("batch-reviewing");
+  if (!MGR()) { newBox.innerHTML = ""; revBox.innerHTML = ""; return; }
+  const modTitle = m => (DATA.modules.find(x => x.name === m) || {}).title || m;
+  let nh = "", rh = "";
+  for (const b of DATA.batches || []) {
+    const items = batchItems(b);
+    if (!items.length) continue;
+    const fresh = items.filter(f => f.status === "new"), ready = items.filter(f => f.status === "reviewing" && f.proposal_id);
+    const busy = PENDING.has("batch") ? "busy" : "";
+    if (fresh.length) nh += `<div class="colbatch ${busy}" data-key="batch">${pendingHtml("batch")}<b>Batch · ${esc(modTitle(b.module))}: ${fresh.length} new${ready.length ? `, ${ready.length} reviewed` : ""}</b>
+      <button class="primary" onclick="reviewBatch(${b.id})">Review the ${fresh.length} new with AI</button><button class="quiet" onclick="if(confirm('Take every item out of this batch?'))act('/api/c/${SLUG}/batch/${b.id}/clear')">Clear batch</button>
+      <div class="meta">Each gets its own proposal, then the batch waits in Reviewing to be built together.</div></div>`;
+    if (ready.length || (!fresh.length && items.length)) {
+      const cap = Math.min(DATA.maxRunUsd * Math.max(1, ready.length), DATA.maxBatchUsd || 6);
+      rh += `<div class="colbatch ${busy}" data-key="batch">${pendingHtml("batch")}<b>Batch · ${esc(modTitle(b.module))}: ${ready.length} ready${fresh.length ? `, ${fresh.length} not reviewed yet` : ""}</b>
+        build with <select id="bm-${b.id}">${modelOptions(DATA.models.build)}</select> <span class="meta" style="display:inline">· stops itself past $${cap.toFixed(2)}</span>
+        <div><button class="go" ${ready.length ? "" : "disabled"} onclick="buildBatch(${b.id})">Build the ${ready.length} together as one change</button><button class="quiet" onclick="if(confirm('Take every item out of this batch?'))act('/api/c/${SLUG}/batch/${b.id}/clear')">Clear batch</button></div>
+        ${fresh.length ? `<div class="meta">The ${fresh.length} not yet reviewed stay out of the build and leave the batch when it starts.</div>` : ""}</div>`;
+    }
+  }
+  newBox.innerHTML = nh; revBox.innerHTML = rh;
 }
-async function buildBatch() {
-  const ids = [...SEL]; const model = document.getElementById("batchmodel").value; SEL.clear(); BATCH_MODEL = null; renderBatchBar();
-  await act("/api/runs/batch", { proposal_ids: ids, model });
+async function reviewBatch(id) {
+  const b = (DATA.batches || []).find(x => x.id === id);
+  const fresh = batchItems(b).filter(f => f.status === "new");
+  PENDING.set("batch", `Sending ${fresh.length} to the AI for proposals`); renderBusy();
+  for (const el of document.querySelectorAll('[data-key="batch"]')) { el.classList.add("busy"); if (!el.querySelector(".working")) el.insertAdjacentHTML("beforeend", pendingHtml("batch")); }
+  for (const f of fresh) {
+    const r = await fetch(`/api/feedback/${f.id}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || "failed"); break; }
+  }
+  PENDING.delete("batch"); renderBusy();
+  load();
+}
+async function buildBatch(id) {
+  const sel = document.getElementById("bm-" + id);
+  await act(`/api/c/${SLUG}/batch/${id}/build`, { model: sel ? sel.value : undefined });
 }
 
 function stepsHtml(run) {
@@ -338,6 +393,43 @@ function stepsHtml(run) {
     const spin = (i === idx && run.status === "running") ? '<span class="pulse"></span>' : "";
     return `<div class="step"><span class="dot ${cls}"></span>${spin}${STEP_LABEL[s] || s}</div>`;
   }).join("") + "</div>";
+}
+
+// The requirement gate. Three layers so it actually gets read: one BLUF line,
+// one short line per change with a check box, and the full text behind "See
+// the full requirement". Confirm stays greyed until every box is ticked.
+// Adjust opens the full text for editing before confirming.
+function reqHtml(run, single) {
+  const ev = run.evidence || {};
+  const items = (ev.req_items && ev.req_items.length) ? ev.req_items : [{ change: 1, summary: String(run.requirement || "").split(/(?<=[.!?])\s/)[0] }];
+  const bluf = ev.req_bluf || (single ? items[0].summary : `${items.length} changes in this batch.`);
+  const editing = EDITING === "req:" + run.id;
+  const all = items.every((_, i) => CHECKED.has(run.id + ":" + i));
+  let h = `<div class="req" id="req-${run.id}"><div class="bluf">${esc(bluf)}</div>`;
+  h += items.map((it, i) => `<label class="item"><input type="checkbox" ${CHECKED.has(run.id + ":" + i) ? "checked" : ""} onchange="tickReq(${run.id}, ${i}, this.checked)"><span><b>${items.length > 1 ? (it.change || i + 1) + ". " : ""}</b>${esc(it.summary)}</span></label>`).join("");
+  if (editing) h += `<textarea id="reqedit-${run.id}" style="margin-top:8px;min-height:160px">${esc(run.requirement)}</textarea>`;
+  else h += `<details><summary>See the full requirement</summary><div class="full">${esc(run.requirement)}</div></details>`;
+  h += `<div class="gate">${all ? "Every change checked." : "Tick each change to confirm you read it; then the build can start."}</div></div>`;
+  if (MGR()) {
+    if (editing) h += `<button class="go" ${all ? "" : "disabled"} onclick="confirmReq(${run.id}, true)">Save and build</button><button class="quiet" onclick="EDITING=null;load()">Cancel edit</button>`;
+    else h += `<button class="go" id="reqgo-${run.id}" ${all ? "" : "disabled"} title="${all ? "" : "tick every change first"}" onclick="confirmReq(${run.id}, false)">Confirm requirement and build</button><button class="quiet" onclick="EDITING='req:${run.id}';load()">Adjust the requirement</button><button class="no" onclick="if(confirm('Cancel this build? The proposals go back to Reviewing.'))act('/api/runs/${run.id}/cancel')">Cancel</button>`;
+  }
+  return h;
+}
+function tickReq(runId, i, on) {
+  if (on) CHECKED.add(runId + ":" + i); else CHECKED.delete(runId + ":" + i);
+  const run = DATA.runs.find(r => r.id === runId); const ev = (run && run.evidence) || {};
+  const n = (ev.req_items && ev.req_items.length) || 1;
+  const all = [...Array(n).keys()].every(k => CHECKED.has(runId + ":" + k));
+  const go = document.getElementById("reqgo-" + runId); if (go) go.disabled = !all;
+  const box = document.getElementById("req-" + runId); const gate = box && box.querySelector(".gate");
+  if (gate) gate.textContent = all ? "Every change checked." : "Tick each change to confirm you read it; then the build can start.";
+}
+function confirmReq(runId, edited) {
+  const body = {};
+  if (edited) { const ta = document.getElementById("reqedit-" + runId); if (ta) body.requirement = ta.value; }
+  EDITING = null;
+  act(`/api/runs/${runId}/confirm`, body);
 }
 
 function editForm(fb) {
@@ -402,10 +494,8 @@ function batchCard(run) {
     return html + "</div>";
   }
   if (["running", "waiting", "failed"].includes(run.status)) html += stepsHtml(run);
-  if (run.step === "confirm_requirement" && run.status === "waiting") {
-    html += `<div class="req"><b>Requirement to confirm (covers all ${items.length} changes)</b>${esc(run.requirement)}</div>`;
-    if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/confirm')">Confirm requirement and build</button><button class="no" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;
-  }
+  if (run.step === "confirm_requirement" && run.status === "waiting") html += reqHtml(run, false);
+  if (run.status === "running" && MGR()) html += abortBtn(run);
   if (run.step === "await_deploy" && run.status === "waiting") {
     if (ev.what_changed || ev.build_summary) html += `<div class="prop">${esc(ev.what_changed || ev.build_summary)}</div>`;
     if (ev.test_run) html += `<div class="meta">tests: ${ev.test_run.ok ? "passed" : "failed"} (${(ev.test_run.checked || []).length} checks)</div>`;
@@ -415,26 +505,31 @@ function batchCard(run) {
     if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/deploy')">Deploy v${run.to_version} to floor</button><button class="no" onclick="if(confirm('Discard this build? The ${items.length} proposals go back to Reviewing.'))act('/api/runs/${run.id}/cancel')">Discard</button>`;
   }
   if (run.status === "failed") html += failedHtml(run, `The ${items.length} proposals go back to Reviewing.`);
-  if (run.status === "deployed" && MGR() && mod.live_version === run.to_version) {
-    html += `<button class="no" onclick="act('/api/runs/${run.id}/rollback')">Roll back</button>`;
-  }
+  if (run.status === "deployed" && MGR() && mod.live_version === run.to_version) html += rollbackBtn(run);
   return html + "</div>";
+}
+// Abort a build in flight: the agent process is stopped and the draft dropped.
+function abortBtn(run) {
+  return `<button class="no" onclick="if(confirm('Abort this build now? The agent is stopped, nothing it wrote is kept, and the proposals go back to Reviewing. Use this when a build is stuck or clearly wrong.'))act('/api/runs/${run.id}/cancel')">Abort build</button>`;
+}
+// Rolling back moves the floor; it asks first.
+function rollbackBtn(run) {
+  return `<button class="no" onclick="if(confirm('Roll the floor back from v${run.to_version} to the previous version, with the data as it was then? Every open page reloads. This can be undone from the Versions panel.'))act('/api/runs/${run.id}/rollback')">Roll back</button>`;
 }
 
 function card(fb) {
   const run = DATA.runs.find(r => (r.feedback_ids || [r.feedback_id]).includes(fb.id) && r.status !== "cancelled");
   const isPlatform = !fb.module || fb.module === "platform";
   const pk = run && fb.status === "in_progress" ? "run:" + run.id : "fb:" + fb.id;
-  let html = `<div class="card ${PENDING.has(pk) ? "busy" : ""}" data-key="${pk}">${pendingHtml(pk)}`;
+  let html = `<div class="card ${PENDING.has(pk) ? "busy" : ""} ${inBatch(fb) ? "inbatch" : ""}" data-key="${pk}">${pendingHtml(pk)}`;
   html += `<div class="msg">${esc(fb.message)}</div>`;
   html += `<div class="meta">#${fb.id} · ${isPlatform ? '<span class="chip platform">PLATFORM</span>' : esc(fb.module)} · ${esc(fb.name || "anonymous")}`
-       + (fb.recurrence > 1 ? ` · <span class="chip rec">x${fb.recurrence}</span>` : "") + `</div>`;
+       + (fb.recurrence > 1 ? ` · <span class="chip rec">x${fb.recurrence}</span>` : "") + (inBatch(fb) ? ' · <span class="chip batch">IN BATCH</span>' : "") + `</div>`;
   html += `<div class="meta"><span class="chip screen">Screen: ${esc(fb.screen || fb.page || "unknown")}</span>${fb.review_id ? `<span class="chip review">REVIEW #${fb.review_id}${priorityOf(fb)}</span>` : ""}</div>`;
 
   if (isPlatform) {
     if (fb.status === "new") {
       html += `<div class="meta">Goes to Brendan's build queue, not the in-app agent.</div>`;
-      html += `<button class="quiet" onclick="act('/api/feedback/${fb.id}/plusone')">+1 seen again</button>`;
       if (MGR()) html += `<button class="no" onclick="closeItem(${fb.id}, true)">Decline</button>`;
     } else if (fb.outcome) {
       html += `<div class="${fb.status === "done" ? "outcome" : "fail-note"}">${esc(fb.outcome)}</div>`;
@@ -442,9 +537,10 @@ function card(fb) {
     return html + "</div>";
   }
 
-  if (fb.status === "new") {
-    if (MGR()) html += `<button class="primary" onclick="act('/api/feedback/${fb.id}/review')">Review with AI</button>`;
-    html += `<button class="quiet" onclick="act('/api/feedback/${fb.id}/plusone')">+1 seen again</button>`;
+  if (fb.status === "new" && MGR()) {
+    html += `<button class="primary" ${inBatch(fb) ? "disabled title=\"in the batch: use the batch panel at the top of the column\"" : ""} onclick="act('/api/feedback/${fb.id}/review')">Review with AI</button>`;
+    html += batchBtns(fb);
+    html += `<button class="no" onclick="closeItem(${fb.id}, true)">Decline</button>`;
   }
 
   if (fb.status === "reviewing" && fb.proposal_id) {
@@ -452,8 +548,8 @@ function card(fb) {
     html += `<div class="prop"><span class="chip ${fb.proposal_class}">${fb.proposal_class === "ui" ? "UI CHANGE" : "FUNCTIONALITY"}</span><span class="chip screen">Will change: ${esc(screenLabel(fb.module, fb.proposal_target))}</span><br>${esc(fb.proposal_body)}</div>`;
     if (fb.proposal_rationale) html += `<div class="meta">${esc(fb.proposal_rationale)}${fb.proposal_model ? " · proposed by " + esc(modelLabel(fb.proposal_model)) : ""}</div>`;
     if (MGR()) {
-      html += `<label class="pick"><input type="checkbox" ${SEL.has(fb.proposal_id) ? "checked" : ""} onchange="toggleSel(${fb.proposal_id}, this.checked)"> add to batch</label>`;
-      html += `<button class="go" onclick="act('/api/proposals/${fb.proposal_id}/decide',{decision:'approve'})">Approve build (${esc(modelLabel(DATA.models.build))})</button>`;
+      html += `<button class="go" ${inBatch(fb) ? "disabled title=\"in the batch: build it from the batch panel at the top of the column\"" : ""} onclick="act('/api/proposals/${fb.proposal_id}/decide',{decision:'approve'})">Approve build (${esc(modelLabel(DATA.models.build))})</button>`;
+      html += batchBtns(fb);
       html += `<button class="quiet" onclick="EDITING=${fb.proposal_id};load()">Adjust</button>`;
       html += `<button class="no" onclick="decline(${fb.proposal_id})">Decline</button>`;
     } else {
@@ -470,10 +566,8 @@ function card(fb) {
       return html + "</div>";
     }
     html += stepsHtml(run);
-    if (run.step === "confirm_requirement" && run.status === "waiting") {
-      html += `<div class="req">${esc(run.requirement)}</div>`;
-      if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/confirm')">Confirm requirement</button><button class="no" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;
-    }
+    if (run.step === "confirm_requirement" && run.status === "waiting") html += reqHtml(run, true);
+    if (run.status === "running" && MGR()) html += abortBtn(run);
     if (run.step === "await_deploy" && run.status === "waiting") {
       const ev = run.evidence || {};
       if (ev.what_changed || ev.build_summary) html += `<div class="prop">${esc(ev.what_changed || ev.build_summary)}</div>`;
@@ -490,13 +584,16 @@ function card(fb) {
   if (fb.status === "done" || fb.status === "declined") {
     if (fb.outcome) html += `<div class="${fb.status === "done" ? "outcome" : "fail-note"}">${fb.status === "done" ? "You said / we did: " : "Declined: "}${esc(fb.outcome)}</div>`;
     const modRow = DATA.modules.find(m => m.name === fb.module);
-    if (fb.status === "done" && run && run.status === "deployed" && MGR() && modRow && modRow.live_version === run.to_version) {
-      html += `<button class="no" onclick="act('/api/runs/${run.id}/rollback')">Roll back</button>`;
-    }
+    if (fb.status === "done" && run && run.status === "deployed" && MGR() && modRow && modRow.live_version === run.to_version) html += rollbackBtn(run);
   }
   return html + "</div>";
 }
 
+// Add to batch greys out once the item is in; a small remove link takes it out.
+function batchBtns(fb) {
+  if (inBatch(fb)) return `<button class="quiet" disabled title="already in the batch">In batch</button><button class="quiet" style="background:none;border:1px solid var(--line);font-weight:600" onclick="act('/api/c/${SLUG}/batch/remove',{feedback_ids:[${fb.id}]})">Remove from batch</button>`;
+  return `<button class="quiet" onclick="act('/api/c/${SLUG}/batch/add',{feedback_ids:[${fb.id}]})">Add to batch</button>`;
+}
 function decline(pid) {
   const note = prompt("Reason (shown back to the reporter):") || "declined";
   act(`/api/proposals/${pid}/decide`, { decision: "decline", note });
@@ -539,6 +636,24 @@ async function gotoVersion(version, restore) {
   await load();
   openVersions(VMOD);
 }
+// ---- brand -----------------------------------------------------------------
+// When the company has a brand guide, the band takes its primary color and
+// the tab/home-screen icon is the company's own (served by /api/c/<slug>/icon).
+let BRAND_APPLIED = null;
+function applyBrand(b) {
+  const key = JSON.stringify(b && { c: b.colors, i: b.has_icon, s: b.status });
+  if (key === BRAND_APPLIED) return;
+  BRAND_APPLIED = key;
+  const root = document.documentElement.style;
+  if (b && b.status === "done" && b.colors) {
+    root.setProperty("--navy", b.colors.primary || "#1f3a5f");
+    root.setProperty("--amber", b.colors.accent || "#c2620a");
+  } else { root.removeProperty("--navy"); root.removeProperty("--amber"); }
+  const icon = `/api/c/${SLUG}/icon`;
+  document.getElementById("favicon").href = icon; document.getElementById("touchicon").href = icon;
+  const mark = document.getElementById("comark");
+  if (b && b.has_icon) { mark.src = icon; mark.style.display = "inline-block"; } else mark.style.display = "none";
+}
 // ---- board QR --------------------------------------------------------------
 // The code encodes this company's board address. The tile in the band opens a
 // bigger card with the link and a Print button, for taping to the wall.
@@ -567,6 +682,7 @@ async function load() {
   window.BOOT = DATA.boot;
   document.title = `${DATA.company.name} · Improvement Board`;
   document.getElementById("coname").textContent = DATA.company.name;
+  applyBrand(DATA.brand);
   const qrimg = document.getElementById("qrimg");
   if (!qrimg.getAttribute("src")) qrimg.src = `/api/c/${SLUG}/qr.svg?px=264`;  // set once; a reload must not reflow the band
   const w = document.getElementById("aiwarn");
@@ -611,9 +727,7 @@ async function load() {
   }
   renderToolbar();
   renderReviews();
-  const reviewing = new Set(buckets.reviewing.map(f => f.proposal_id));
-  for (const id of [...SEL]) if (!reviewing.has(id)) SEL.delete(id);
-  renderBatchBar();
+  renderColumnBatches();
   for (const k of ["new", "reviewing", "in_progress", "done", "platform"]) {
     const batches = (tiles[k] || []).map(t => batchCard({ ...t.run, feedback_ids: t.ids }));
     document.getElementById("col-" + k).innerHTML = (batches.join("") + buckets[k].map(card).join("")) || '<div class="empty">Nothing here.</div>';

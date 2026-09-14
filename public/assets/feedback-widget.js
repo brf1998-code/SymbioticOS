@@ -40,7 +40,11 @@
     setTimeout(() => el.remove(), 7000);
   }
 
-  // Staged preview: a bar that never goes away, with a live-version reminder.
+  // Staged preview: a bar that never goes away, with a live-version reminder,
+  // a "What changed" panel (the run's plain summary plus which screens differ
+  // from the floor version, a text compare that costs no tokens), and an
+  // outline on every element the build agent marked with data-changed="vN".
+  let changes = null, changesOpen = false;
   function stagedBar(liveVersion) {
     let bar = document.getElementById("sos-staged-bar");
     if (!bar) {
@@ -49,10 +53,50 @@
       bar.style.cssText = "position:sticky;top:0;z-index:10001;background:#c2620a;color:#fff;padding:9px 14px;font-size:13.5px;font-weight:700;font-family:system-ui,sans-serif;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.25);";
       document.body.insertBefore(bar, document.body.firstChild);
       document.body.style.borderTop = "4px dashed #c2620a";
+      const st = document.createElement("style");
+      st.textContent = '[data-changed="v' + version + '"]{outline:3px solid #f2b134!important;outline-offset:3px;box-shadow:0 0 0 6px rgba(242,177,52,.25)!important;position:relative;}' +
+        '[data-changed="v' + version + '"]::after{content:"NEW";position:absolute;top:-10px;right:-6px;background:#f2b134;color:#1c242e;font:800 9px/1 system-ui,sans-serif;padding:3px 5px;border-radius:6px;letter-spacing:.06em;z-index:10000;}' +
+        '#sos-changes{display:none;background:#fff;color:#1c242e;text-align:left;font-weight:400;font-size:13px;line-height:1.45;border-radius:10px;padding:10px 12px;margin:8px auto 0;max-width:720px;box-shadow:0 4px 14px rgba(0,0,0,.2);}' +
+        '#sos-changes b{display:block;margin-bottom:4px;} #sos-changes .scr{display:inline-block;background:#fbefe0;color:#c2620a;border-radius:10px;padding:2px 8px;font-size:11.5px;font-weight:700;margin:4px 4px 0 0;} #sos-changes .here{background:#f2b134;color:#1c242e;}';
+      document.head.appendChild(st);
+      fetch("/api/c/" + company + "/modules/" + mod + "/staged-changes", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((j) => { changes = j; renderChanges(); }).catch(() => {});
     }
     const back = location.pathname.replace("/staging/", "/");
+    const marked = document.querySelectorAll('[data-changed="v' + version + '"]').length;
     bar.innerHTML = "PREVIEW of version " + version + " (not on the floor)" + (liveVersion ? " · the floor is on version " + liveVersion : "") +
-      ' · <a href="' + back + '" style="color:#fff;text-decoration:underline">open the live page</a>';
+      ' · <a href="#" id="sos-changes-toggle" style="color:#fff;text-decoration:underline">' + (changesOpen ? "hide what changed" : "what changed?") + "</a>" +
+      (marked ? ' · <span style="background:#f2b134;color:#1c242e;border-radius:10px;padding:2px 8px;font-size:11.5px">' + marked + " highlighted on this screen</span>" : "") +
+      ' · <a href="' + back + '" style="color:#fff;text-decoration:underline">open the live page</a>' +
+      '<div id="sos-changes"></div>';
+    bar.querySelector("#sos-changes-toggle").onclick = (e) => { e.preventDefault(); changesOpen = !changesOpen; stagedBar(liveVersion); };
+    renderChanges();
+  }
+  function renderChanges() {
+    const box = document.getElementById("sos-changes");
+    if (!box) return;
+    box.style.display = changesOpen ? "block" : "none";
+    if (!changesOpen) return;
+    if (!changes) { box.innerHTML = "Loading what changed…"; return; }
+    const rel = (location.pathname.match(/^\/c\/[^/]+\/staging\/m\/[^/]+(.*)$/) || [])[1] || "/";
+    const files = changes.changed || [];
+    let h = "<b>" + esc(changes.title || ("Version " + changes.staged_version + " against version " + changes.live_version)) + "</b>";
+    h += "<div>" + esc(changes.what_changed || changes.build_summary || "No summary recorded for this build.").replace(/\n/g, "<br>") + "</div>";
+    const here = rel.replace(/\/$/, "") || "/";
+    const isHere = (route) => route && new RegExp("^" + route.replace(/\/$/, "").replace(/:[^/]+/g, "[^/]+") + "/?$").test(here);
+    let onThis = false;
+    if (files.length) {
+      h += '<div style="margin-top:6px"><span style="color:#51606f;font-size:12px">Screens that differ from the floor version (tap to open):</span><br>' +
+        files.map((f) => f.screens.map((sc) => {
+          const hit = isHere(sc.route); if (hit) onThis = true;
+          const label = esc(sc.label) + (f.added ? " (new)" : f.removed ? " (removed)" : "") + (hit ? " · this screen" : "");
+          return sc.route && !hit ? '<a class="scr" style="text-decoration:none" href="' + modBase() + (sc.route === "/" ? "/" : sc.route.replace(/:[^/]+/g, "1")) + '">' + label + "</a>" : '<span class="scr' + (hit ? " here" : "") + '">' + label + "</span>";
+        }).join("")).join("") + "</div>";
+    } else h += '<div style="color:#51606f;font-size:12px;margin-top:6px">No file differs from the floor version.</div>';
+    const marked = document.querySelectorAll('[data-changed="v' + version + '"]').length;
+    h += '<div style="color:#51606f;font-size:12px;margin-top:6px">' + (onThis
+      ? (marked ? (marked === 1 ? "1 element on this screen carries" : marked + " elements on this screen carry") + " a yellow outline and a NEW tag." : "This screen changed; the agent did not tag which elements, so compare against the live page.")
+      : "This screen is the same as on the floor. The change is on the screens above.") + "</div>";
+    box.innerHTML = h;
   }
 
   function watchVersion() {

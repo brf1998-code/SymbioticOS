@@ -96,7 +96,13 @@ function fakeRunAgent({ dir, prompt }) {
     : fs.existsSync(pages) ? fs.readdirSync(pages).map((f) => path.join(pages, f)) : [];
   // FAILCHECK in the feedback makes the first attempt fail the fake cross-check; a fix round clears it
   const bad = /FAILCHECK/.test(prompt) && !/independent reviewer looked at your previous attempt/.test(prompt);
-  for (const p of files) fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace(/\n<!-- FAKE-BAD -->\n/g, "") + `\n<!-- revised by fake agent ${new Date().toISOString()} -->\n${bad ? "<!-- FAKE-BAD -->\n" : ""}`);
+  const ver = (/data-changed="(v\d+)"/.exec(prompt) || [])[1] || "v0";
+  for (const p of files) {
+    let html = fs.readFileSync(p, "utf8").replace(/\n<!-- FAKE-BAD -->\n/g, "");
+    const mark = `<p data-changed="${ver}" style="font-size:12px;color:#51606f;margin:8px 0">Revised by the fake agent (${ver}).</p>`;
+    html = html.includes("</body>") ? html.replace("</body>", `${mark}\n</body>`) : html + mark;
+    fs.writeFileSync(p, html + `\n<!-- revised by fake agent ${new Date().toISOString()} -->\n${bad ? "<!-- FAKE-BAD -->\n" : ""}`);
+  }
   if (/functionality-class/i.test(prompt)) {
     const migDir = path.join(dir, "migrations");
     fs.mkdirSync(migDir, { recursive: true });
@@ -112,7 +118,12 @@ function fakeStructured(toolName, prompt) {
   const target = (/\(([^()]+)\)\s*$/.exec(screenLine) || [])[1] || null;
   const canned = {
     proposal: { proposal: "Fake-mode proposal: apply the requested change as described in the feedback. (SOS_FAKE_AGENT=1)", class: /color|copy|text|label|layout|style|bigger|smaller|show|display|legend|see/i.test(quoted) ? "ui" : "functionality", target_file: target, rationale: "Deterministic fake classification for machinery testing." },
-    requirement: { requirement: "Fake-mode requirement: (1) the change in the feedback will be applied, (2) everything else stays the same, (3) verified by smoke checks on staging. (SOS_FAKE_AGENT=1)" },
+    requirement: {
+      bluf: "Fake-mode requirement: the change in the feedback is applied and nothing else moves.",
+      items: (prompt.match(/^Change \d+ of \d+/gm) || ["Approved proposal"]).map((h, i) => ({ change: i + 1, summary: `Fake-mode item ${i + 1}: apply that change on its screen, nothing else.` })),
+      requirement: "Fake-mode requirement: (1) the change in the feedback will be applied, (2) everything else stays the same, (3) verified by smoke checks on staging. (SOS_FAKE_AGENT=1)",
+    },
+    brand: { guide_md: "# Brand guide (fake mode)\n\nPrimary color #1f3a5f, accent #c2620a, system font. (SOS_FAKE_AGENT=1)", primary: "#1f3a5f", accent: "#c2620a", background: "#f2f4f7", ink: "#1c242e", font_stack: "system-ui, sans-serif", company_name: "Fake Co", tone: "plain" },
     verdict: /FAKE-BAD/.test(prompt)
       ? { verdict: "fail", summary: "Fake-mode cross-check: the diff carries a FAKE-BAD marker, which stands in for a change that does not meet the requirement. (SOS_FAKE_AGENT=1)" }
       : { verdict: "pass", summary: "Fake-mode cross-check: diff reviewed, no violations. (SOS_FAKE_AGENT=1)" },
@@ -139,9 +150,14 @@ function agentEnv() {
 }
 
 // Run an agent turn inside a version directory. Returns { text, costUsd }.
-async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd }) {
+async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd, signal }) {
   const cap = capUsd || MAX_RUN_USD;
-  if (fakeMode()) return fakeRunAgent({ dir, prompt });
+  if (fakeMode()) {
+    // fake builds take a moment so an abort can be exercised without a key
+    await new Promise((r) => setTimeout(r, Number(process.env.SOS_FAKE_DELAY_MS || 1500)));
+    if (signal && signal.aborted) { const e = new Error("build aborted by the manager"); e.aborted = true; throw e; }
+    return fakeRunAgent({ dir, prompt });
+  }
   if (!haveKey()) throw new Error("ANTHROPIC_API_KEY not configured on this instance");
   const { query } = require("@anthropic-ai/claude-agent-sdk");
   const tools = readOnly ? ["Read", "Glob", "Grep"] : ["Read", "Write", "Edit", "Glob", "Grep"];
@@ -153,6 +169,10 @@ async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd }
   let aborted = false;
   let stderrTail = "";
   let seen = 0, initSeen = false;
+  // manager abort (the run's Abort button) kills the agent process the same way the cost cap does
+  let killed = false;
+  const onKill = () => { killed = true; abort.abort(); };
+  if (signal) { if (signal.aborted) onKill(); else signal.addEventListener("abort", onKill, { once: true }); }
   const it = query({
     prompt,
     options: {
@@ -179,7 +199,7 @@ async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd }
         const u = msg.message.usage || {};
         estimate += (u.input_tokens || 0) * price.inTok + (u.output_tokens || 0) * price.outTok
           + (u.cache_read_input_tokens || 0) * price.inTok * 0.1 + (u.cache_creation_input_tokens || 0) * price.inTok * 1.25;
-        if (estimate > cap && !aborted) { aborted = true; abort.abort(); }
+        if (estimate > cap && !aborted && !killed) { aborted = true; abort.abort(); }
       }
       if (msg.type === "result") {
         if (typeof msg.total_cost_usd === "number") costUsd = msg.total_cost_usd;
@@ -188,6 +208,7 @@ async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd }
       }
     }
   } catch (e) {
+    if (killed) { const err = new Error("build aborted by the manager"); err.aborted = true; err.costUsd = costUsd || estimate; throw err; }
     if (!aborted) {
       const lines = stderrTail.trim().split("\n").filter(Boolean);
       const detail = lines.slice(-3).join(" | ");
@@ -199,6 +220,8 @@ async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd }
       throw err;
     }
   }
+  if (signal) signal.removeEventListener("abort", onKill);
+  if (killed) { const e = new Error("build aborted by the manager"); e.aborted = true; e.costUsd = costUsd || estimate; throw e; }
   if (aborted) {
     const e = new Error(`build stopped: run cost passed the $${cap.toFixed(2)} cap for this run`);
     e.costUsd = costUsd || estimate;
@@ -259,7 +282,8 @@ async function monthlySpend(company) {
     SELECT COALESCE((SELECT SUM(cost_usd) FROM platform.build_runs WHERE created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR company=$1)),0)
          + COALESCE((SELECT SUM(p.cost_usd) FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id
                       WHERE p.created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR f.company=$1)),0)
-         + COALESCE((SELECT SUM(cost_usd) FROM platform.reviews WHERE created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR company=$1)),0) AS usd`, [company || null])).rows[0];
+         + COALESCE((SELECT SUM(cost_usd) FROM platform.reviews WHERE created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR company=$1)),0)
+         + COALESCE((SELECT SUM((brand->>'cost_usd')::numeric) FROM platform.companies WHERE brand IS NOT NULL AND (brand->>'built_at')::timestamptz >= date_trunc('month', now()) AND ($1::text IS NULL OR slug=$1)),0) AS usd`, [company || null])).rows[0];
   const usd = Number(r.usd || 0);
   return { usd, cap: MONTHLY_CAP_USD, capped: usd >= MONTHLY_CAP_USD };
 }

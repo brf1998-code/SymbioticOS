@@ -77,6 +77,16 @@ function middleware(req, res, next) {
   next();
 }
 
+// Second factor for destructive admin actions (delete a company, restore a
+// backup): the admin password typed again and checked here, never on the
+// client. With no passwords set (local dev) anything passes.
+function checkAdminPassword(password) {
+  if (OPEN) return true;
+  const expect = ADMIN || MANAGER;
+  const a = Buffer.from(String(password || "")), b = Buffer.from(expect);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 function requireManager(req, res, next) {
   if (req.sosRole === "manager" || req.sosRole === "admin") return next();
   res.status(403).json({ error: "manager login required" });
@@ -130,4 +140,4 @@ function logoutHandler(_req, res) {
   res.redirect("/login");
 }
 
-module.exports = { middleware, requireManager, requireAdmin, loginHandler, logoutHandler, OPEN };
+module.exports = { middleware, requireManager, requireAdmin, loginHandler, logoutHandler, checkAdminPassword, OPEN };

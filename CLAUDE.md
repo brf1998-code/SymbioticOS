@@ -1,4 +1,4 @@
-# Symbiotic OS — Workspace Guide (current as of 2026-09-11)
+# Symbiotic OS — Workspace Guide (current as of 2026-09-14)
 
 **This file is the single source of truth for how this repo and the live
 instance are worked on.** Repo: `brf1998-code/SymbioticOS` (private). Live:
@@ -123,9 +123,97 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   `<proto>://<host>/c/<slug>/` from the request headers, so each company's code
   opens that company's board (login first if the scanner has no session).
   Clicking the tile opens a card with a large code, the link, Copy link and
-  Print; the print stylesheet prints just that card as a wall sign. Platform feedback (about the tool itself, shipped from Cowork)
-  sits in a collapsed "Platform requests" strip under the columns, not a
-  column of its own.
+  Print; the print stylesheet prints just that card as a wall sign. The band
+  is two columns (title + module strip on the left, the 112px QR tile
+  spanning both on the right). Platform feedback (about the tool itself,
+  shipped from Cowork) sits in a collapsed "Platform requests" strip under
+  the columns, not a column of its own.
+- **Batches are server state** (`platform.batches`, `feedback.batch_id`,
+  routes `POST /api/c/<slug>/batch/add|remove` with `feedback_ids`,
+  `POST /api/c/<slug>/batch/<id>/clear|build`): one open batch per module
+  (`run_id IS NULL`). Cards join or leave at the New or Reviewing station
+  ("Add to batch" greys to "In batch" plus a Remove link; Approve build and
+  Review with AI grey out while the item is in a batch). The panels at the
+  top of the Feedback and Reviewing columns carry the actions: "Review the N
+  new with AI" (one proposal call per item), "Build the N together" (only
+  reviewed items go in; the rest leave the batch), Clear. Build sets
+  `batches.run_id`; cancel and deploy clear `batch_id`. The old client-side
+  checkbox selection and sticky batch bar are gone. "+1 seen again" is gone
+  from cards; new feedback has Decline (`/api/feedback/:id/close`).
+- **Requirement gate** (functionality lane): the propose model now returns
+  `bluf` (one sentence), `items` (one sentence per change) and the full
+  `requirement`; stored in `evidence.req_bluf` / `evidence.req_items`. The
+  card shows the BLUF, one check box per change, the full text under "See
+  the full requirement", and Confirm stays disabled until every box is
+  ticked (ticks live in the page's `CHECKED` set so the 4s reload keeps
+  them). "Adjust the requirement" opens the full text for editing before
+  confirming (`POST /api/runs/:id/confirm {requirement}`).
+- **Abort and orphans**: `POST /api/runs/:id/cancel` now also works on a
+  `running` run: the build agent's AbortController (`pipeline.ACTIVE`) is
+  fired, the run is marked cancelled before the agent error lands
+  (`failRun` leaves a cancelled run alone), a never-staged draft version is
+  dropped (`registry.dropDraftVersion`), proposals go back to reviewing.
+  Board: "Abort build" on running cards. At boot `pipeline.sweepOrphans`
+  marks every `running` row failed ("the platform restarted while this build
+  was running") and kicks the queues; that is what a build "paused with no
+  way forward" after a redeploy was.
+- **Preview highlights**: the build prompt asks the agent to put
+  `data-changed="vN"` on every element it adds or visibly changes
+  (PRINCIPLES.md rule 9; the cross-check prompt says this is expected). The
+  staged bar (`feedback-widget.js`) outlines those elements with a NEW tag,
+  and "what changed?" opens a panel with the run's plain summary and the
+  screens whose files differ from the floor version, as links
+  (`GET /api/c/<slug>/modules/<m>/staged-changes`, a text compare of the two
+  versions, no tokens).
+- **Rollback asks first** (confirm dialog on every Roll back button;
+  Switch/Restore in the Versions panel already did).
+- **Company brand** (`src/brand.js`, `companies.brand` JSONB): the admin
+  gives a website when creating a company (or later, "Build the brand
+  guide" / "Rebuild" on the company card, `POST
+  /api/admin/companies/<slug>/brand {url, model}`). The server fetches the
+  page plus up to 5 stylesheets (browser UA; the build agent has no
+  network), extracts title, meta, icons, logo imgs, hex/rgb colors by
+  frequency, CSS custom properties, font stacks, visible text, and asks the
+  chosen model (Fable by default) for a BRAND.md guide plus structured
+  fields (primary/accent/background/ink, font, company_name, tone). The
+  guide is a company-wide agent doc (editable on the Agent settings page,
+  read by every run); the icon (largest apple-touch-icon, else favicon, as a
+  data URL) is served at `GET /api/c/<slug>/icon` (default SVG mark when
+  none) and linked as favicon + apple-touch-icon on the board and on every
+  module page (`registry.widgetInject`). The board band takes the primary
+  color and the accent (CSS variables `--navy`/`--amber`), shows the icon
+  next to the title. Status building/done/failed on the admin card (polls
+  while building); cost counts toward monthly spend. **Restyle** (`POST
+  /api/admin/companies/<slug>/modules/<m>/restyle`, and automatically when a
+  module is added to a company whose guide is done): one approved UI
+  proposal per screen (feedback items by "Brand"), built as one batch run
+  that waits at the deploy gate, so the manager previews the branded module
+  before it goes live. Fake mode returns a canned guide.
+- **Company delete** (`POST /api/admin/companies/<slug>/delete
+  {confirm_slug, password}`): admin role plus the slug typed back plus the
+  admin password checked server-side (`auth.checkAdminPassword`); refused
+  while the company has running/queued/waiting runs. Drops the company's
+  live and staging schemas and its snapshots, deletes runs, proposals,
+  feedback, batches, docs, reviews, diagrams, versions, modules, the row,
+  the mounts and the materialized files; logs `company_deleted`. Modal on
+  the admin page. Pilot-stage hardening (a second factor) is still to do.
+- **Backup and restore** (`src/backup.js`): `GET /api/admin/backup` streams
+  one JSON file (`format: sos-backup-1`) with every platform table and every
+  `mod_*` schema's rows plus DDL (columns, sequences, constraints, indexes).
+  `POST /api/admin/restore {password, backup}` (admin password; refused
+  while a build runs; own 300mb body parser) rebuilds the module schemas
+  from the DDL, refills the platform tables, resets sequences, then exits
+  the process (Railway restarts it; boot re-materializes versions and
+  mounts). Admin page: Download backup / Restore from a backup file. Railway's
+  own Postgres backups (Backups tab on the Postgres service) are the other
+  half; the MCP cannot switch them on.
+- **Agent doc duplicates fixed**: `UNIQUE (company, module, name)` never
+  fired for company-wide docs (module NULL), so every boot seeded another
+  COMPANY.md and every save added a row, and guidance carried them all.
+  `db.dedupeCompanyDocs` cleans up at boot and adds a partial unique index;
+  all writes go through `db.upsertDoc`.
+- **Schema names** are sanitized (`migrate.ident`): a slug with a dash gets
+  `_` in `mod_`/`stg_`/`snap_` names, so dashed slugs work.
 
 ## What this is
 
@@ -163,6 +251,11 @@ is the facilitator script.
    `GET /api/c/<slug>/feedback/platform` (manager session) or the
    `platform.feedback` table where `module='platform'`. Close them with
    `POST /api/feedback/:id/close {outcome}` after shipping.
+
+Local smoke test of the whole loop, in the sandbox: `SOS_FAKE_AGENT=1
+SOS_FAKE_DELAY_MS=4000 PORT=3999 node server.js` (the delay gives an abort
+something to interrupt; the fake agent stamps a visible
+`data-changed="vN"` line on the page so the preview highlight shows).
 
 ### How module versions work (read before touching `modules/`)
 

@@ -2,18 +2,22 @@
 // agent settings/docs + admin. Everything is scoped by company (/api/c/:slug/...)
 // except run actions, which are addressed by run id.
 const express = require("express");
-const { q, logEvent } = require("./db");
+const { q, logEvent, upsertDoc } = require("./db");
 const { generateProposal } = require("./proposals");
 const pipeline = require("./pipeline");
 const registry = require("./registry");
 const agent = require("./agent");
 const review = require("./review");
 const diagrams = require("./diagrams");
-const { requireManager, requireAdmin } = require("./auth");
+const { requireManager, requireAdmin, checkAdminPassword } = require("./auth");
 const qrcode = require("./qrcode");
+const brand = require("./brand");
+const backup = require("./backup");
+const migrate = require("./migrate");
 
 const router = express.Router();
-router.use(express.json({ limit: "1mb" }));
+// the restore route carries a whole backup and parses its own body
+router.use((req, res, next) => (req.path === "/api/admin/restore" ? next() : express.json({ limit: "1mb" })(req, res, next)));
 
 async function company(slug) {
   return (await q("SELECT * FROM platform.companies WHERE slug=$1", [slug])).rows[0];
@@ -120,6 +124,101 @@ router.get("/api/c/:slug/qr.svg", async (req, res) => {
   }
 });
 
+// ---- batches -----------------------------------------------------------------
+// A batch is a persistent group of feedback items for one module, open until
+// it is built. Items join or leave at any station (new or reviewing); the
+// column headers on the board carry the batch actions. One open batch per
+// module at a time.
+async function openBatch(company, mod, create) {
+  let b = (await q("SELECT * FROM platform.batches WHERE company=$1 AND module=$2 AND run_id IS NULL ORDER BY id DESC LIMIT 1", [company, mod])).rows[0];
+  if (!b && create) b = (await q("INSERT INTO platform.batches (company, module) VALUES ($1,$2) RETURNING *", [company, mod])).rows[0];
+  return b;
+}
+router.post("/api/c/:slug/batch/add", requireManager, async (req, res) => {
+  const ids = ((req.body || {}).feedback_ids || []).map(Number).filter(Boolean);
+  if (!ids.length) return res.status(400).json({ error: "no feedback ids" });
+  const rows = (await q("SELECT id, module, status FROM platform.feedback WHERE company=$1 AND id = ANY($2::int[]) AND status IN ('new','reviewing') AND module <> 'platform'", [req.params.slug, ids])).rows;
+  for (const f of rows) {
+    const b = await openBatch(req.params.slug, f.module, true);
+    await q("UPDATE platform.feedback SET batch_id=$2, updated_at=now() WHERE id=$1", [f.id, b.id]);
+  }
+  res.json({ ok: true, added: rows.length });
+});
+router.post("/api/c/:slug/batch/remove", requireManager, async (req, res) => {
+  const ids = ((req.body || {}).feedback_ids || []).map(Number).filter(Boolean);
+  await q("UPDATE platform.feedback SET batch_id=NULL, updated_at=now() WHERE company=$1 AND id = ANY($2::int[])", [req.params.slug, ids]);
+  res.json({ ok: true });
+});
+router.post("/api/c/:slug/batch/:id/clear", requireManager, async (req, res) => {
+  await q("UPDATE platform.feedback SET batch_id=NULL, updated_at=now() WHERE company=$1 AND batch_id=$2", [req.params.slug, req.params.id]);
+  res.json({ ok: true });
+});
+// Build the batch: every item that has a proposal goes into one run; items not
+// reviewed yet leave the batch (the board says how many) so the run is exactly
+// what the manager looked at.
+router.post("/api/c/:slug/batch/:id/build", requireManager, async (req, res) => {
+  const b = (await q("SELECT * FROM platform.batches WHERE id=$1 AND company=$2 AND run_id IS NULL", [req.params.id, req.params.slug])).rows[0];
+  if (!b) return res.status(404).json({ error: "no such open batch" });
+  const items = (await q(
+    `SELECT f.id, p.id AS proposal_id FROM platform.feedback f
+       LEFT JOIN LATERAL (SELECT id FROM platform.proposals WHERE feedback_id=f.id ORDER BY id DESC LIMIT 1) p ON true
+      WHERE f.batch_id=$1 AND f.status='reviewing'`, [b.id])).rows;
+  const ids = items.map((i) => i.proposal_id).filter(Boolean);
+  if (!ids.length) return res.status(400).json({ error: "nothing in this batch has a proposal yet; review the items first" });
+  try {
+    await q("UPDATE platform.proposals SET status='approved' WHERE id = ANY($1::int[]) AND status='draft'", [ids]);
+    const run = await pipeline.startRun(ids, { model: (req.body || {}).model });
+    await q("UPDATE platform.batches SET run_id=$2 WHERE id=$1", [b.id, run.id]);
+    await q("UPDATE platform.feedback SET batch_id=NULL, updated_at=now() WHERE batch_id=$1 AND status <> 'in_progress'", [b.id]);
+    res.json({ ok: true, run, built: ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// What the staged preview changed against the floor version: the files that
+// differ (mapped to screens) and the plain summary from the run. Zero extra
+// tokens: it is a text compare of the two versions already in the database.
+router.get("/api/c/:slug/modules/:name/staged-changes", async (req, res) => {
+  const row = await registry.getModule(req.params.slug, req.params.name);
+  if (!row || !row.staged_version) return res.status(404).json({ error: "nothing staged" });
+  const [from, to] = await Promise.all([registry.versionFiles(row.company, row.name, row.live_version), registry.versionFiles(row.company, row.name, row.staged_version)]);
+  const run = (await q("SELECT id, evidence, from_version FROM platform.build_runs WHERE company=$1 AND module=$2 AND to_version=$3 ORDER BY id DESC LIMIT 1", [row.company, row.name, row.staged_version])).rows[0];
+  let manifest = {};
+  try { manifest = registry.readManifest(row.company, row.name, row.staged_version); } catch (e) { /* none */ }
+  const screens = registry.pageEntries(manifest);
+  const changed = [];
+  for (const f of new Set([...Object.keys(from || {}), ...Object.keys(to || {})])) {
+    if ((from || {})[f] === (to || {})[f]) continue;
+    const scr = screens.filter((s) => s.file === f).map((s) => ({ label: s.label, route: s.route }));
+    changed.push({ file: f, screens: scr.length ? scr : [{ label: f === "routes.js" ? "Server logic" : f, route: null }], added: !(from || {})[f], removed: !(to || {})[f] });
+  }
+  const ev = run ? run.evidence || {} : {};
+  res.set("Cache-Control", "no-store").json({
+    live_version: row.live_version, staged_version: row.staged_version, run_id: run ? run.id : null,
+    title: ev.title || null, what_changed: ev.what_changed || null, build_summary: ev.build_summary || null, changed,
+  });
+});
+
+// Company icon for the tab and the phone home screen: the brand icon when the
+// guide found one, else the platform's own mark.
+const DEFAULT_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#1f3a5f"/><path d="M20 40c0 5 5 8 12 8s12-3 12-8-5-6-12-7-12-3-12-8 5-8 12-8 12 3 12 8" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>`;
+router.get("/api/c/:slug/icon", async (req, res) => {
+  const co = await company(req.params.slug);
+  const b = co && co.brand;
+  res.set("Cache-Control", "no-cache");
+  if (b && b.icon && /^data:image\/[\w.+-]+;base64,/.test(b.icon)) {
+    const [head, data] = b.icon.split(",", 2);
+    return res.type(head.slice(5, head.indexOf(";"))).send(Buffer.from(data, "base64"));
+  }
+  const primary = b && b.colors && b.colors.primary ? b.colors.primary : "#1f3a5f";
+  res.type("image/svg+xml").send(DEFAULT_ICON.replace("#1f3a5f", primary));
+});
+
+function brandPublic(b) {
+  if (!b) return null;
+  const { icon, ...rest } = b;
+  return { ...rest, has_icon: Boolean(icon) };
+}
+
 // ---- board data ------------------------------------------------------------
 router.get("/api/c/:slug/board", async (req, res) => {
   const co = await company(req.params.slug);
@@ -147,8 +246,10 @@ router.get("/api/c/:slug/board", async (req, res) => {
     catch (e) { screens[m.name] = []; }
   }
   const reviews = await review.listReviews(co.slug);
+  const batches = (await q("SELECT * FROM platform.batches WHERE company=$1 AND run_id IS NULL ORDER BY id", [co.slug])).rows;
+  const { brand: b, ...coPublic } = co;
   res.json({
-    company: co, feedback, runs, modules, screens, reviews,
+    company: coPublic, brand: brandPublic(b), feedback, runs, modules, screens, reviews, batches,
     boardUrl: boardUrl(req, co.slug),
     spend: await agent.monthlySpend(co.slug),
     models: { list: agent.MODELS, build: (await agent.buildModelFor(co.slug, await agent.modelFor(co.slug, "build"))).model },
@@ -270,8 +371,9 @@ router.get("/api/c/:slug/agents", requireManager, async (req, res) => {
   if (!co) return res.status(404).json({ error: "unknown company" });
   const docs = (await q("SELECT id, module, name, content, source, updated_at FROM platform.agent_docs WHERE company=$1 ORDER BY module NULLS FIRST, name", [co.slug])).rows;
   const modules = (await q("SELECT name, title FROM platform.modules WHERE company=$1 ORDER BY name", [co.slug])).rows;
+  const { brand: b, ...coPublic } = co;
   res.json({
-    company: co,
+    company: coPublic, brand: brandPublic(b),
     models: {
       list: agent.MODELS,
       defaults: agent.DEFAULT_MODELS,
@@ -299,12 +401,9 @@ router.post("/api/c/:slug/agents/models", requireManager, async (req, res) => {
 router.post("/api/c/:slug/agents/docs", requireManager, async (req, res) => {
   const { module: mod, name, content } = req.body || {};
   if (!name || !/^[A-Za-z0-9_.-]{1,60}$/.test(name)) return res.status(400).json({ error: "name must be a simple filename like NOTES.md" });
-  const r = await q(
-    `INSERT INTO platform.agent_docs (company, module, name, content, source, updated_at) VALUES ($1,$2,$3,$4,'user',now())
-     ON CONFLICT (company, module, name) DO UPDATE SET content=EXCLUDED.content, source='user', updated_at=now() RETURNING *`,
-    [req.params.slug, mod || null, name, String(content || "")]);
+  const row = await upsertDoc(req.params.slug, mod || null, name, String(content || ""), "user", false);
   await logEvent("agent_doc_saved", req.params.slug, { module: mod || null, name });
-  res.json(r.rows[0]);
+  res.json(row);
 });
 
 router.delete("/api/c/:slug/agents/docs/:id", requireManager, async (req, res) => {
@@ -333,6 +432,7 @@ router.get("/api/admin/overview", requireAdmin, async (_req, res) => {
       feedback: counts.find((x) => x.company === c.slug) || { open: 0, total: 0 },
       runs: runs.find((x) => x.company === c.slug) || { n: 0, deployed: 0 },
       spend_usd: Number((spend.find((x) => x.slug === c.slug) || {}).usd || 0),
+      brand: brandPublic(c.brand),
     })),
     library: registry.libraryModules().map((m) => ({
       name: m.name, title: m.title, description: m.description || "", screens: m.screens, migrations: m.migrations,
@@ -348,12 +448,16 @@ router.get("/api/admin/overview", requireAdmin, async (_req, res) => {
 });
 
 router.post("/api/admin/companies", requireAdmin, async (req, res) => {
-  const { slug, name } = req.body || {};
+  const { slug, name, brand_url, brand_model } = req.body || {};
   if (!SLUG.test(slug || "")) return res.status(400).json({ error: "slug: lowercase letters, digits, dashes" });
   if (!name) return res.status(400).json({ error: "name required" });
   await q("INSERT INTO platform.companies (slug, name) VALUES ($1,$2) ON CONFLICT (slug) DO UPDATE SET name=EXCLUDED.name", [slug, name]);
-  await q(`INSERT INTO platform.agent_docs (company, module, name, content, source) VALUES ($1,NULL,'COMPANY.md',$2,'repo') ON CONFLICT DO NOTHING`,
-    [slug, `# ${name}\n\nWhat the agents should know about this company: what it makes, who is on the floor, what matters most (safety, throughput, quality), vocabulary the floor uses, anything to avoid.\n`]);
+  if (brand_url && String(brand_url).trim()) {
+    const url = String(brand_url).trim();
+    await q("UPDATE platform.companies SET brand=$2 WHERE slug=$1", [slug, JSON.stringify({ url, status: "building" })]);
+    brand.buildGuide(slug, url, brand_model).catch((e) => console.error(`[brand] ${slug}:`, e.message));
+  }
+  await upsertDoc(slug, null, "COMPANY.md", `# ${name}\n\nWhat the agents should know about this company: what it makes, who is on the floor, what matters most (safety, throughput, quality), vocabulary the floor uses, anything to avoid.\n`, "repo", true);
   await logEvent("company_created", slug, { name });
   res.json({ ok: true });
 });
@@ -366,7 +470,90 @@ router.post("/api/admin/companies/:slug/modules", requireAdmin, async (req, res)
     const r = await registry.importFromRepo(co.slug, mod);
     const row = await registry.getModule(co.slug, mod);
     if (row && row.live_version) await registry.mountLiveIfNeeded(co.slug, mod, row.live_version);
-    res.json({ ok: true, ...r });
+    let restyle = null;
+    if (co.brand && co.brand.status === "done" && (req.body || {}).restyle !== false) {
+      try { restyle = (await brand.restyleModule(co.slug, mod)).id; }
+      catch (e) { console.error(`[brand] restyle ${co.slug}/${mod}:`, e.message); }
+    }
+    res.json({ ok: true, ...r, restyle_run: restyle });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- admin: brand guide from a URL, restyle a module to it ---------------------
+router.post("/api/admin/companies/:slug/brand", requireAdmin, async (req, res) => {
+  const { url, model } = req.body || {};
+  const co = await company(req.params.slug);
+  if (!co) return res.status(404).json({ error: "unknown company" });
+  if (!url || !/^https?:\/\//i.test(String(url).trim())) return res.status(400).json({ error: "give the site address, starting with https://" });
+  if (co.brand && co.brand.status === "building") return res.status(409).json({ error: "the guide is already being built" });
+  await q("UPDATE platform.companies SET brand=$2 WHERE slug=$1", [co.slug, JSON.stringify({ ...(co.brand || {}), url: String(url).trim(), status: "building" })]);
+  brand.buildGuide(co.slug, String(url).trim(), model).catch((e) => console.error(`[brand] ${co.slug}:`, e.message));
+  res.json({ ok: true, status: "building" });
+});
+router.post("/api/admin/companies/:slug/modules/:module/restyle", requireAdmin, async (req, res) => {
+  try { const run = await brand.restyleModule(req.params.slug, req.params.module, { model: (req.body || {}).model }); res.json({ ok: true, run }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ---- admin: delete a company ----------------------------------------------------
+// Two gates: the slug typed back, and the admin password again (checked here).
+// Refused while any build of that company is running or queued. Everything the
+// company owns goes: module schemas and snapshots, versions, feedback, runs,
+// docs, reviews, diagrams, batches, the mounts, the materialized files.
+router.post("/api/admin/companies/:slug/delete", requireAdmin, async (req, res) => {
+  const { confirm_slug, password } = req.body || {};
+  const co = await company(req.params.slug);
+  if (!co) return res.status(404).json({ error: "unknown company" });
+  if (String(confirm_slug || "") !== co.slug) return res.status(400).json({ error: "type the company slug exactly to confirm" });
+  if (!checkAdminPassword(password)) { await logEvent("company_delete_refused", co.slug, { reason: "wrong password" }); return res.status(403).json({ error: "wrong admin password" }); }
+  const busy = (await q("SELECT count(*)::int AS n FROM platform.build_runs WHERE company=$1 AND status IN ('running','queued','waiting')", [co.slug])).rows[0].n;
+  if (busy) return res.status(409).json({ error: `${busy} build(s) still open on this company; cancel them first` });
+  try {
+    const mods = (await q("SELECT name FROM platform.modules WHERE company=$1", [co.slug])).rows.map((m) => m.name);
+    registry.unmountCompany(co.slug);
+    for (const m of mods) {
+      await q(`DROP SCHEMA IF EXISTS ${migrate.liveSchema(co.slug, m)} CASCADE`);
+      await q(`DROP SCHEMA IF EXISTS ${migrate.stagingSchema(co.slug, m)} CASCADE`);
+    }
+    for (const sn of (await q("SELECT file FROM platform.schema_snapshots WHERE company=$1", [co.slug])).rows) {
+      if (/^snap_[a-z0-9_]+$/i.test(sn.file)) await q(`DROP SCHEMA IF EXISTS ${sn.file} CASCADE`);
+    }
+    const counts = {};
+    const fbIds = (await q("SELECT id FROM platform.feedback WHERE company=$1", [co.slug])).rows.map((r) => r.id);
+    counts.runs = (await q("DELETE FROM platform.build_runs WHERE company=$1", [co.slug])).rowCount;
+    counts.proposals = (await q("DELETE FROM platform.proposals WHERE feedback_id = ANY($1::int[])", [fbIds])).rowCount;
+    counts.feedback = (await q("DELETE FROM platform.feedback WHERE company=$1", [co.slug])).rowCount;
+    for (const t of ["batches", "agent_docs", "reviews", "diagrams", "module_versions", "modules", "schema_snapshots"]) {
+      counts[t] = (await q(`DELETE FROM platform.${t} WHERE company=$1`, [co.slug])).rowCount;
+    }
+    await q("DELETE FROM platform.companies WHERE slug=$1", [co.slug]);
+    await logEvent("company_deleted", co.slug, { name: co.name, modules: mods, counts });
+    res.json({ ok: true, counts });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- admin: whole-instance backup and restore ----------------------------------
+router.get("/api/admin/backup", requireAdmin, async (_req, res) => {
+  try {
+    const doc = await backup.dump();
+    await logEvent("backup_downloaded", null, { taken_at: doc.taken_at, schemas: Object.keys(doc.schemas).length });
+    res.set("Content-Disposition", `attachment; filename="sos-backup-${doc.taken_at.slice(0, 19).replace(/[:T]/g, "-")}.json"`);
+    res.type("application/json").send(JSON.stringify(doc));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Restore replaces everything and then exits the process (Railway restarts it;
+// boot rebuilds versions and mounts from the restored rows).
+router.post("/api/admin/restore", requireAdmin, express.json({ limit: "300mb" }), async (req, res) => {
+  const { password, backup: doc } = req.body || {};
+  if (!checkAdminPassword(password)) return res.status(403).json({ error: "wrong admin password" });
+  const busy = (await q("SELECT count(*)::int AS n FROM platform.build_runs WHERE status='running'")).rows[0].n;
+  if (busy) return res.status(409).json({ error: "a build is running; abort it first" });
+  try {
+    await backup.restore(doc);
+    await logEvent("backup_restored", null, { taken_at: doc.taken_at });
+    res.json({ ok: true, restarting: true });
+    console.log("[backup] restored; exiting so the platform reboots on the restored data");
+    setTimeout(() => process.exit(1), 800);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

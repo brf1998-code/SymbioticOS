@@ -10,6 +10,7 @@ const registry = require("./src/registry");
 const platformApi = require("./src/feedback");
 const auth = require("./src/auth");
 const diagrams = require("./src/diagrams");
+const pipeline = require("./src/pipeline");
 
 const PORT = process.env.PORT || 3000;
 const page = (name) => path.join(__dirname, "public", name);
@@ -57,6 +58,10 @@ async function main() {
   // every deploy redraws the module's diagrams for the new version
   registry.hooks.deployed = (company, mod, version) => diagrams.generate(company, mod, version);
   await registry.loadAll();
+  // builds that were running when the previous process died get a failed
+  // status (retry/cancel on the board) instead of a spinner forever
+  const orphaned = await pipeline.sweepOrphans();
+  if (orphaned) console.log(`[pipeline] ${orphaned} orphaned run(s) marked failed`);
   // modules with no diagrams yet (first boot after this feature) get them now
   for (const m of (await q("SELECT company, name, live_version FROM platform.modules WHERE live_version IS NOT NULL")).rows) {
     diagrams.generate(m.company, m.name, m.live_version).catch((e) => console.error(`diagrams ${m.company}/${m.name}:`, e.message));
