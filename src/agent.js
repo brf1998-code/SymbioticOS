@@ -72,12 +72,16 @@ function platformDocs() {
 
 // Everything an agent run is guided by, in order, plus the list of names so a
 // run can record which docs shaped it.
+// The platform STYLE.md is the default look. A company with its own STYLE.md
+// (written by the brand step, or by hand) replaces it: the two never sit in
+// the same prompt, because an agent given both keeps the platform one.
 async function guidanceFor(company, moduleName) {
-  const docs = platformDocs().map((d) => ({ scope: "platform", ...d }));
   const rows = (await q(
     `SELECT module, name, content FROM platform.agent_docs
       WHERE company=$1 AND (module IS NULL OR module=$2) AND content <> ''
       ORDER BY module NULLS FIRST, name`, [company, moduleName])).rows;
+  const companyStyle = rows.some((r) => !r.module && r.name === "STYLE.md");
+  const docs = platformDocs().filter((d) => !(companyStyle && d.name === "STYLE.md")).map((d) => ({ scope: "platform", ...d }));
   for (const r of rows) docs.push({ scope: r.module ? `module ${r.module}` : "company", name: r.name, content: r.content });
   const text = docs.map((d) => `<!-- ${d.scope}: ${d.name} -->\n${d.content}`).join("\n\n---\n\n");
   return { text, names: docs.map((d) => `${d.scope}: ${d.name}`) };
@@ -123,7 +127,7 @@ function fakeStructured(toolName, prompt) {
       items: (prompt.match(/^Change \d+ of \d+/gm) || ["Approved proposal"]).map((h, i) => ({ change: i + 1, summary: `Fake-mode item ${i + 1}: apply that change on its screen, nothing else.` })),
       requirement: "Fake-mode requirement: (1) the change in the feedback will be applied, (2) everything else stays the same, (3) verified by smoke checks on staging. (SOS_FAKE_AGENT=1)",
     },
-    brand: { guide_md: "# Brand guide (fake mode)\n\nPrimary color #1f3a5f, accent #c2620a, system font. (SOS_FAKE_AGENT=1)", primary: "#1f3a5f", accent: "#c2620a", background: "#f2f4f7", ink: "#1c242e", font_stack: "system-ui, sans-serif", company_name: "Fake Co", tone: "plain" },
+    brand: { guide_md: "# Visual style: Fake Co (fake mode)\n\nPrimary color #1f3a5f, accent #c2620a, system font. (SOS_FAKE_AGENT=1)", primary: "#1f3a5f", accent: "#c2620a", background: "#f2f4f7", ink: "#1c242e", font_stack: "system-ui, sans-serif", company_name: "Fake Co", tone: "plain" },
     verdict: /FAKE-BAD/.test(prompt)
       ? { verdict: "fail", summary: "Fake-mode cross-check: the diff carries a FAKE-BAD marker, which stands in for a change that does not meet the requirement. (SOS_FAKE_AGENT=1)" }
       : { verdict: "pass", summary: "Fake-mode cross-check: diff reviewed, no violations. (SOS_FAKE_AGENT=1)" },

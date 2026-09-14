@@ -3,14 +3,15 @@
 // The admin gives a URL when creating a company (or later). The platform
 // fetches the page and its stylesheets (the build agent has no network), pulls
 // the raw signals out (title, colors by frequency, CSS variables, fonts, logo,
-// icon, nav wording) and asks a model (Fable by default) to write BRAND.md: a
+// icon, nav wording) and asks a model (Fable by default) to rewrite the platform
+// STYLE.md as the company STYLE.md (it replaces the default in every build): a
 // short guide every agent run reads, plus a few structured values the board
 // uses directly (band color, favicon). Then each module the company gets is
 // restyled by a normal build run (one UI proposal per screen) that stops at
 // the deploy gate like any other change, so the manager sees the branded
 // version in the preview before it goes live.
 const { q, logEvent, upsertDoc } = require("./db");
-const { runStructured, haveKey, fakeMode, MODELS } = require("./agent");
+const { runStructured, haveKey, fakeMode, MODELS, platformDocs } = require("./agent");
 const registry = require("./registry");
 const pipeline = require("./pipeline");
 
@@ -113,7 +114,7 @@ const GUIDE_SCHEMA = {
     ink: { type: "string", description: "Body text hex (dark)." },
     font_stack: { type: "string", description: "CSS font-family stack. If the brand font is not a system font, give the brand font first with a system fallback." },
     tone: { type: "string", description: "Three to eight words on voice: e.g. plain, direct, industrial." },
-    guide_md: { type: "string", description: "The BRAND.md guide for build agents, 250 to 500 words of Markdown. Sections: Name and voice; Colors (with hex and where each is used: header band, primary action, attention, danger, background, text); Type (font stack, weights, size guidance for operator screens); Shapes and spacing (radius, borders, density); Logo and icon (text treatment when no image is available; never draw a logo); Do and do not. Written for an agent restyling factory-floor screens: keep every operator-first rule (big touch targets, plain words, high contrast). No em or en dashes." },
+    guide_md: { type: "string", description: "The company's STYLE.md: a rewrite of the platform style file given in the prompt, same structure and same level of detail (every rule carries a concrete value: hex colors, font stack, sizes, radius), with the brand's values in place of the defaults. Start with '# Visual style: <company>'. Add a short 'Name and voice' section and a 'Logo and icon' section (text treatment; never draw a logo). Keep every operator-first rule from the original (touch targets, readable from ten feet, density). 250 to 500 words. No em or en dashes." },
   },
   required: ["company_name", "primary", "accent", "background", "ink", "font_stack", "tone", "guide_md"],
 };
@@ -140,15 +141,17 @@ async function buildGuide(slug, url, model) {
     const { data, costUsd } = await runStructured({
       model,
       maxTokens: 6000,
-      system: "You write brand styling guides for software that runs on a factory floor. Input: raw signals scraped from the company's public website. Output: a short, concrete guide a build agent can follow when restyling operator screens, plus the key values as fields. Prefer the colors that repeat most and that look like brand colors (skip greys, pure black and white unless they are clearly the brand). Never invent a logo image; describe a text treatment instead. Plain words. No em or en dashes anywhere.",
-      prompt: `Company: ${co.name} (slug ${slug})\nSite: ${site.url}\nTitle: ${site.title}\nMeta: ${JSON.stringify(site.meta)}\nIcons declared: ${site.icons.map((i) => `${i.rel} ${i.href}${i.sizes ? " " + i.sizes : ""}`).join("; ") || "none"}\nLogo images: ${site.logos.map((l) => `${l.src} (alt "${l.alt}")`).join("; ") || "none found"}\nMost frequent hex colors: ${site.colors.join(", ") || "none"}\nrgb() colors: ${site.rgbColors.join(", ") || "none"}\nCSS custom properties (colors/fonts): ${site.cssVars.join("; ") || "none"}\nFont families by frequency: ${site.fonts.join(" | ") || "none"}\nStylesheets read: ${site.stylesheets} (${site.cssBytes} bytes of CSS)\nVisible text (start): ${site.text}\n\nWrite the guide and the fields.`,
+      system: "You write the visual style file for factory-floor software that a company has adopted. Input: the platform's default style file and raw signals scraped from the company's public website. Output: that style file rewritten for the company, so that a build agent reading only your file (the default is removed from its prompt) reproduces the brand: same sections, same specificity, brand values everywhere a default value was. Prefer the colors that repeat most and that look like brand colors (skip greys, pure black and white unless they are clearly the brand). Keep white text readable on the primary color. Never invent a logo image; describe a text treatment instead. Plain words. No em or en dashes anywhere.",
+      prompt: `Platform default style file (rewrite this for the brand):\n${(platformDocs().find((d) => d.name === "STYLE.md") || {}).content || "(missing)"}\n\nCompany: ${co.name} (slug ${slug})\nSite: ${site.url}\nTitle: ${site.title}\nMeta: ${JSON.stringify(site.meta)}\nIcons declared: ${site.icons.map((i) => `${i.rel} ${i.href}${i.sizes ? " " + i.sizes : ""}`).join("; ") || "none"}\nLogo images: ${site.logos.map((l) => `${l.src} (alt "${l.alt}")`).join("; ") || "none found"}\nMost frequent hex colors: ${site.colors.join(", ") || "none"}\nrgb() colors: ${site.rgbColors.join(", ") || "none"}\nCSS custom properties (colors/fonts): ${site.cssVars.join("; ") || "none"}\nFont families by frequency: ${site.fonts.join(" | ") || "none"}\nStylesheets read: ${site.stylesheets} (${site.cssBytes} bytes of CSS)\nVisible text (start): ${site.text}\n\nWrite the company style file and the fields.`,
       schema: GUIDE_SCHEMA,
       toolName: "brand",
     });
     const hex = (v, d) => (/^#[0-9a-f]{6}$/i.test(String(v || "")) ? String(v).toLowerCase() : d);
     const colors = { primary: hex(data.primary, "#1f3a5f"), accent: hex(data.accent, "#c2620a"), background: hex(data.background, "#f2f4f7"), ink: hex(data.ink, "#1c242e") };
     const guide = String(data.guide_md || "").replace(/[–—]/g, ", ");
-    await upsertDoc(slug, null, "BRAND.md", `${guide}\n\n<!-- built from ${site.url} on ${new Date().toISOString().slice(0, 10)} by ${model} -->\n`, "user", false);
+    await upsertDoc(slug, null, "STYLE.md", `${guide}\n\n<!-- brand style built from ${site.url} on ${new Date().toISOString().slice(0, 10)} by ${model}; this file replaces the platform STYLE.md for every build of this company -->\n`, "user", false);
+    // an older build may have left a BRAND.md; the agent must not see two style files
+    await q("DELETE FROM platform.agent_docs WHERE company=$1 AND module IS NULL AND name='BRAND.md'", [slug]);
     const brand = await setBrand(slug, {
       status: "done", built_at: new Date().toISOString(), cost_usd: Number((costUsd || 0).toFixed(4)), model,
       company_name: data.company_name, colors, font: data.font_stack, tone: data.tone,
@@ -185,7 +188,7 @@ async function restyleModule(slug, mod, opts = {}) {
     const p = (await q(
       `INSERT INTO platform.proposals (feedback_id, body, class, target_file, rationale, status, model) VALUES ($1,$2,'ui',$3,$4,'approved',$5) RETURNING id`,
       [fb.id,
-        `Apply the company brand guide (BRAND.md) to the ${s.label}: header band and primary actions in ${b.colors.primary}, attention in ${b.colors.accent}, page background ${b.colors.background}, text ${b.colors.ink}, font stack ${b.font}. Put the company name "${b.company_name || co.name}" where the module names itself (page title, header). Keep every control, table, layout, wording and behavior exactly as it is; only appearance changes. Keep operator-first rules: big touch targets, high contrast, readable from ten feet.`,
+        `Restyle the ${s.label} to the company STYLE.md (the brand). This screen still carries the platform defaults; replace them everywhere in this file's CSS and inline styles: navy #1f3a5f becomes ${b.colors.primary} (header band, primary buttons, links), attention #c2620a becomes ${b.colors.accent}, page background #f2f4f7 becomes ${b.colors.background}, text #1c242e becomes ${b.colors.ink}, and font-family becomes ${b.font}. Put the company name "${b.company_name || co.name}" where the screen names itself (title tag, header text). The result must look like ${b.company_name || co.name}'s own software, not the default: when done, the old default hex values should no longer appear in this file except where STYLE.md keeps them. Keep every control, table, layout, wording and behavior exactly as it is; only appearance changes. Keep operator-first rules: big touch targets, high contrast, readable from ten feet.`,
         file, `Brand restyle from ${b.url}.`, b.model || null])).rows[0];
     ids.push(p.id);
   }

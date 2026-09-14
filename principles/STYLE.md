@@ -1,6 +1,9 @@
 # Visual style
 
-One visual language across every module page.
+One visual language across every module page. This is the platform default.
+A company that has its own STYLE.md (written by the brand step from its
+website, or by hand on the Agent settings page) uses that file instead of
+this one; the two are never given to an agent together.
 
 - System font stack (`system-ui, sans-serif`). Background `#f2f4f7`, cards white with `1px solid #d5dbe3`, radius 10px.
 - Ink `#1c242e`, secondary text `#51606f`.

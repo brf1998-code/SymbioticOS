@@ -232,6 +232,13 @@ async function dedupeCompanyDocs() {
     console.log(`[db] removed ${d.ids.length - 1} duplicate ${d.name} for ${d.company}`);
   }
   await q("CREATE UNIQUE INDEX IF NOT EXISTS agent_docs_company_wide ON platform.agent_docs (company, name) WHERE module IS NULL");
+  // the brand step used to write BRAND.md next to the platform STYLE.md and the
+  // agent kept the platform one; the brand file is now the company's STYLE.md
+  const moved = await q(`UPDATE platform.agent_docs b SET name='STYLE.md', updated_at=now()
+     WHERE b.module IS NULL AND b.name='BRAND.md'
+       AND NOT EXISTS (SELECT 1 FROM platform.agent_docs s WHERE s.company=b.company AND s.module IS NULL AND s.name='STYLE.md')`);
+  if (moved.rowCount) console.log(`[db] renamed ${moved.rowCount} BRAND.md to STYLE.md`);
+  await q("DELETE FROM platform.agent_docs WHERE module IS NULL AND name='BRAND.md'");
 }
 
 // Insert or update one agent doc. seedOnly: leave an existing doc alone.

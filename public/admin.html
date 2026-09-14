@@ -52,7 +52,7 @@
   <div id="companies"></div>
   <div class="card">
     <h2>Add a company</h2>
-    <p class="sub">Each company gets its own improvement board, modules, agent docs, and model choices at <code>/c/&lt;slug&gt;/</code>. Same passwords for now. Give the company's website and the platform reads it, writes a BRAND.md styling guide (colors, type, icon, wording) that every agent run follows, and restyles each module you add to it before the manager sees the preview.</p>
+    <p class="sub">Each company gets its own improvement board, modules, agent docs, and model choices at <code>/c/&lt;slug&gt;/</code>. Same passwords for now. Give the company's website and the platform reads it, writes the company's own STYLE.md (colors, type, icon, wording) which replaces the platform default style for every agent run, and restyles each module you add to it before the manager sees the preview.</p>
     <input id="c-slug" placeholder="slug (e.g. acme)" style="max-width:200px"> <input id="c-name" placeholder="Company name" style="max-width:300px">
     <input id="c-url" placeholder="https://www.company.com (optional, for the brand guide)" style="max-width:420px">
     <select id="c-model"></select>
@@ -121,7 +121,7 @@ function brandHtml(c) {
   const col = b.colors || {};
   return `<div class="brand">${b.has_icon ? `<img src="/api/c/${c.slug}/icon" alt="">` : ""}<b>Brand:</b> ${esc(b.company_name || c.name)} · from ${esc(b.url)} · ${ml(b.model)} · $${Number(b.cost_usd || 0).toFixed(2)} · ${new Date(b.built_at).toLocaleDateString()}<br>
     ${["primary", "accent", "background", "ink"].map(k => `<span class="swatch" style="background:${esc(col[k])}"></span>${k} ${esc(col[k])}`).join(" · ")} · font ${esc(b.font || "")}${b.tone ? ` · voice: ${esc(b.tone)}` : ""}<br>
-    Guide: <a href="/c/${c.slug}/agents">BRAND.md on the agent settings page</a> (edit it there; every build reads it).
+    Style file: <a href="/c/${c.slug}/agents">STYLE.md on the agent settings page</a> (edit it there; it replaces the platform default for every build of this company).
     ${c.modules.map(m => ` <button class="quiet" style="margin-top:6px" onclick="restyle('${c.slug}','${m.name}')">Restyle ${esc(m.title)} to brand</button>`).join("")}
     <details style="margin-top:4px"><summary style="cursor:pointer;font-size:12px">Rebuild the guide from a different page</summary>${form("Rebuild")}</details></div>`;
 }
