@@ -12,6 +12,7 @@ const auth = require("./src/auth");
 const diagrams = require("./src/diagrams");
 const pipeline = require("./src/pipeline");
 const intake = require("./src/intake");
+const checks = require("./src/checks");
 
 const PORT = process.env.PORT || 3000;
 const page = (name) => path.join(__dirname, "public", name);
@@ -51,9 +52,11 @@ async function main() {
   app.get("/c/:slug", (req, res) => res.redirect(`/c/${req.params.slug}/`));
   app.get("/c/:slug/agents", (_req, res) => res.sendFile(page("agents.html")));
   app.get("/c/:slug/diagrams/:module", (_req, res) => res.sendFile(page("diagrams.html")));
+  app.get("/c/:slug/checks", auth.requireManager, (_req, res) => res.sendFile(page("checks.html")));
   app.get("/admin", auth.requireAdmin, (_req, res) => res.sendFile(page("admin.html")));
 
   app.use(intake.router);    // /api/c/:slug/intakes, /api/intakes/*, /api/attachments/* (before platformApi: the attach route parses a bigger body)
+  app.use(checks.router);    // /api/c/:slug/checks, /api/runs/:id/label
   app.use(platformApi);      // /api/*
   registry.attach(app);      // /c/:slug/m/:module and /c/:slug/staging/m/:module
 

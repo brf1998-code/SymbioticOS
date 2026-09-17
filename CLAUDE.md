@@ -169,6 +169,28 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   floor" on the request card, which shows `runBlock` like any card). Retry
   rewrites the skeleton; fix keeps the files. The strip shows a module with
   no live version as "being built" with only its Preview link.
+- **Checks campaign** (2026-09-17 evening, docs/CHECKS-CAMPAIGN.md): Brendan
+  reported functionality changes still stopped almost every time after the
+  brief rewrite. Two findings and one tool. (1) The migration validator's
+  forbidden-word check was a SUBSTRING match, so `updated_at`, `deleted_at`,
+  `owner_name`, `granted_at`, `reset_count`, `rule_text`, `trigger_level`,
+  `copy_count` and any seed text with "do" or "update" in it killed the build
+  at the build step ("migration rejected"), which is what most functionality
+  changes carry. Now whole words with string literals blanked out, and a word
+  followed by a column type is a column (`src/migrate.js`, test cases in the
+  commit). The `last_at` workaround in the kpis module is no longer needed.
+  (2) Stops have five different causes and the board showed them all the
+  same; `src/checks.js reasonFor` names them. (3) The checks log at
+  `/c/<slug>/checks` (manager; "checks log" in the board header): every run
+  with its reason, the reviewer's findings and quoted evidence, and Right /
+  Wrong / Unsure labels with a note in `platform.check_labels`; "Download
+  the checks log" exports cases with before/after files
+  (`GET /api/c/<slug>/checks/export[?labeled=1]`), and
+  `scripts/replay-crosscheck.js` rebuilds each diff and runs the CURRENT
+  brief (`pipeline.crossCheckCall`, a pure function now) through the API,
+  printing old verdict, new verdict and agreement with the label. Tune the
+  brief against labeled cases offline, not against live builds. Exit bar for
+  a pilot is in the campaign doc.
 - **Cross-check calibrated** (2026-09-17, `crossCheckSystem` in pipeline.js):
   the old brief ("fail anything beyond the requirement") never told the
   reviewer what a functionality change legitimately touches, so routes.js
@@ -376,9 +398,8 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   chart ids `c-bullwhip c-output c-wip c-lead c-quality c-inventory` are
   targets for the tour and the "Ask Jonah about this chart" buttons.
   `POST /api/reseed` (manager) regenerates the eight weeks ending yesterday
-  before a demo. Migration files must avoid the word `updated_at` (the
-  validator's `UPDATE` check has no trailing word boundary); the chats
-  table uses `last_at`.
+  before a demo. (The chats table uses `last_at` from the days when the
+  validator rejected `updated_at` as a substring of UPDATE; fixed 2026-09-17.)
 
 ## What this is
 

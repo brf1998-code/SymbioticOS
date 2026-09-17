@@ -80,12 +80,11 @@ INSERT INTO name (...) VALUES (...);          -- seed rows only
 ```
 
 Rules the validator enforces: bare table names (no schema prefix, no quotes);
-no DROP, DELETE, UPDATE, TRUNCATE, GRANT, functions, triggers, or DO blocks;
-one statement per line ending in `;`. Two traps: the validator's UPDATE check
-has no trailing word boundary, so a column named `updated_at` is rejected
-(use `moved_at`, `changed_at`, `last_at`), and the bare word `do` anywhere in
-a statement, seed text included, is rejected. Never edit a migration file
-that already exists; add the next number.
+no DROP, DELETE, UPDATE, TRUNCATE, GRANT, functions, triggers, or DO blocks as
+operations; each statement ends in `;` at the end of a line. Column names such
+as `updated_at` or `deleted_at` and seed text are fine (the check is on whole
+words with string literals ignored). Never edit a migration file that already
+exists; add the next number.
 
 Starting data from the intake (a spreadsheet of parts, beds, tools) goes in as
 `INSERT` seed rows in `001.sql`, after the table that holds it.

@@ -31,7 +31,19 @@ function stagingSchema(company, mod) { return `stg_${ident(company)}_${ident(mod
 //   INSERT INTO <ident> ...            (seed data only)
 // Anything else is rejected. Table identifiers must be bare names (no schema
 // qualification, no quotes) so the platform controls the schema via search_path.
-const FORBIDDEN = /\b(DROP|TRUNCATE|DELETE|UPDATE|GRANT|REVOKE|ALTER\s+SCHEMA|CREATE\s+SCHEMA|SECURITY|FUNCTION|TRIGGER|RULE|EXTENSION|COPY|VACUUM|REINDEX|CLUSTER|OWNER|SET\s+ROLE|RESET|DO\b)/i;
+// Forbidden operations, checked as WHOLE words with string literals blanked
+// out. Until 2026-09-17 this was a substring match on the raw statement, so a
+// column named updated_at, deleted_at, owner_name, granted_at, reset_count,
+// rule_text, trigger_level or copy_count, and any seed value containing "do"
+// or "update", was rejected as a forbidden operation. Functionality builds
+// (the ones that add migrations) died at the build step on that, which looked
+// like a rejection on the board. A forbidden word directly followed by a
+// column type (owner TEXT, cluster INTEGER) is a column definition, not an
+// operation, and is allowed too.
+const FORBIDDEN_WORDS = /\b(DROP|TRUNCATE|DELETE|UPDATE|GRANT|REVOKE|SECURITY|FUNCTION|TRIGGER|RULE|EXTENSION|COPY|VACUUM|REINDEX|CLUSTER|OWNER|RESET|DO)\b(?!\s+(?:TEXT|VARCHAR|CHAR|INTEGER|INT|SMALLINT|BIGINT|SERIAL|BIGSERIAL|BOOLEAN|BOOL|NUMERIC|DECIMAL|REAL|DOUBLE|FLOAT|TIMESTAMPTZ|TIMESTAMP|DATE|TIME|JSONB|JSON|UUID|BYTEA)\b)/i;
+const FORBIDDEN_PHRASES = /\b(ALTER\s+SCHEMA|CREATE\s+SCHEMA|SET\s+ROLE|ALTER\s+TABLE\s+\w+\s+(?:DROP|RENAME|ALTER)\b)/i;
+const stripLiterals = (st) => st.replace(/'(?:[^']|'')*'/g, "''");
+const FORBIDDEN = { test: (st) => { const bare = stripLiterals(st); return FORBIDDEN_PHRASES.test(bare) || FORBIDDEN_WORDS.test(bare); } };
 const BARE_IDENT = "[a-z_][a-z0-9_]*";
 const ALLOWED = [
   new RegExp(`^CREATE\\s+TABLE\\s+(IF\\s+NOT\\s+EXISTS\\s+)?${BARE_IDENT}\\s*\\(`, "i"),

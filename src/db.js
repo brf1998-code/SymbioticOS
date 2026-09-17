@@ -227,6 +227,17 @@ CREATE TABLE IF NOT EXISTS platform.module_intakes (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Checks log (docs/CHECKS-CAMPAIGN.md): the manager's verdict on each
+-- automated verdict, the labeled set the cross-check is tuned against.
+CREATE TABLE IF NOT EXISTS platform.check_labels (
+  run_id     INTEGER PRIMARY KEY,
+  label      TEXT NOT NULL,                        -- 'right' | 'wrong' | 'unsure'
+  note       TEXT,
+  labeled_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS platform.attachments (
   id          SERIAL PRIMARY KEY,
   company     TEXT NOT NULL,

@@ -31,7 +31,7 @@ function skeleton({ slug, title, design, answers, startingRows }) {
   const thing = String((answers && answers.thing) || "item").trim() || "item";
   const stages = (Array.isArray(answers && answers.stages) ? answers.stages : []).map((s) => String(s).trim()).filter(Boolean);
   const STAGES = stages.length >= 2 ? stages : ["new", "in work", "done"];
-  const seed = (startingRows || []).map((r) => (Array.isArray(r) ? r[0] : r)).map((v) => String(v || "").trim()).filter((v) => v && !/\bdo\b/i.test(v)).slice(0, 200);
+  const seed = (startingRows || []).map((r) => (Array.isArray(r) ? r[0] : r)).map((v) => String(v || "").trim()).filter(Boolean).slice(0, 200);
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   const files = {};
   files["module.json"] = JSON.stringify({
@@ -340,7 +340,7 @@ Rules for this build:
 - One screen per role the design names, each with its single prominent action, phone first for the floor. Add each screen to module.json "pages" with a label a manager would recognize, and its API to "smoke".
 - The rules in the design become checks in routes.js (refuse the action and say why in plain words).
 - The numbers on the board come from /api/stats or your own endpoint and show at the top of the lead's or manager's screen.
-- Seed the starting data as INSERT rows in migrations/001.sql (mind the validator: no quoted identifiers, no schema prefixes, no bare word "do", no column named updated_at).
+- Seed the starting data as INSERT rows in migrations/001.sql (mind the validator: no quoted identifiers, no schema prefixes, additive statements only).
 - Plain words on every visible string (PLAIN-WORDS.md). No em or en dashes anywhere.
 - Keep it small and working. What the design leaves out stays out.
 - Put data-changed="v1" on the main container of every screen.

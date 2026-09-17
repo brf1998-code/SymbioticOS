@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Symbiotic OS · Checks log</title>
+<style>
+  :root { --ink:#1c242e; --steel:#51606f; --line:#d5dbe3; --fog:#f2f4f7; --navy:#1f3a5f; --amber:#c2620a; --green:#2e7d4f; --red:#b3261e; --purple:#5b3a8a; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); padding:0 0 40px; }
+  .band { background:var(--navy); color:#fff; padding:12px 22px; }
+  .band h1 { font-size:20px; } .band a { color:#fff; } .band .sub { font-size:12.5px; opacity:.85; margin-top:4px; }
+  .wrap { max-width:1500px; margin:0 auto; padding:14px 22px 0; }
+  .counts { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .count { background:#fff; border:1px solid var(--line); border-radius:10px; padding:8px 12px; font-size:13px; cursor:pointer; }
+  .count b { display:block; font-size:20px; } .count.on { border-color:var(--navy); box-shadow:0 0 0 2px var(--navy) inset; }
+  .toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px; font-size:13px; color:var(--steel); }
+  button { border:none; border-radius:7px; padding:8px 12px; font-size:12.5px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .primary { background:var(--navy); color:#fff; } .quiet { background:#e5e9ee; color:var(--ink); }
+  .row { background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; font-size:13px; }
+  .row .head { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-weight:700; }
+  .chip { display:inline-block; font-size:10.5px; font-weight:700; border-radius:10px; padding:2px 8px; color:#fff; }
+  .chip.ui { background:#0e8a86; } .chip.functionality, .chip.module { background:var(--amber); }
+  .chip.reason { background:var(--steel); } .chip.reason.fail { background:var(--red); } .chip.reason.ok { background:var(--green); }
+  .meta { color:var(--steel); font-size:12px; margin-top:4px; line-height:1.5; }
+  .findings { background:#fdecea; color:#7a1d17; border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; line-height:1.45; }
+  .summary { background:var(--fog); border-radius:8px; padding:8px; margin-top:8px; font-size:12.5px; white-space:pre-wrap; line-height:1.45; }
+  .label { margin-top:8px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .label button { min-height:34px; }
+  .label button.on { outline:3px solid var(--navy); }
+  .label input { font:inherit; font-size:12.5px; border:1px solid var(--line); border-radius:7px; padding:7px; flex:1 1 240px; }
+  details summary { cursor:pointer; font-weight:700; color:var(--navy); font-size:12.5px; margin-top:6px; }
+  .empty { color:var(--steel); padding:10px; }
+</style>
+</head>
+<body>
+  <div class="band"><h1>Checks log <span id="co" style="font-weight:500;font-size:13px;opacity:.85"></span></h1>
+    <div class="sub">Every build, why it stopped where it stopped, and your verdict on the platform's verdict. Label the ones the reviewer got wrong; the labeled set is what the cross-check is tuned against. <a href="" id="back">Back to the board</a></div></div>
+  <div class="wrap">
+    <div class="counts" id="counts"></div>
+    <div class="toolbar">
+      <span id="stats"></span>
+      <button class="quiet" onclick="exportAll(false)">Download the checks log</button>
+      <button class="quiet" onclick="exportAll(true)">Download labeled cases only</button>
+      <label><input type="checkbox" id="onlyfail" onchange="render()"> Only runs that stopped</label>
+    </div>
+    <div id="list"></div>
+  </div>
+<script>
+const SLUG = location.pathname.split("/")[2];
+document.getElementById("back").href = `/c/${SLUG}/`;
+let D = null, FILTER = null;
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+const modelLabel = (id) => ((D.models || []).find((m) => m.id === id) || {}).label || id || "";
+async function load() {
+  const r = await fetch(`/api/c/${SLUG}/checks`);
+  if (r.status === 401 || r.status === 403) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
+  D = await r.json();
+  document.getElementById("co").textContent = SLUG;
+  render();
+}
+function render() {
+  const counts = D.counts || {};
+  document.getElementById("counts").innerHTML = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<div class="count ${FILTER === k ? "on" : ""}" onclick="FILTER = FILTER === '${k}' ? null : '${k}'; render()"><b>${n}</b>${esc(k)}</div>`).join("");
+  const labeled = D.runs.filter((r) => r.label), wrong = labeled.filter((r) => r.label === "wrong"), reviewerFails = D.runs.filter((r) => r.reason === "reviewer failed it");
+  document.getElementById("stats").textContent = `${D.runs.length} runs · ${reviewerFails.length} failed by the reviewer · ${labeled.length} labeled, ${wrong.length} of those marked wrong${labeled.length ? ` (${Math.round(100 * wrong.length / labeled.length)}%)` : ""}`;
+  const only = document.getElementById("onlyfail").checked;
+  const rows = D.runs.filter((r) => (!FILTER || r.reason === FILTER) && (!only || !["deployed", "at the gate", "in flight", "waiting on the manager"].includes(r.reason)));
+  document.getElementById("list").innerHTML = rows.map(row).join("") || '<div class="empty">Nothing here.</div>';
+}
+function row(r) {
+  const cc = r.cross_check;
+  const ok = ["deployed", "at the gate"].includes(r.reason);
+  let h = `<div class="row" id="run-${r.id}"><div class="head">run #${r.id} <span class="chip ${r.lane}">${r.lane === "ui" ? "UI" : r.lane === "module" ? "NEW MODULE" : "FUNCTIONALITY"}</span> ${esc(r.module)} ${r.title ? "· " + esc(r.title) : ""} <span class="chip reason ${ok ? "ok" : r.reason === "in flight" ? "" : "fail"}">${esc(r.reason)}</span></div>`;
+  h += `<div class="meta">${r.from_version ? "v" + r.from_version : "new"}${r.to_version ? " → v" + r.to_version : ""} · built by ${esc(modelLabel(r.model))}${r.effort ? " at " + esc(r.effort) : ""}${cc && cc.model ? " · reviewed by " + esc(modelLabel(cc.model)) : ""} · $${r.cost_usd.toFixed(2)} · ${new Date(r.created_at).toLocaleString()}${r.fix_round ? ` · ${r.fix_round} fix round(s)` : ""}${r.targets && r.targets.length ? " · screens: " + esc(r.targets.join(", ")) : ""}</div>`;
+  if (r.proposals_text) h += `<details><summary>The change asked for</summary><div class="summary">${esc(r.proposals_text)}</div></details>`;
+  if (cc && cc.verdict === "fail") {
+    h += `<div class="findings"><b>${cc.model === "platform checks" ? "Platform checks" : "Reviewer"} failed it${cc.overridden ? " (overridden by the manager)" : ""}:</b>\n${esc(cc.summary || "")}</div>`;
+    if (cc.findings && cc.findings.length) h += `<details><summary>Findings with evidence (${cc.findings.length})</summary>${cc.findings.map((f) => `<div class="summary"><b>${esc(f.severity)}</b> · ${esc(f.where)}: ${esc(f.what)}${f.evidence ? "\n\n" + esc(f.evidence) : ""}</div>`).join("")}</details>`;
+  } else if (cc && cc.verdict === "pass") {
+    h += `<details><summary>Reviewer passed it${cc.findings && cc.findings.length ? ` with ${cc.findings.length} minor note(s)` : ""}</summary><div class="summary">${esc(cc.summary || "")}</div></details>`;
+  }
+  if (r.error && r.reason !== "reviewer failed it") h += `<div class="findings">${esc(r.error)}</div>`;
+  if (r.test_run && !r.test_run.ok) h += `<div class="findings">Tests: ${esc(r.test_run.detail || "")}</div>`;
+  h += `<div class="label"><span class="meta" style="margin:0">Was the platform right to stop it${ok ? " (or to let it through)" : ""}?</span>
+    <button class="quiet ${r.label === "right" ? "on" : ""}" onclick="label(${r.id}, 'right')">Right</button>
+    <button class="quiet ${r.label === "wrong" ? "on" : ""}" onclick="label(${r.id}, 'wrong')">Wrong</button>
+    <button class="quiet ${r.label === "unsure" ? "on" : ""}" onclick="label(${r.id}, 'unsure')">Unsure</button>
+    <input id="note-${r.id}" placeholder="Why (one line, optional)" value="${esc(r.label_note || "")}" onchange="label(${r.id}, document.querySelector('#run-${r.id} .label button.on') ? ['right','wrong','unsure'].find(l => document.querySelector('#run-${r.id} .label button.on').textContent.toLowerCase() === l) : 'unsure')">
+    ${r.label ? `<span class="meta" style="margin:0">labeled ${esc(r.label)} by ${esc(r.labeled_by || "")}</span>` : ""}</div></div>`;
+  return h;
+}
+async function label(id, l) {
+  const note = (document.getElementById("note-" + id) || {}).value || "";
+  const r = await fetch(`/api/runs/${id}/label`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label: l, note }) });
+  if (!r.ok) { alert((await r.json().catch(() => ({}))).error || "failed"); return; }
+  const run = D.runs.find((x) => x.id === id); if (run) { run.label = l; run.label_note = note; }
+  const y = window.scrollY; render(); window.scrollTo(0, y);
+}
+function exportAll(labeledOnly) { location.href = `/api/c/${SLUG}/checks/export${labeledOnly ? "?labeled=1" : ""}`; }
+load();
+</script>
+</body>
+</html>

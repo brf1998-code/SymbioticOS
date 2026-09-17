@@ -332,14 +332,23 @@ async function runStructuredCrossCheck(run, proposal, cur, model, diffOverride) 
       diff = execFileSync("diff", ["-ru", fromDir, dir], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
     } catch (e) { diff = e.stdout || ""; } // diff exits 1 when files differ
   }
-  const truncated = diff.length > CROSS_CHECK_DIFF_CHARS;
-  const changed = [...diff.matchAll(/^diff -ru \S+ \S+\/versions\/\d+\/(\S+)$/gm)].map((m) => m[1]);
   const ps = await loadProposals(run.proposal_ids || [run.proposal_id]).catch(() => []);
   const targets = ps.map((x) => x.target_file).filter(Boolean);
+  return crossCheckCall({ model, lane: run.lane, targets, requirement: cur.requirement || proposal.body, diff, fromVersion: run.from_version, toVersion: cur.to_version });
+}
+
+// The cross-check as one pure call, so scripts/replay-crosscheck.js can run
+// the same brief against exported cases without a database.
+function crossCheckPrompt({ lane, targets, requirement, diff, fromVersion, toVersion }) {
+  const truncated = diff.length > CROSS_CHECK_DIFF_CHARS;
+  const changed = [...diff.matchAll(/^diff -ru \S+ \S+\/versions\/\d+\/(\S+)$/gm)].map((m) => m[1]);
+  return `Lane: ${lane === "ui" ? "look-and-feel change (pages only)" : lane === "module" ? "a brand-new module built from a confirmed design" : "functionality change"}.${targets && targets.length ? ` Screen file(s) named by the proposals: ${targets.join(", ")}.` : ""}\nFiles touched: ${changed.length ? changed.join(", ") : "(see diff)"}.\n\nConfirmed requirement:\n${requirement}\n\nUnified diff of the change (v${fromVersion || 0} -> v${toVersion})${truncated ? `, cut at ${CROSS_CHECK_DIFF_CHARS} characters; judge only what you can see and never fail for what was cut` : ""}:\n${diff.slice(0, CROSS_CHECK_DIFF_CHARS) || "(no textual diff found)"}`;
+}
+async function crossCheckCall({ model, lane, targets, requirement, diff, fromVersion, toVersion }) {
   const out = await runStructured({
     model,
-    system: crossCheckSystem(run.lane),
-    prompt: `Lane: ${run.lane === "ui" ? "look-and-feel change (pages only)" : run.lane === "module" ? "a brand-new module built from a confirmed design" : "functionality change"}.${targets.length ? ` Screen file(s) named by the proposals: ${targets.join(", ")}.` : ""}\nFiles touched: ${changed.length ? changed.join(", ") : "(see diff)"}.\n\nConfirmed requirement:\n${cur.requirement || proposal.body}\n\nUnified diff of the change (v${run.from_version || 0} -> v${cur.to_version})${truncated ? `, cut at ${CROSS_CHECK_DIFF_CHARS} characters; judge only what you can see and never fail for what was cut` : ""}:\n${diff.slice(0, CROSS_CHECK_DIFF_CHARS) || "(no textual diff found)"}`,
+    system: crossCheckSystem(lane),
+    prompt: crossCheckPrompt({ lane, targets, requirement, diff, fromVersion, toVersion }),
     schema: CROSS_CHECK_SCHEMA,
     toolName: "verdict",
     maxTokens: 6000,
@@ -352,7 +361,7 @@ async function runStructuredCrossCheck(run, proposal, cur, model, diffOverride) 
   if (blocking.length) summary += "\n\nBlocking:\n" + blocking.map((f) => `- ${f.where}: ${f.what}`).join("\n");
   const minor = findings.filter((f) => f && f.severity === "minor");
   if (minor.length) summary += `\n\nNoted, not blocking:\n` + minor.map((f) => `- ${f.where}: ${f.what}`).join("\n");
-  return { data: { verdict, summary, findings, issues: blocking.map((f) => f.what) }, costUsd: out.costUsd };
+  return { data: { verdict, summary, findings, issues: blocking.map((f) => f.what), model_verdict: out.data.verdict }, costUsd: out.costUsd };
 }
 
 const CROSS_CHECK_DIFF_CHARS = Number(process.env.SOS_CROSS_CHECK_DIFF_CHARS || 90000);
@@ -533,4 +542,6 @@ module.exports = {
   startRun, confirmRequirement, deploy, rollbackRun, retry, cancel, fix, override, getRun, smokeCheck, kickQueue, sweepOrphans, MAX_FIX_ROUNDS,
   // shared with modulebuild.js (a brand-new module goes through the same runs table and the same gates)
   setRun, log, addCost, failRun, activeRun, runStructuredCrossCheck, plainSummary, ACTIVE, advance,
+  // the cross-check brief, for the replay harness
+  crossCheckCall, crossCheckPrompt, crossCheckSystem, CROSS_CHECK_SCHEMA, CROSS_CHECK_DIFF_CHARS,
 };
