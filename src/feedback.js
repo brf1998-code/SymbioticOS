@@ -14,6 +14,7 @@ const qrcode = require("./qrcode");
 const brand = require("./brand");
 const backup = require("./backup");
 const migrate = require("./migrate");
+const intake = require("./intake");
 
 const router = express.Router();
 // the restore route carries a whole backup and parses its own body
@@ -137,7 +138,7 @@ async function openBatch(company, mod, create) {
 router.post("/api/c/:slug/batch/add", requireManager, async (req, res) => {
   const ids = ((req.body || {}).feedback_ids || []).map(Number).filter(Boolean);
   if (!ids.length) return res.status(400).json({ error: "no feedback ids" });
-  const rows = (await q("SELECT id, module, status FROM platform.feedback WHERE company=$1 AND id = ANY($2::int[]) AND status IN ('new','reviewing') AND module <> 'platform'", [req.params.slug, ids])).rows;
+  const rows = (await q("SELECT id, module, status FROM platform.feedback WHERE company=$1 AND id = ANY($2::int[]) AND status IN ('new','reviewing') AND module <> 'platform' AND kind = 'feedback'", [req.params.slug, ids])).rows;
   for (const f of rows) {
     const b = await openBatch(req.params.slug, f.module, true);
     await q("UPDATE platform.feedback SET batch_id=$2, updated_at=now() WHERE id=$1", [f.id, b.id]);
@@ -248,8 +249,9 @@ router.get("/api/c/:slug/board", async (req, res) => {
   const reviews = await review.listReviews(co.slug);
   const batches = (await q("SELECT * FROM platform.batches WHERE company=$1 AND run_id IS NULL ORDER BY id", [co.slug])).rows;
   const { brand: b, ...coPublic } = co;
+  const intakes = req.sosRole === "floor" ? {} : await intake.boardIntakes(co.slug);
   res.json({
-    company: coPublic, brand: brandPublic(b), feedback, runs, modules, screens, reviews, batches,
+    company: coPublic, brand: brandPublic(b), feedback, runs, modules, screens, reviews, batches, intakes,
     boardUrl: boardUrl(req, co.slug),
     spend: await agent.monthlySpend(co.slug),
     models: { list: agent.MODELS, build: (await agent.buildModelFor(co.slug, await agent.modelFor(co.slug, "build"))).model },

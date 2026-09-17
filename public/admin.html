@@ -108,6 +108,7 @@ async function load() {
     ${brandHtml(c)}
     <div style="margin-top:6px"><select id="lib-${c.slug}">${D.library.filter(l => !c.modules.some(m => m.name === l.name)).map(l => `<option value="${l.name}">${esc(l.title)}</option>`).join("") || "<option value=''>all library modules added</option>"}</select>
       <button class="quiet" onclick="addModule('${c.slug}')">Add module from library</button>
+      <button class="quiet" onclick="newModule('${c.slug}')" title="Describe a new module in plain words on the company's board; Fable designs it">New module</button>
       <button class="danger" style="float:right" onclick="openDelete('${c.slug}', '${esc(c.name)}')">Delete company</button></div>
   </div>`).join("");
   if (D.companies.some(c => c.brand && c.brand.status === "building")) setTimeout(load, 5000);
@@ -148,6 +149,11 @@ async function addModule(slug) {
   if (j.restyle_run) alert(`Added. A brand restyle build (run #${j.restyle_run}) started; deploy it from the improvement board.`);
   else if (c && c.brand && c.brand.status === "done") alert("Added. The restyle build could not start; use the Restyle button.");
   load();
+}
+// A new module starts as a request card on the company's board; the popout opens there.
+async function newModule(slug) {
+  const j = await post(`/api/c/${slug}/intakes`, {});
+  if (j && j.id) location.href = `/c/${slug}/?intake=${j.id}`;
 }
 // ---- delete a company: slug typed back plus the admin password, checked server-side
 function openModal(html) { document.getElementById("mcard").innerHTML = html; document.getElementById("modal").classList.add("on"); }

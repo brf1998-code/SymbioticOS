@@ -52,6 +52,8 @@ Proof: push, run one change build on Sonnet (regression), one on Fable (the proo
 
 ## The flow, on the board
 
+*Status 2026-09-17: push 3 built and tested in fake mode end to end (card, popout, all thirteen questions, photo and spreadsheet attachments, a generated round, the design gate with Adjust and Start over, Approve, Withdraw, the admin entry); the card stops at "Design confirmed" until push 4 wires the build. First live test still to do: one real intake on Fable, about $1.*
+
 A module request is a feedback row of kind `module_request` with an intake record behind it. It uses the four columns the way every card does:
 
 | Column | What the card is doing |

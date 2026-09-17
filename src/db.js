@@ -205,6 +205,40 @@ CREATE TABLE IF NOT EXISTS platform.schema_snapshots (
   file       TEXT NOT NULL,                        -- snapshot schema name (kept as "file" for history)
   taken_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Module creation (docs/MODULE-CREATION.md): one row per intake, behind a
+-- feedback card of kind 'module_request'.
+CREATE TABLE IF NOT EXISTS platform.module_intakes (
+  id          SERIAL PRIMARY KEY,
+  company     TEXT NOT NULL,
+  feedback_id INTEGER,
+  started_by  TEXT,
+  status      TEXT NOT NULL DEFAULT 'answering',   -- answering|thinking|design|confirmed|building|paused|done|abandoned|failed
+  name        TEXT,
+  slug        TEXT,
+  answers     JSONB NOT NULL DEFAULT '{}'::jsonb,  -- question id -> value (shape per kind, src/intake-questions.js)
+  rounds      JSONB NOT NULL DEFAULT '[]'::jsonb,  -- generated rounds as issued: [{round, questions, enough, why, model, cost_usd}]
+  design      JSONB,                               -- the design summary once written (bluf, items, reference_md, ...)
+  model       TEXT,
+  cost_usd    NUMERIC(10,4) NOT NULL DEFAULT 0,
+  error       TEXT,
+  run_ids     INTEGER[],
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS platform.attachments (
+  id          SERIAL PRIMARY KEY,
+  company     TEXT NOT NULL,
+  intake_id   INTEGER,
+  question_id TEXT,
+  filename    TEXT NOT NULL,
+  mime        TEXT NOT NULL,
+  size        INTEGER NOT NULL,
+  bytes       BYTEA NOT NULL,
+  parsed      JSONB,                               -- spreadsheets: { headers, rows (first 200), row_count }
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `;
 
 // Columns added after the first release (idempotent).
@@ -224,6 +258,8 @@ const UPGRADES = [
   "ALTER TABLE platform.build_runs ADD COLUMN IF NOT EXISTS company TEXT NOT NULL DEFAULT 'demo'",
   "ALTER TABLE platform.build_runs ADD COLUMN IF NOT EXISTS model TEXT",
   "ALTER TABLE platform.schema_snapshots ADD COLUMN IF NOT EXISTS company TEXT NOT NULL DEFAULT 'demo'",
+  "ALTER TABLE platform.feedback ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'feedback'",   // 'feedback' | 'module_request'
+  "ALTER TABLE platform.feedback ADD COLUMN IF NOT EXISTS intake_id INTEGER",
   "INSERT INTO platform.companies (slug, name) VALUES ('demo', 'Demo Company') ON CONFLICT DO NOTHING",
 ];
 

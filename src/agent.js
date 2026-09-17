@@ -277,17 +277,20 @@ async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd, 
 // in plain text as a last resort. The set of models that refused is cached
 // for the life of the process so the second call does not pay for the 400.
 const noForcedTool = new Set();
-async function runStructured({ model, system, prompt, schema, toolName, maxTokens }) {
+// `blocks`: optional content blocks (images, pdf documents, extra text) that
+// go in front of the prompt text, for callers that hand the model attachments.
+async function runStructured({ model, system, prompt, schema, toolName, maxTokens, blocks }) {
   if (fakeMode()) return fakeStructured(toolName, prompt);
   if (!haveKey()) throw new Error("ANTHROPIC_API_KEY not configured on this instance");
   const Anthropic = require("@anthropic-ai/sdk");
   const client = new Anthropic();
   const tools = [{ name: toolName, description: `Return the ${toolName}.`, input_schema: schema }];
+  const content = (text) => (blocks && blocks.length ? [...blocks, { type: "text", text }] : text);
   const call = (forced) => client.messages.create({
     model,
     max_tokens: maxTokens || 4000,
     system,
-    messages: [{ role: "user", content: forced ? prompt : `${prompt}\n\nRespond only by calling the ${toolName} tool with the complete result. No prose.` }],
+    messages: [{ role: "user", content: content(forced ? prompt : `${prompt}\n\nRespond only by calling the ${toolName} tool with the complete result. No prose.`) }],
     tools,
     tool_choice: forced ? { type: "tool", name: toolName } : { type: "auto" },
   });

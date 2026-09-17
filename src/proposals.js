@@ -39,6 +39,7 @@ async function generateProposal(feedbackId) {
   const fb = (await q("SELECT * FROM platform.feedback WHERE id=$1", [feedbackId])).rows[0];
   if (!fb) throw new Error("feedback not found");
   if (!fb.module || fb.module === "platform") throw new Error("platform feedback is handled outside the AI loop");
+  if (fb.kind === "module_request") throw new Error("a module request is answered in its own popout, not reviewed as feedback");
 
   const ctx = await moduleContext(fb.company, fb.module);
   const screenLine = fb.screen ? `Screen: ${fb.screen} (${fb.target_file})` : `Screen: unknown (page ${fb.page || "?"})`;

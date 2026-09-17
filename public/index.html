@@ -36,7 +36,13 @@
   .modcard.off:hover { opacity:.85; }
   .modall { align-self:center; font-size:12.5px; }
   .modall.on::before { background:var(--navy); border-color:var(--navy); }
+  .modall.newmod { border-style:dashed; order:99; } .modall.newmod::before { display:none; }
   .filterhint { font-size:12px; opacity:.85; margin-top:6px; }
+  /* a module request card: the intake lives in the popout, the tile is its status */
+  .card.request { border-left:4px solid var(--teal); }
+  .card.request .msg { font-size:14px; }
+  .card.request .stat { margin-top:8px; font-size:12.5px; line-height:1.5; }
+  .card.request .stat b { color:var(--navy); }
   .wrap { max-width:1500px; margin:0 auto; padding:14px 22px 0; }
   .modcard button.vbtn { background:rgba(255,255,255,.14); color:#fff; border:none; border-radius:14px; padding:4px 10px; font-weight:600; font-size:12.5px; cursor:pointer; font-family:inherit; }
   .vpanel { background:#fff; border:1px solid var(--line); border-left:4px solid var(--navy); border-radius:10px; padding:12px 14px; margin-bottom:12px; font-size:13px; }
@@ -574,7 +580,44 @@ function rollbackBtn(run) {
   return `<button class="no" onclick="if(confirm('Roll the floor back from v${run.to_version} to the previous version, with the data as it was then? Every open page reloads. This can be undone from the Versions panel.'))act('/api/runs/${run.id}/rollback')">Roll back</button>`;
 }
 
+// A module request: the tile is the status and the way in; the intake popout
+// (assets/intake.js) is where the answering, Fable's questions and the design
+// gate happen. Statuses come from DATA.intakes[fb.intake_id].
+function requestCard(fb) {
+  const it = (DATA.intakes || {})[fb.intake_id] || {};
+  const pk = "fb:" + fb.id;
+  let html = `<div class="card request ${PENDING.has(pk) ? "busy" : ""}" data-key="${pk}">${pendingHtml(pk)}`;
+  html += `<div class="msg">${esc(fb.message)}</div>`;
+  html += `<div class="meta">#${fb.id} · <span class="chip screen">Module request</span> · started by ${esc(fb.name || "a manager")}${it.cost_usd ? ` · $${Number(it.cost_usd).toFixed(2)} so far` : ""}</div>`;
+  const openBtn = (label, cls) => (MGR() ? `<button class="${cls || "primary"}" onclick="Intake.open(${fb.intake_id})">${label}</button>` : "");
+  const withdraw = MGR() && !["confirmed", "building", "done"].includes(it.status) ? `<button class="no" onclick="if(confirm('Withdraw this module request? The answers are kept on the record but nothing is built.'))act('/api/intakes/${fb.intake_id}/abandon')">Withdraw</button>` : "";
+  if (fb.status === "declined") { html += `<div class="fail-note">${esc(fb.outcome || "Withdrawn.")}</div>`; return html + "</div>"; }
+  switch (it.status) {
+    case "answering":
+      html += `<div class="stat">${it.round > 1 ? `<b>Fable has ${it.round_total} more question${it.round_total === 1 ? "" : "s"}</b> (round ${it.round} of 3). ` : ""}${it.round_answered} of ${it.round_total} answered${it.round_done ? ", ready to send to Fable" : ""}.</div>`;
+      html += openBtn(it.round_answered ? "Continue" : "Start answering") + withdraw;
+      break;
+    case "thinking":
+      html += `<div class="stat"><span class="pulse"></span>Fable is reading the answers${it.rounds_generated ? " and writing the design" : ""}. A minute or two.</div>` + openBtn("Open", "quiet") + withdraw;
+      break;
+    case "design":
+      html += `<div class="stat"><b>Design ready to review.</b> ${esc(it.bluf || "")}${it.estimate_usd != null ? ` About $${Number(it.estimate_usd).toFixed(2)} to build.` : ""}${it.flags ? ` (${it.flags} line${it.flags === 1 ? "" : "s"} flagged for wording)` : ""}</div>`;
+      html += openBtn("Review the design", "go") + withdraw;
+      break;
+    case "confirmed":
+      html += `<div class="stat"><b>Design confirmed.</b> ${esc(it.bluf || "")} The build comes in the next release of the platform; this card waits here until then.</div>` + openBtn("Open", "quiet");
+      break;
+    case "failed":
+      html += `<div class="fail-note">Fable did not finish: ${esc(it.error || "unknown problem")}. Open it and try again.</div>` + openBtn("Open and try again") + withdraw;
+      break;
+    default:
+      html += `<div class="stat">${esc(it.status || "unknown")}</div>` + openBtn("Open", "quiet") + withdraw;
+  }
+  return html + "</div>";
+}
+
 function card(fb) {
+  if (fb.kind === "module_request") return requestCard(fb);
   const run = DATA.runs.find(r => (r.feedback_ids || [r.feedback_id]).includes(fb.id) && r.status !== "cancelled");
   const isPlatform = !fb.module || fb.module === "platform";
   const pk = run && fb.status === "in_progress" ? "run:" + run.id : "fb:" + fb.id;
@@ -750,6 +793,9 @@ async function load() {
   normalizeSel();
   writeSel();   // the URL always shows the pick in force (cleans a stale ?m=, remembers a linked one)
   render();
+  // ?intake=<id> (from the admin page) opens that request's popout once
+  const want = new URLSearchParams(location.search).get("intake");
+  if (want && !window.INTAKE_OPENED && MGR()) { window.INTAKE_OPENED = true; Intake.open(Number(want)); }
 }
 
 // Everything below the band is drawn from DATA through the module filter, so
@@ -758,6 +804,7 @@ function render() {
   const many = DATA.modules.length > 1;
   document.getElementById("modules").innerHTML =
     (many ? `<button class="modall ${SEL ? "" : "on"}" onclick="selectAll()" title="Show every module">All modules</button>` : "") +
+    (MGR() ? `<button class="modall newmod" onclick="Intake.start()" title="Describe a new module in plain words; Fable designs it, you confirm, then it is built">+ New module</button>` : "") +
     DATA.modules.map(m => {
       const on = visible(m.name);
       return `<div class="modcard ${many ? (on ? "on" : "off") : ""}">
@@ -814,6 +861,7 @@ function render() {
 load();
 setInterval(() => { if (EDITING === null) load(); }, 4000);
 </script>
+<script src="/assets/intake.js"></script>
 <script src="/assets/feedback-widget.js" data-module="platform"></script>
 </body>
 </html>

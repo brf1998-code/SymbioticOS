@@ -133,6 +133,42 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   failed within the hour) stay above the columns; past ones sit under "Past
   system reviews" in the Versions panel. "Build by screen" starts one queued
   run per target file for a review's held items (`buildReviewByScreen`).
+- **Module creation intake** (2026-09-17, push 3 of docs/MODULE-CREATION.md;
+  the build from a confirmed design is push 4). A manager presses "+ New
+  module" on the board strip (or "New module" on an admin company card, which
+  lands on the board with `?intake=<id>`). That creates a feedback row of
+  `kind='module_request'` (new column; `intake_id` too) and a
+  `platform.module_intakes` row; the tile on the board is the status and the
+  way in, the popout (`public/assets/intake.js`, one file, its own CSS) is
+  where the answering happens. Fixed questions live in
+  `src/intake-questions.js` (13, the last one only when the company has other
+  modules; answer shapes documented at the top of that file). Answers save
+  one at a time (`POST /api/intakes/:id/answer`); `next` checks the open
+  round is complete (409 with the missing ids), sets status `thinking` and
+  runs `intake.think` in the background: Fable (`SOS_MODEL_INTAKE`, default
+  claude-fable-5-1) returns either a round of up to 6 questions (ids
+  `r2q1`..., at most two generated rounds, or `enough`) or the design
+  (`DESIGN_SCHEMA`: bluf, check items, reference_md in the module-formats
+  shape, screens, connections, starting data, leaves_out, change guidance,
+  plus `estimate_usd` from `estimateUsd`). Every generated string passes the
+  plain-words guard (`src/plainwords.js` over `principles/PLAIN-WORDS.md`: a
+  word check, one Haiku rewrite, the check again; a question that still fails
+  is dropped, a design line is flagged in `design.flags`; the company's own
+  system names from the works_with answer are allowed). Attachments
+  (`src/attachments.js`, `platform.attachments`, bytea, 15 MB and 10 per
+  intake): photos and pdfs go to Fable as image and document blocks
+  (`runStructured` now takes `blocks`), csv and xlsx are parsed to rows with a
+  dependency-free reader (xlsx is a zip of xml; unusual files fall back to
+  "save it as csv"). Design gate in the popout (a deliberate exception to
+  gates-on-the-tile): tick every item, Adjust the text (Fable re-issues the
+  design with the edit as the authority, `adjust`), Start over (keeps the
+  fixed answers), Approve build (`confirm`, status `confirmed`; push 4 starts
+  the build here). Withdraw on the tile (`abandon`, feedback declined). Fake
+  mode returns a canned round 2 and a canned design. Module requests are kept
+  out of batches and the proposal engine (`kind='feedback'` checks). The
+  intake router is mounted before the platform router because the attach
+  route parses a bigger JSON body. Spend goes to `ai_usage` as kinds `intake`
+  and `design`.
 - **Module filter** (2026-09-17, `public/index.html`): with more than one
   module, each module card's title in the strip is a toggle and an "All
   modules" chip sits in front. `SEL` (a Set of module names, null = all) is
