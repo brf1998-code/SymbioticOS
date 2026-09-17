@@ -43,6 +43,7 @@
       <button class="quiet" onclick="exportAll(false)">Download the checks log</button>
       <button class="quiet" onclick="exportAll(true)">Download labeled cases only</button>
       <label><input type="checkbox" id="onlyfail" onchange="render()"> Only runs that stopped</label>
+      <span style="margin-left:auto">Replay with <select id="rmodel"></select> <button class="primary" onclick="replayAll()">Replay every labeled case</button></span>
     </div>
     <div id="list"></div>
   </div>
@@ -57,20 +58,41 @@ async function load() {
   if (r.status === 401 || r.status === 403) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
   D = await r.json();
   document.getElementById("co").textContent = SLUG;
+  const sel = document.getElementById("rmodel");
+  if (!sel.options.length) sel.innerHTML = (D.models || []).map((m) => `<option value="${m.id}" ${m.id === "claude-fable-5-1" ? "selected" : ""}>${esc(m.label)} ($${m.in}/$${m.out})</option>`).join("");
   render();
+}
+// A replay runs the CURRENT brief on the run's original diff with the chosen
+// model and keeps the verdict next to the old one. The expected verdict comes
+// from the label: Right keeps the old verdict, Wrong flips it.
+function expectedFor(r) { const old = r.cross_check ? r.cross_check.verdict : null; if (!old || !r.label || r.label === "unsure") return null; return r.label === "right" ? old : (old === "fail" ? "pass" : "fail"); }
+async function replay(id) {
+  const model = document.getElementById("rmodel").value;
+  const btn = document.getElementById("rp-" + id); if (btn) { btn.disabled = true; btn.textContent = "Replaying..."; }
+  const r = await fetch(`/api/runs/${id}/replay`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { alert(j.error || "replay failed"); if (btn) { btn.disabled = false; btn.textContent = "Replay"; } return; }
+  const run = D.runs.find((x) => x.id === id); if (run) run.replays.push({ ...j, cost_usd: Number(j.cost_usd || 0), findings: j.findings || [] });
+  const y = window.scrollY; render(); window.scrollTo(0, y);
+}
+async function replayAll() {
+  const ids = D.runs.filter((r) => r.label && r.label !== "unsure" && r.cross_check && r.to_version).map((r) => r.id);
+  if (!ids.length) { alert("Label some runs first (Right or Wrong)."); return; }
+  if (!confirm(`Replay ${ids.length} labeled run(s) with ${document.getElementById("rmodel").selectedOptions[0].textContent}? Roughly 10 to 60 cents each.`)) return;
+  for (const id of ids) await replay(id);
 }
 function render() {
   const counts = D.counts || {};
   document.getElementById("counts").innerHTML = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<div class="count ${FILTER === k ? "on" : ""}" onclick="FILTER = FILTER === '${k}' ? null : '${k}'; render()"><b>${n}</b>${esc(k)}</div>`).join("");
-  const labeled = D.runs.filter((r) => r.label), wrong = labeled.filter((r) => r.label === "wrong"), reviewerFails = D.runs.filter((r) => r.reason === "reviewer failed it");
+  const labeled = D.runs.filter((r) => r.label), wrong = labeled.filter((r) => r.label === "wrong"), reviewerFails = D.runs.filter((r) => r.reviewer_failed);
   document.getElementById("stats").textContent = `${D.runs.length} runs · ${reviewerFails.length} failed by the reviewer · ${labeled.length} labeled, ${wrong.length} of those marked wrong${labeled.length ? ` (${Math.round(100 * wrong.length / labeled.length)}%)` : ""}`;
   const only = document.getElementById("onlyfail").checked;
-  const rows = D.runs.filter((r) => (!FILTER || r.reason === FILTER) && (!only || !["deployed", "at the gate", "in flight", "waiting on the manager"].includes(r.reason)));
+  const rows = D.runs.filter((r) => (!FILTER || r.reason === FILTER) && (!only || r.reviewer_failed || !["deployed", "at the gate", "in flight", "waiting on the manager"].includes(r.reason)));
   document.getElementById("list").innerHTML = rows.map(row).join("") || '<div class="empty">Nothing here.</div>';
 }
 function row(r) {
   const cc = r.cross_check;
-  const ok = ["deployed", "at the gate"].includes(r.reason);
+  const ok = ["deployed", "at the gate"].includes(r.reason) && !r.reviewer_failed;
   let h = `<div class="row" id="run-${r.id}"><div class="head">run #${r.id} <span class="chip ${r.lane}">${r.lane === "ui" ? "UI" : r.lane === "module" ? "NEW MODULE" : "FUNCTIONALITY"}</span> ${esc(r.module)} ${r.title ? "· " + esc(r.title) : ""} <span class="chip reason ${ok ? "ok" : r.reason === "in flight" ? "" : "fail"}">${esc(r.reason)}</span></div>`;
   h += `<div class="meta">${r.from_version ? "v" + r.from_version : "new"}${r.to_version ? " → v" + r.to_version : ""} · built by ${esc(modelLabel(r.model))}${r.effort ? " at " + esc(r.effort) : ""}${cc && cc.model ? " · reviewed by " + esc(modelLabel(cc.model)) : ""} · $${r.cost_usd.toFixed(2)} · ${new Date(r.created_at).toLocaleString()}${r.fix_round ? ` · ${r.fix_round} fix round(s)` : ""}${r.targets && r.targets.length ? " · screens: " + esc(r.targets.join(", ")) : ""}</div>`;
   if (r.proposals_text) h += `<details><summary>The change asked for</summary><div class="summary">${esc(r.proposals_text)}</div></details>`;
@@ -82,12 +104,17 @@ function row(r) {
   }
   if (r.error && r.reason !== "reviewer failed it") h += `<div class="findings">${esc(r.error)}</div>`;
   if (r.test_run && !r.test_run.ok) h += `<div class="findings">Tests: ${esc(r.test_run.detail || "")}</div>`;
+  if (r.replays && r.replays.length) {
+    const exp = expectedFor(r);
+    h += `<details open><summary>Replays (${r.replays.length})</summary>` + r.replays.map((p) => `<div class="summary"><b>${esc(modelLabel(p.model))}: ${esc(p.verdict)}</b>${exp ? (p.verdict === exp ? ` <span style="color:var(--green)">matches your label</span>` : ` <span style="color:var(--red)">disagrees with your label</span>`) : ""} · $${Number(p.cost_usd).toFixed(2)} · ${new Date(p.created_at).toLocaleString()}\n${esc(p.summary || "")}${(p.findings || []).filter((f) => f.demoted).length ? `\n\nDemoted to minor by the platform: ${esc((p.findings || []).filter((f) => f.demoted).map((f) => `${f.where}: ${f.demoted}`).join("; "))}` : ""}</div>`).join("") + `</details>`;
+  }
   h += `<div class="label"><span class="meta" style="margin:0">Was the platform right to stop it${ok ? " (or to let it through)" : ""}?</span>
     <button class="quiet ${r.label === "right" ? "on" : ""}" onclick="label(${r.id}, 'right')">Right</button>
     <button class="quiet ${r.label === "wrong" ? "on" : ""}" onclick="label(${r.id}, 'wrong')">Wrong</button>
     <button class="quiet ${r.label === "unsure" ? "on" : ""}" onclick="label(${r.id}, 'unsure')">Unsure</button>
     <input id="note-${r.id}" placeholder="Why (one line, optional)" value="${esc(r.label_note || "")}" onchange="label(${r.id}, document.querySelector('#run-${r.id} .label button.on') ? ['right','wrong','unsure'].find(l => document.querySelector('#run-${r.id} .label button.on').textContent.toLowerCase() === l) : 'unsure')">
-    ${r.label ? `<span class="meta" style="margin:0">labeled ${esc(r.label)} by ${esc(r.labeled_by || "")}</span>` : ""}</div></div>`;
+    ${r.label ? `<span class="meta" style="margin:0">labeled ${esc(r.label)} by ${esc(r.labeled_by || "")}</span>` : ""}
+    ${r.to_version ? `<button class="primary" id="rp-${r.id}" onclick="replay(${r.id})">Replay</button>` : ""}</div></div>`;
   return h;
 }
 async function label(id, l) {

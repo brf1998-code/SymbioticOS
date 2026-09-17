@@ -329,8 +329,16 @@ async function runStructuredCrossCheck(run, proposal, cur, model, diffOverride) 
   let diff = diffOverride || "";
   if (!diff) {
     try {
-      diff = execFileSync("diff", ["-ru", fromDir, dir], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+      // -N: a file the agent ADDED (a new migration, a new page) shows with its
+      // whole body instead of "Only in ...: 002.sql", which left the reviewer
+      // unable to see new migrations and failing them as unverifiable (run #28)
+      diff = execFileSync("diff", ["-ruN", fromDir, dir], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
     } catch (e) { diff = e.stdout || ""; } // diff exits 1 when files differ
+  }
+  if (!diff.trim()) {
+    // nothing to review: the agent changed no file. Usually a request the
+    // module cannot carry out (run #32 asked it to change a platform password)
+    return { data: { verdict: "fail", summary: "The agent changed nothing: no file differs from the version on the floor. Usually that means the request is not something this module can do (a platform setting, an account, another system). Adjust the proposal or decline it.", findings: [{ severity: "blocking", where: "the whole change", what: "no file was changed", evidence: "(empty diff)" }], issues: ["no file was changed"], model_verdict: "fail" }, costUsd: 0 };
   }
   const ps = await loadProposals(run.proposal_ids || [run.proposal_id]).catch(() => []);
   const targets = ps.map((x) => x.target_file).filter(Boolean);
@@ -353,8 +361,11 @@ async function crossCheckCall({ model, lane, targets, requirement, diff, fromVer
     toolName: "verdict",
     maxTokens: 6000,
   });
-  // the rule, not the model's mood, decides: fail only on a blocking finding
-  const findings = Array.isArray(out.data.findings) ? out.data.findings : [];
+  // the rule, not the model's mood, decides: fail only on a blocking finding.
+  // Findings the brief already calls minor are downgraded here as well, because
+  // a reviewer keeps marking them blocking anyway (run #31: a missing
+  // data-changed mark and an "if the underlying bug is..." guess).
+  const findings = (Array.isArray(out.data.findings) ? out.data.findings : []).map((f) => f && demote(f)).filter(Boolean);
   const blocking = findings.filter((f) => f && f.severity === "blocking");
   const verdict = blocking.length ? "fail" : "pass";
   let summary = String(out.data.summary || "").trim();
@@ -366,6 +377,21 @@ async function crossCheckCall({ model, lane, targets, requirement, diff, fromVer
 
 const CROSS_CHECK_DIFF_CHARS = Number(process.env.SOS_CROSS_CHECK_DIFF_CHARS || 90000);
 
+// Never blocking, whatever the reviewer says: housekeeping the platform asks
+// the builder for, and anything the reviewer only suspects. Kept as minor with
+// the reason recorded, so the checks log shows what was demoted.
+const NEVER_BLOCKING = [
+  [/data-changed|tour\.json|reference\.md|principles? rule|rule 8|rule 9|plain[- ]words/i, "housekeeping is never blocking"],
+  [/\b(if the underlying|if the real|might|may (?:be|still|not)|presumably|cannot (?:confirm|verify|tell|see)|can't (?:confirm|verify|tell|see)|unverifiable|not (?:shown|visible|included) in the diff|would need to (?:run|test)|worth confirming|assum(?:e|ption))\b/i, "a guess or something unverifiable from the diff is never blocking"],
+  [/\b(cosmetic|wording|formatting|whitespace|style only|dead (?:code|logic)|misspell)/i, "cosmetic notes are never blocking"],
+];
+function demote(f) {
+  if (f.severity !== "blocking") return f;
+  const text = `${f.where || ""} ${f.what || ""}`;
+  for (const [re, why] of NEVER_BLOCKING) if (re.test(text)) return { ...f, severity: "minor", demoted: why, was: "blocking" };
+  return f;
+}
+
 // The reviewer's brief. Calibrated 2026-09-17 after almost every functionality
 // change was being failed: the old brief said "fail anything beyond the
 // requirement" and never told the reviewer what a functionality change
@@ -374,7 +400,10 @@ const CROSS_CHECK_DIFF_CHARS = Number(process.env.SOS_CROSS_CHECK_DIFF_CHARS || 
 // verdict follows the findings' severity.
 function crossCheckSystem(lane) {
   const { platformDocs } = require("./agent");
-  const rules = platformDocs().filter((d) => ["PRINCIPLES.md", "GUARDRAILS.md"].includes(d.name)).map((d) => `<!-- ${d.name} -->\n${d.content}`).join("\n\n");
+  // GUARDRAILS only. PRINCIPLES.md is the builder's craft (tours, data-changed
+  // marks, plain words); handed to the reviewer it became a list of things to
+  // fail builds for (run #31 failed on "rule 9").
+  const rules = platformDocs().filter((d) => d.name === "GUARDRAILS.md").map((d) => `<!-- ${d.name} -->\n${d.content}`).join("\n\n");
   return `You are an independent reviewer of a change to a factory software module. You did not write it and you cannot run it; you judge from the diff. Your reader is a production manager, so write findings in plain words.
 
 Mark a finding BLOCKING only when one of these is true:
@@ -391,6 +420,8 @@ Everything else is at most MINOR. In particular these are NOT violations and nev
 - The requirement's "what stays the same" describes what the floor sees, not which files may be touched. Touching a file is fine if that behavior is unchanged.
 - Anything you cannot verify from the diff. Do not fail for what you cannot see or cannot run.
 ${lane === "module" ? "\nThis is a brand-new module built from a confirmed design summary. The requirement is that design. Check that every screen, rule, number and connection the design names is there in some form, that visible text is in plain words (no API, database, schema, JSON, deploy, server, sync, token, prompt, backend, frontend), that every outside connection goes through the ctx services the contract allows and nothing reaches the network directly, and that a tour.json exists. A first version is meant to be small: leaving out what the design lists under \"What Rev 1 leaves out\" is correct, not a finding.\n" : ""}
+A finding that contains "if", "might", "may", "presumably", "cannot confirm" or "would need to run" is a guess, and a guess is minor by definition. The builder's craft rules (tour steps, data-changed marks, plain words, reference doc) are not yours to enforce; note them as minor at most. A file that appears in full with every line marked + is a NEW file the change adds (a new migration, a new page); read it as such, it is not missing.
+
 When in doubt between blocking and minor, choose minor. A blocking finding must quote the diff lines that show it. The verdict is pass when there is no blocking finding.
 
 ${rules}`;
@@ -543,5 +574,5 @@ module.exports = {
   // shared with modulebuild.js (a brand-new module goes through the same runs table and the same gates)
   setRun, log, addCost, failRun, activeRun, runStructuredCrossCheck, plainSummary, ACTIVE, advance,
   // the cross-check brief, for the replay harness
-  crossCheckCall, crossCheckPrompt, crossCheckSystem, CROSS_CHECK_SCHEMA, CROSS_CHECK_DIFF_CHARS,
+  crossCheckCall, crossCheckPrompt, crossCheckSystem, CROSS_CHECK_SCHEMA, CROSS_CHECK_DIFF_CHARS, demote,
 };

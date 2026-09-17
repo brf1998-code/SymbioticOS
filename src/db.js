@@ -238,6 +238,17 @@ CREATE TABLE IF NOT EXISTS platform.check_labels (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS platform.check_replays (
+  id         SERIAL PRIMARY KEY,
+  run_id     INTEGER NOT NULL,
+  model      TEXT NOT NULL,
+  verdict    TEXT NOT NULL,
+  summary    TEXT,
+  findings   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  cost_usd   NUMERIC(10,4) NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS platform.attachments (
   id          SERIAL PRIMARY KEY,
   company     TEXT NOT NULL,

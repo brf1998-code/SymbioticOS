@@ -32,6 +32,29 @@ Also on 2026-09-17 the cross-check brief was rewritten (see CLAUDE.md,
 "Cross-check calibrated"). Whether that was enough is what this campaign
 measures.
 
+## First export, 2026-09-17 (demo company, 24 runs)
+
+Nine functionality runs, fourteen UI, one module build. Every reviewer stop
+was Opus 5 reviewing a functionality change; the one module build (Roving
+Watch Logs) was reviewed by Fable and passed. The five stops:
+
+| Run | What happened | Verdict on the verdict |
+|---|---|---|
+| #32 | "change the admin password to Brendan1": the agent produced an empty diff | right to stop; now stopped before the reviewer with a plain message |
+| #19 | five-change batch, the agent skipped change 5 entirely | right to stop |
+| #13 | nine-change batch; the agent removed a timestamp from a card and reworded a line | old brief, strict scope; a manager might call either way |
+| #28 | three changes; the agent replaced the older per-station throttle with the new cap; the reviewer could not see the new migration because `diff -ru` prints a new file as "Only in ..." with no body | half wrong: the invisible migration was our bug (`-N` now) |
+| #31 | new brief; the reviewer marked two things blocking that the brief calls minor: a guess ("if the underlying bug is...") and a missing `data-changed` mark, citing PRINCIPLES rule 9 because PRINCIPLES.md was in its brief | wrong |
+
+What changed from this: new files show in full in the diff; the reviewer gets
+GUARDRAILS.md only, never the builder's craft rules; a mechanical guard
+demotes blocking findings that are guesses, housekeeping or cosmetic (the
+checks log shows "Demoted to minor by the platform" when it fires); an empty
+diff stops before the reviewer; and the instance default review model is
+Fable. Lesson for the builder side, separate from the reviewer: batches of
+five or more changes are where the agent skips or over-reaches; the board's
+"Build by screen" exists for that.
+
 ## The log
 
 `/c/<slug>/checks` (manager, linked from the board header as "checks log"):
@@ -48,6 +71,13 @@ asked, and ask "would I have let this on the floor?" The reviewer's job is to
 stop things a manager would not have let through, nothing stricter.
 
 ## The replay
+
+The quickest loop is on the checks page itself: pick a model in "Replay
+with", press Replay on a run (or "Replay every labeled case"), and the new
+verdict lands under the old one with "matches your label" or "disagrees",
+plus any findings the platform demoted. Each replay is one cross-check call
+on the run's original diff with the brief as deployed. The Terminal route
+below does the same offline, useful when trying a brief before pushing it.
 
 "Download the checks log" (or "labeled cases only") saves a JSON file with
 every case's requirement, lane, screens and the files before and after. Then,

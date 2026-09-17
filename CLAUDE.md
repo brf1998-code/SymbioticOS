@@ -191,6 +191,26 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   printing old verdict, new verdict and agreement with the label. Tune the
   brief against labeled cases offline, not against live builds. Exit bar for
   a pilot is in the campaign doc.
+- **Checks campaign, first export** (2026-09-17, docs/CHECKS-CAMPAIGN.md
+  "First export"): five reviewer stops on the demo company, all Opus 5 on
+  functionality changes; two right, three wrong or half wrong. Fixes: the
+  build diff is `diff -ruN` (a NEW file's whole body shows; `-u` alone
+  printed "Only in ...: 002.sql" and the reviewer failed the migration as
+  unverifiable, run #28); the reviewer's brief carries GUARDRAILS.md only
+  (PRINCIPLES.md made it fail builds for rule 9, run #31); `demote()` in
+  pipeline.js turns blocking findings that are guesses ("if the underlying",
+  "cannot confirm", "presumably"), housekeeping (data-changed, tour.json,
+  reference.md) or cosmetic into minor with `demoted` recorded; an empty
+  diff is a plain "the agent changed nothing" stop before the reviewer (run
+  #32). Replay from the checks page: `POST /api/runs/:id/replay {model}`
+  (`checks.replayRun`, diff rebuilt from stored versions by `diffForRun`,
+  result in `platform.check_replays`, spend as ai_usage kind `replay`);
+  the page shows each replay under the run with match/disagree against the
+  label and "Replay every labeled case". `reasonFor` now says "deployed over
+  a reviewer stop" / "cancelled after a reviewer stop" so overridden stops
+  still count (`reviewer_failed`). Instance default review model set to
+  Fable on Railway (`SOS_MODEL_REVIEW`); companies can still override on
+  their Agent settings page.
 - **Cross-check calibrated** (2026-09-17, `crossCheckSystem` in pipeline.js):
   the old brief ("fail anything beyond the requirement") never told the
   reviewer what a functionality change legitimately touches, so routes.js
