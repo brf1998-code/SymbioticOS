@@ -133,6 +133,18 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   failed within the hour) stay above the columns; past ones sit under "Past
   system reviews" in the Versions panel. "Build by screen" starts one queued
   run per target file for a review's held items (`buildReviewByScreen`).
+- **Module filter** (2026-09-17, `public/index.html`): with more than one
+  module, each module card's title in the strip is a toggle and an "All
+  modules" chip sits in front. `SEL` (a Set of module names, null = all) is
+  read from `?m=a,b` first, else `localStorage["sos.modules.<slug>"]`, is
+  normalized against the company's modules (unknown names dropped, empty or
+  every module = all) and always written back to both, so the URL shows the
+  pick in force and can be linked. Clicking a title from "all" shows only
+  that module; clicking again adds or removes. `visible(module)` gates the
+  four columns, the KPI counts, batch tiles, the batch panels, the review
+  bars and the system review default (first visible module); spend, build
+  model and the Platform requests strip ignore it. `load()` fetches and
+  `render()` draws from `DATA`, so a toggle redraws without a fetch.
 - **Board layout** (`public/index.html`): header band, module strip (Open
   live / Preview vN / Diagrams per module), KPI strip, system review toolbar,
   four columns. The band's top right holds the company's **board QR code**

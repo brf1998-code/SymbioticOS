@@ -36,7 +36,7 @@ Fable 5.1 is the model for every step: the generated rounds, the design summary,
 
 ## Step zero: make Fable the builder
 
-*Status 2026-09-17: written and tested in the sandbox (SDK loads, the bundled CLI starts as root with acceptEdits and lists only the five file tools, the fake-mode loop runs end to end with Fable selected and `models_seen` recorded). Awaiting the push and the live proof builds.*
+*Status 2026-09-17: done. Pushed and proven on the live instance: one UI change built on Sonnet 5 (regression) and one on Fable 5.1, both deployed. Fable is the builder from here on. Push 1 of the build order is complete.*
 
 The "Fable cannot build" note in CLAUDE.md is a stale dependency, not a Fable limit. `@anthropic-ai/claude-agent-sdk` is pinned at 0.1.77, published 2026-01-06, months before Fable existed; its bundled `cli.js` is what exits 1 after the first reply (run 12 on 2026-09-11: init seen, three messages, nothing on stderr). The current SDK is 0.3.274 (2026-09-16), bundling Claude Code 2.1.274 as a native binary, and it carries explicit Fable 5.1 support (a Fable-specific prompt bundle, effort levels, entitlement handling).
 
@@ -168,6 +168,8 @@ Brendan expects module dependencies to come up, with the answer possibly being o
 Applied to generated questions, the design summary, the manager-facing part of walkthroughs, every visible string in built pages (through the cross-check), and later to proposal copy. Enforcement in three cheap steps: a regex pass; if anything trips, a Haiku rewrite; a second regex pass. A question that still fails is dropped; a summary that still fails is flagged to the manager with the offending line.
 
 ## Board: pick the modules you are looking at
+
+*Status 2026-09-17: built (push 2), tested in the sandbox on desktop and phone widths; awaiting the push.*
 
 Module chips in the module strip. Click toggles, "All" resets. The selection filters all four columns, the KPI strip, the system review default and the batch panels. Platform requests are unaffected. The selection is kept per company in the browser and mirrored in the URL (`?m=a,b`), so a filtered board can be linked, and later printed as its own QR sign. A module request card belongs to the module it is creating, so it shows under that chip once the name is given and under All before.
 
