@@ -361,7 +361,12 @@ not), and the Mac-side Cowork VM has no network. So the push is one command
 in Brendan's Terminal:
 
 1. Claude edits files in the mounted folder `sos/` (device_bash / commit_files)
-   and says what changed.
+   and says what changed. Trap found 2026-09-17: `device_commit_files` with a
+   `stagedPath` that was only `cp`'d into the outputs folder can write a STALE
+   earlier copy of that path (the board page landed as the previous version
+   while the docs beside it were current). Reliable path: `SendUserFile` on
+   the file, then commit by `fileUuid`, then `md5sum` on the mount against
+   the sandbox copy before telling Brendan to push.
 2. Brendan runs, in Terminal:
    `cd ~/Documents/Claude/Projects/Symbiotic\ Operating\ System/sos && ./scripts/push.sh "what changed"`
    The script reads the PAT from `../pat.md` (gitignored, bare token or

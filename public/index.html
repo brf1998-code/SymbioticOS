@@ -27,6 +27,16 @@
   .modcard a { color:#fff; text-decoration:none; background:rgba(255,255,255,.14); border-radius:14px; padding:4px 10px; font-weight:600; }
   .modcard a.amber { background:var(--amber); }
   .modcard .v { opacity:.8; }
+  /* module filter: the title of each module card is a toggle; "All modules" resets */
+  .modcard .tog, .modall { background:none; border:1px solid rgba(255,255,255,.55); color:#fff; border-radius:14px; padding:4px 11px; font-weight:800; font-size:13.5px; cursor:pointer; font-family:inherit; margin:0; min-height:0; display:inline-flex; align-items:center; gap:6px; }
+  .modcard .tog::before, .modall::before { content:""; width:12px; height:12px; border:2px solid rgba(255,255,255,.75); border-radius:4px; flex:none; box-sizing:border-box; }
+  .modcard.on .tog, .modall.on { background:#fff; color:var(--navy); border-color:#fff; }
+  .modcard.on .tog::before, .modall.on::before { background:var(--green); border-color:var(--green); }
+  .modcard.off { opacity:.55; }
+  .modcard.off:hover { opacity:.85; }
+  .modall { align-self:center; font-size:12.5px; }
+  .modall.on::before { background:var(--navy); border-color:var(--navy); }
+  .filterhint { font-size:12px; opacity:.85; margin-top:6px; }
   .wrap { max-width:1500px; margin:0 auto; padding:14px 22px 0; }
   .modcard button.vbtn { background:rgba(255,255,255,.14); color:#fff; border:none; border-radius:14px; padding:4px 10px; font-weight:600; font-size:12.5px; cursor:pointer; font-family:inherit; }
   .vpanel { background:#fff; border:1px solid var(--line); border-left:4px solid var(--navy); border-radius:10px; padding:12px 14px; margin-bottom:12px; font-size:13px; }
@@ -155,6 +165,7 @@
           <span class="right" id="who"></span><span id="global-busy"><span class="spin"></span><span id="global-busy-text">working</span></span>
         </div>
         <div class="modstrip" id="modules"></div>
+        <div class="filterhint" id="filterhint"></div>
       </div>
       <div class="qrtile" id="qrtile" role="button" tabindex="0" title="Scan to open this board"
            onclick="openQr()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openQr();}">
@@ -208,6 +219,41 @@ let EDITING = null;            // proposal id being adjusted, or "req:<runId>" w
 const CHECKED = new Set();     // "runId:i" boxes the manager has ticked at the requirement gate (survives the 4s reload)
 const MGR = () => DATA && (DATA.role === "manager" || DATA.role === "admin");
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
+
+// ---- module filter ---------------------------------------------------------
+// Which modules the board is showing. null means all of them. The choice is
+// kept per company in this browser and mirrored in the URL (?m=a,b) so a
+// filtered board can be linked or bookmarked. Platform requests ignore it.
+let SEL = null;
+const SEL_KEY = "sos.modules." + SLUG;
+function readSel() {
+  const fromUrl = new URLSearchParams(location.search).get("m");
+  if (fromUrl != null) return fromUrl === "" || fromUrl === "all" ? null : new Set(fromUrl.split(",").filter(Boolean));
+  try { const s = localStorage.getItem(SEL_KEY); if (s) return new Set(JSON.parse(s)); } catch (e) { /* storage unavailable */ }
+  return null;
+}
+function writeSel() {
+  try { if (SEL) localStorage.setItem(SEL_KEY, JSON.stringify([...SEL])); else localStorage.removeItem(SEL_KEY); } catch (e) { /* storage unavailable */ }
+  const url = new URL(location.href);
+  if (SEL) url.searchParams.set("m", [...SEL].join(",")); else url.searchParams.delete("m");
+  history.replaceState(null, "", url.pathname + url.search + url.hash);
+}
+// Drop names that are not modules of this company; an empty pick means all.
+function normalizeSel() {
+  if (!SEL) return;
+  const known = new Set(DATA.modules.map(m => m.name));
+  SEL = new Set([...SEL].filter(n => known.has(n)));
+  if (!SEL.size || SEL.size === known.size) SEL = null;
+}
+const visible = (mod) => !SEL || !mod || mod === "platform" || SEL.has(mod);
+function toggleModule(name) {
+  if (!SEL) SEL = new Set([name]);                       // from all: just this one
+  else if (SEL.has(name)) { SEL.delete(name); if (!SEL.size) SEL = null; }
+  else SEL.add(name);
+  normalizeSel(); writeSel(); render();
+}
+function selectAll() { SEL = null; writeSel(); render(); }
+SEL = readSel();
 function modelLabel(id) { const m = (DATA.models.list || []).find(x => x.id === id); return m ? m.label : (id || ""); }
 // What the agent process itself reported running on (evidence.models_seen).
 // Silent when it matches the chosen model; loud when it does not.
@@ -235,9 +281,11 @@ function renderToolbar() {
   if (!MGR() || !DATA.modules.length) { tb.innerHTML = ""; return; }
   const running = (DATA.reviews || []).find(r => r.status === "running");
   const fable = DATA.models.list.find(m => m.id === "claude-fable-5-1") ? "claude-fable-5-1" : DATA.models.build;
+  // the review select defaults to the first module the board is showing
+  const first = (DATA.modules.find(m => visible(m.name)) || DATA.modules[0]).name;
   tb.innerHTML = running
     ? `<span class="pulse"></span>System review #${running.id} running on ${esc(running.module)} with ${esc(modelLabel(running.model))}. Recommendations land in Reviewing when it finishes.`
-    : `System review: <select id="rv-module">${DATA.modules.map(m => `<option value="${m.name}">${esc(m.title)}</option>`).join("")}</select>
+    : `System review: <select id="rv-module" onchange="estimateReview()">${DATA.modules.map(m => `<option value="${m.name}" ${m.name === first ? "selected" : ""}>${esc(m.title)}</option>`).join("")}</select>
        with <select id="rv-model">${modelOptions(fable, false)}</select>
        <button class="quiet" style="margin:0" onclick="startReview()">Review the whole module</button>
        <span class="meta" style="margin:0" id="rv-est"></span>`;
@@ -266,7 +314,7 @@ function reviewCounts(r) {
 function renderReviews() {
   const box = document.getElementById("reviews");
   const recent = Date.now() - 3600000;
-  const live = (DATA.reviews || []).filter(r => r.status === "running" || reviewCounts(r).open.length || (r.status === "failed" && new Date(r.created_at) > recent));
+  const live = (DATA.reviews || []).filter(r => visible(r.module) && (r.status === "running" || reviewCounts(r).open.length || (r.status === "failed" && new Date(r.created_at) > recent)));
   box.innerHTML = live.map(r => {
     const { counts, open } = reviewCounts(r);
     if (r.status === "running") return `<details class="reviewbar" open><summary><b>System review #${r.id}</b> · ${esc(r.module)} v${r.version} · ${esc(modelLabel(r.model))} · <span class="pulse"></span>reading the module</summary></details>`;
@@ -357,6 +405,7 @@ function renderColumnBatches() {
   const modTitle = m => (DATA.modules.find(x => x.name === m) || {}).title || m;
   let nh = "", rh = "";
   for (const b of DATA.batches || []) {
+    if (!visible(b.module)) continue;
     const items = batchItems(b);
     if (!items.length) continue;
     const fresh = items.filter(f => f.status === "new"), ready = items.filter(f => f.status === "reviewing" && f.proposal_id);
@@ -698,47 +747,67 @@ async function load() {
   else if (DATA.fakeAgent) { w.style.display = "block"; w.textContent = "Fake agent mode (SOS_FAKE_AGENT=1): the loop runs but the agent only stamps a marker on pages."; }
   else w.style.display = "none";
   document.getElementById("who").innerHTML = `signed in as <b>${esc(DATA.role)}</b>${DATA.role === "admin" ? ' · <a href="/admin">admin</a>' : ""}${MGR() ? ` · <a href="/c/${SLUG}/agents">agent settings</a>` : ""} · <a href="/logout">sign out</a>`;
-  document.getElementById("modules").innerHTML = DATA.modules.map(m =>
-    `<div class="modcard"><b>${esc(m.title)}</b><span class="v">v${m.live_version}</span>
+  normalizeSel();
+  writeSel();   // the URL always shows the pick in force (cleans a stale ?m=, remembers a linked one)
+  render();
+}
+
+// Everything below the band is drawn from DATA through the module filter, so
+// a toggle redraws without another fetch.
+function render() {
+  const many = DATA.modules.length > 1;
+  document.getElementById("modules").innerHTML =
+    (many ? `<button class="modall ${SEL ? "" : "on"}" onclick="selectAll()" title="Show every module">All modules</button>` : "") +
+    DATA.modules.map(m => {
+      const on = visible(m.name);
+      return `<div class="modcard ${many ? (on ? "on" : "off") : ""}">
+      ${many ? `<button class="tog" onclick="toggleModule('${m.name}')" title="${on ? (SEL ? "Hide this module" : "Show only this module") : "Show this module too"}">${esc(m.title)}</button>` : `<b>${esc(m.title)}</b>`}<span class="v">v${m.live_version}</span>
       <a href="/c/${SLUG}/m/${m.name}/">Open live</a>
       ${m.staged_version ? `<a class="amber" href="/c/${SLUG}/staging/m/${m.name}/">Preview v${m.staged_version}</a>` : ""}
-      <a href="/c/${SLUG}/diagrams/${m.name}">Diagrams</a>${MGR() ? `<button class="vbtn" onclick="openVersions('${m.name}')">Versions</button>` : ""}</div>`).join("");
-  const active = DATA.runs.filter(r => ["running", "waiting", "queued"].includes(r.status)).length;
+      <a href="/c/${SLUG}/diagrams/${m.name}">Diagrams</a>${MGR() ? `<button class="vbtn" onclick="openVersions('${m.name}')">Versions</button>` : ""}</div>`;
+    }).join("");
+  document.getElementById("filterhint").textContent = SEL
+    ? `Showing ${SEL.size === 1 ? "one module" : SEL.size + " modules"}. Tick a module to add it, tick it again to take it out, or All modules.`
+    : (many ? "Tick a module to look at its feedback on its own." : "");
+  const runs = DATA.runs.filter(r => visible(r.module));
+  const fbs = DATA.feedback.filter(f => visible(f.module));
+  const active = runs.filter(r => ["running", "waiting", "queued"].includes(r.status)).length;
   const week = Date.now() - 7 * 86400000;
-  const deployed = DATA.runs.filter(r => r.status === "deployed" && new Date(r.updated_at) > week).length;
-  const openFb = DATA.feedback.filter(f => f.status === "new" && f.module !== "platform").length;
+  const deployed = runs.filter(r => r.status === "deployed" && new Date(r.updated_at) > week).length;
+  const openFb = fbs.filter(f => f.status === "new" && f.module !== "platform").length;
   document.getElementById("kpis").innerHTML = [
-    [openFb, "new feedback"], [DATA.feedback.filter(f => f.status === "reviewing").length, "awaiting decision"],
+    [openFb, "new feedback"], [fbs.filter(f => f.status === "reviewing").length, "awaiting decision"],
     [active, "building now"], [deployed, "deployed this week"],
     [`$${DATA.spend.usd.toFixed(2)}`, `AI spend of $${DATA.spend.cap.toFixed(0)} monthly cap · $${Number(DATA.maxRunUsd).toFixed(2)} per change, $${Number(DATA.maxBatchUsd || 6).toFixed(0)} per run`], [modelLabel(DATA.models.build), "build model"],
   ].map(([v, l]) => `<div class="kpi"><b>${esc(v)}</b><span>${l}</span></div>`).join("");
   const buckets = { new: [], reviewing: [], in_progress: [], done: [], platform: [] };
   // batch runs render as one tile; their feedback items are folded into it
-  const batchRuns = DATA.runs.filter(r => (r.proposal_ids || []).length > 1 && !["cancelled"].includes(r.status));
+  const batchRuns = runs.filter(r => (r.proposal_ids || []).length > 1 && !["cancelled"].includes(r.status));
   const folded = new Set();
   const tiles = { in_progress: [], done: [] };
   for (const r of batchRuns) {
     const col = ["deployed", "rolled_back"].includes(r.status) ? "done" : "in_progress";
     const ids = (r.feedback_ids || []).filter(id => !folded.has(id));
     if (!ids.length) continue;
-    const fbs = DATA.feedback.filter(f => ids.includes(f.id));
+    const fbsInRun = DATA.feedback.filter(f => ids.includes(f.id));
     // only fold items whose own status matches the run (a cancelled/re-reviewed item stays its own card)
-    const live = fbs.filter(f => (col === "done" ? f.status === "done" : f.status === "in_progress"));
+    const live = fbsInRun.filter(f => (col === "done" ? f.status === "done" : f.status === "in_progress"));
     if (!live.length) continue;
     for (const f of live) folded.add(f.id);
     tiles[col].push({ run: r, ids: live.map(f => f.id) });
   }
   for (const fb of DATA.feedback) {
     if (!fb.module || fb.module === "platform") { buckets.platform.push(fb); continue; }
-    if (folded.has(fb.id)) continue;
+    if (!visible(fb.module) || folded.has(fb.id)) continue;
     (buckets[fb.status === "declined" ? "done" : fb.status] || buckets.new).push(fb);
   }
   renderToolbar();
   renderReviews();
   renderColumnBatches();
+  const empty = SEL ? '<div class="empty">Nothing here for the modules shown.</div>' : '<div class="empty">Nothing here.</div>';
   for (const k of ["new", "reviewing", "in_progress", "done", "platform"]) {
     const batches = (tiles[k] || []).map(t => batchCard({ ...t.run, feedback_ids: t.ids }));
-    document.getElementById("col-" + k).innerHTML = (batches.join("") + buckets[k].map(card).join("")) || '<div class="empty">Nothing here.</div>';
+    document.getElementById("col-" + k).innerHTML = (batches.join("") + buckets[k].map(card).join("")) || (k === "platform" ? '<div class="empty">Nothing here.</div>' : empty);
     document.getElementById("n-" + k).textContent = buckets[k].length + batches.length;
   }
 }
