@@ -1,4 +1,4 @@
-# Symbiotic OS — Workspace Guide (current as of 2026-09-17)
+# Symbiotic OS — Workspace Guide (current as of 2026-09-17, evening)
 
 **This file is the single source of truth for how this repo and the live
 instance are worked on.** Repo: `brf1998-code/SymbioticOS` (private). Live:
@@ -103,10 +103,16 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   `POST /api/runs/:id/override` (cross-check only; runs the tests, then the
   deploy gate; `cross_check.overridden` recorded), retry from scratch, or
   cancel (which now unstages the draft).
-- **Cost caps**: `SOS_MAX_RUN_USD` (1.50) is per change; a batch run gets
-  that times its change count, never above `SOS_MAX_BATCH_USD` (6). The
-  batch bar shows the figure; the run records `evidence.cap_usd`. Monthly
-  cap unchanged (`SOS_MONTHLY_CAP_USD`).
+- **Cost caps are off by default** (2026-09-17, Brendan: development mode,
+  spend what the work needs). `SOS_MAX_RUN_USD`, `SOS_MAX_BATCH_USD` and
+  `SOS_MONTHLY_CAP_USD` unset or 0 mean no cap; set them to bring caps back
+  (per change, per batch run, per month). With no cap the runner passes no
+  `maxBudgetUsd` to the SDK either; `maxTurns` (40 for a change,
+  `SOS_MODULE_MAX_TURNS` 150 for a module build) is the only bound. The KPI
+  tile says "no caps set", the batch bars drop their "stops itself past"
+  note. The live instance had SOS_MAX_RUN_USD=1.50 and SOS_MONTHLY_CAP_USD=25
+  as Railway variables; they must be removed or set to 0 AFTER this code is
+  deployed (the old code read 0 as a zero-dollar cap).
 - **Pending feedback on the board**: `act()` marks the card (greyed, spinner
   line naming the action) and a header pill until the server answers, then
   reloads. Runs in flight show the pulsing step as before.
@@ -133,8 +139,57 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   failed within the hour) stay above the columns; past ones sit under "Past
   system reviews" in the Versions panel. "Build by screen" starts one queued
   run per target file for a review's held items (`buildReviewByScreen`).
+- **Module build from a confirmed design** (2026-09-17, `src/modulebuild.js`,
+  lane `module` in `build_runs`): Approve build on the design gate calls
+  `modulebuild.startBuild(intake)`: a `platform.modules` row with no live
+  version, v1 written from a **skeleton** the platform generates from the
+  design (`skeleton()`: one `items` table with the thing's stages, seed rows
+  from the first attached spreadsheet, a board screen with a move button per
+  item, `/api/items` and `/api/stats`, a four-step tour), the design's
+  `reference_md` as the module's `reference.md` doc, an approved proposal on
+  the request feedback, and a run (`from_version` NULL, `to_version` 1,
+  `requirement` = the reference, `evidence.intake_id`). `pipeline.advance`
+  delegates the module lane here; deploy, cancel, retry, fix and override
+  are the pipeline's own with two hooks (`afterDeploy`: intake and card
+  done; `afterCancel`: a module that never went live is deleted again and
+  the intake goes back to `confirmed`, where the card offers "Build it now",
+  `POST /api/intakes/:id/build`). Build step: the agent (the intake model,
+  Fable) works on the skeleton with `principles/MODULE-CONTRACT.md` (the
+  files, manifest, routes signature and ctx services, migration rules and
+  their two traps, base computed from location.pathname, tour shape) and
+  PLAIN-WORDS.md in the system prompt, the design and the manager's own
+  answers and starting rows in the user prompt (`NEW MODULE BUILD` header;
+  fake mode leaves the skeleton and stamps the page). Then platform checks
+  with no tokens (`validateModule`: manifest name and pages, migrations
+  through the validator, routes.js loads and returns a router, tour.json,
+  no hard-coded module address, no dashes); a failure is filed as a failed
+  cross-check by "platform checks" so fix / retry / cancel apply. Then
+  stage, cross-check (Fable, the design as the requirement, the file listing
+  in diff shape from `listingAsDiff`), smoke, deploy gate ("Put it on the
+  floor" on the request card, which shows `runBlock` like any card). Retry
+  rewrites the skeleton; fix keeps the files. The strip shows a module with
+  no live version as "being built" with only its Preview link.
+- **Cross-check calibrated** (2026-09-17, `crossCheckSystem` in pipeline.js):
+  the old brief ("fail anything beyond the requirement") never told the
+  reviewer what a functionality change legitimately touches, so routes.js
+  edits, new migrations and tour.json upkeep were read as violations and
+  almost every functionality change failed. The brief now lists the five
+  blocking conditions (requirement not met or on the wrong screen; a change
+  the floor would notice beyond the ask; an existing migration edited or
+  forbidden SQL; something plainly broken; a guardrail broken) and says what
+  is never a violation (supporting code, new additive migrations, tour and
+  reference upkeep, data-changed marks, tidy-ups, "what stays the same" is
+  about behavior not files, anything unverifiable from a diff). The schema
+  returns `findings` with severity and quoted evidence; the verdict is
+  computed from the findings (fail only on a blocking one), never taken from
+  the model's mood. The reviewer sees the lane, the target files and the
+  files touched; the diff limit is `SOS_CROSS_CHECK_DIFF_CHARS` (90000) and
+  a cut diff is declared as such. PRINCIPLES.md and GUARDRAILS.md ride along.
+- **Board tiles fold** (2026-09-17): each of the four columns shows
+  `TILES_PER_COLUMN` (3) tiles and a "Show the other N" button; `EXPANDED`
+  keeps opened columns across the 4s reload. The header count is the total.
 - **Module creation intake** (2026-09-17, push 3 of docs/MODULE-CREATION.md;
-  the build from a confirmed design is push 4). A manager presses "+ New
+  the build from a confirmed design is the bullet above). A manager presses "+ New
   module" on the board strip (or "New module" on an admin company card, which
   lands on the board with `?intake=<id>`). That creates a feedback row of
   `kind='module_request'` (new column; `intake_id` too) and a
@@ -162,8 +217,10 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   "save it as csv"). Design gate in the popout (a deliberate exception to
   gates-on-the-tile): tick every item, Adjust the text (Fable re-issues the
   design with the edit as the authority, `adjust`), Start over (keeps the
-  fixed answers), Approve build (`confirm`, status `confirmed`; push 4 starts
-  the build here). Withdraw on the tile (`abandon`, feedback declined). Fake
+  fixed answers), Approve build (`confirm`, status `confirmed`, then
+  `modulebuild.startBuild` at once: status `building`, then `done`). Text
+  boxes show "N characters left" from 80% of their limit and say plainly
+  when full. Withdraw on the tile (`abandon`, feedback declined). Fake
   mode returns a canned round 2 and a canned design. Module requests are kept
   out of batches and the proposal engine (`kind='feedback'` checks). The
   intake router is mounted before the platform router because the attach

@@ -17,11 +17,23 @@ const registry = require("./registry");
 const CROSS_CHECK_SCHEMA = {
   type: "object",
   properties: {
-    verdict: { type: "string", enum: ["pass", "fail"] },
-    summary: { type: "string", description: "What was checked and what was found, in plain language." },
-    issues: { type: "array", items: { type: "string" } },
+    verdict: { type: "string", enum: ["pass", "fail"], description: "fail only when at least one finding is blocking." },
+    summary: { type: "string", description: "What was checked and what was found, in plain language for a production manager. Two to five sentences." },
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          severity: { type: "string", enum: ["blocking", "minor"], description: "blocking = the requirement is not met, or the floor would notice something wrong or missing, or a hard rule is broken. minor = worth a note, does not stop the deploy." },
+          where: { type: "string", description: "File and place." },
+          what: { type: "string", description: "The problem, one or two sentences, plain words." },
+          evidence: { type: "string", description: "The diff lines that show it (quote them). Required for a blocking finding." },
+        },
+        required: ["severity", "where", "what", "evidence"],
+      },
+    },
   },
-  required: ["verdict", "summary"],
+  required: ["verdict", "summary", "findings"],
 };
 
 async function log(runId, entry) {
@@ -142,6 +154,7 @@ async function failRun(runId, err) {
 // ---- the state machine -----------------------------------------------------
 async function advance(runId) {
   const run = await getRun(runId);
+  if (run.lane === "module") return require("./modulebuild").advance(runId);   // a brand-new module from a confirmed design
   const p = (await q("SELECT * FROM platform.proposals WHERE id=$1", [run.proposal_id])).rows[0];
   const batch = await proposalsText(run);
   const isBatch = (run.proposal_ids || []).length > 1;
@@ -307,21 +320,71 @@ ${isBatch ? "- Implement every change in the batch. Keep them independent where 
   }
 }
 
-async function runStructuredCrossCheck(run, proposal, cur, model) {
+// diffOverride: a caller that has no earlier version to diff against (a brand-new
+// module) hands in its own listing in unified-diff shape.
+async function runStructuredCrossCheck(run, proposal, cur, model, diffOverride) {
   const dir = registry.versionDir(run.company, run.module, cur.to_version);
   const fromDir = registry.versionDir(run.company, run.module, run.from_version);
   const { execFileSync } = require("child_process");
-  let diff = "";
-  try {
-    diff = execFileSync("diff", ["-ru", fromDir, dir], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
-  } catch (e) { diff = e.stdout || ""; } // diff exits 1 when files differ
-  return runStructured({
+  let diff = diffOverride || "";
+  if (!diff) {
+    try {
+      diff = execFileSync("diff", ["-ru", fromDir, dir], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+    } catch (e) { diff = e.stdout || ""; } // diff exits 1 when files differ
+  }
+  const truncated = diff.length > CROSS_CHECK_DIFF_CHARS;
+  const changed = [...diff.matchAll(/^diff -ru \S+ \S+\/versions\/\d+\/(\S+)$/gm)].map((m) => m[1]);
+  const ps = await loadProposals(run.proposal_ids || [run.proposal_id]).catch(() => []);
+  const targets = ps.map((x) => x.target_file).filter(Boolean);
+  const out = await runStructured({
     model,
-    system: "You are an independent reviewer of a code change to a factory software module. You did not write this change. Review it strictly against the confirmed requirement. Fail it if it changes anything beyond the requirement, lands on a different screen than the one named, breaks existing behavior, edits an existing migration, or uses forbidden SQL operations. One thing is expected and never a violation: data-changed=\"vN\" attributes on the elements the builder touched (the preview uses them to highlight what is new).",
-    prompt: `Confirmed requirement:\n${cur.requirement || proposal.body}\n\nUnified diff of the change (v${run.from_version} -> v${cur.to_version}):\n${diff.slice(0, 40000) || "(no textual diff found)"}`,
+    system: crossCheckSystem(run.lane),
+    prompt: `Lane: ${run.lane === "ui" ? "look-and-feel change (pages only)" : run.lane === "module" ? "a brand-new module built from a confirmed design" : "functionality change"}.${targets.length ? ` Screen file(s) named by the proposals: ${targets.join(", ")}.` : ""}\nFiles touched: ${changed.length ? changed.join(", ") : "(see diff)"}.\n\nConfirmed requirement:\n${cur.requirement || proposal.body}\n\nUnified diff of the change (v${run.from_version || 0} -> v${cur.to_version})${truncated ? `, cut at ${CROSS_CHECK_DIFF_CHARS} characters; judge only what you can see and never fail for what was cut` : ""}:\n${diff.slice(0, CROSS_CHECK_DIFF_CHARS) || "(no textual diff found)"}`,
     schema: CROSS_CHECK_SCHEMA,
     toolName: "verdict",
+    maxTokens: 6000,
   });
+  // the rule, not the model's mood, decides: fail only on a blocking finding
+  const findings = Array.isArray(out.data.findings) ? out.data.findings : [];
+  const blocking = findings.filter((f) => f && f.severity === "blocking");
+  const verdict = blocking.length ? "fail" : "pass";
+  let summary = String(out.data.summary || "").trim();
+  if (blocking.length) summary += "\n\nBlocking:\n" + blocking.map((f) => `- ${f.where}: ${f.what}`).join("\n");
+  const minor = findings.filter((f) => f && f.severity === "minor");
+  if (minor.length) summary += `\n\nNoted, not blocking:\n` + minor.map((f) => `- ${f.where}: ${f.what}`).join("\n");
+  return { data: { verdict, summary, findings, issues: blocking.map((f) => f.what) }, costUsd: out.costUsd };
+}
+
+const CROSS_CHECK_DIFF_CHARS = Number(process.env.SOS_CROSS_CHECK_DIFF_CHARS || 90000);
+
+// The reviewer's brief. Calibrated 2026-09-17 after almost every functionality
+// change was being failed: the old brief said "fail anything beyond the
+// requirement" and never told the reviewer what a functionality change
+// legitimately has to touch, so routes.js edits, new migrations and tour.json
+// housekeeping were read as violations. Now the standard is explicit and the
+// verdict follows the findings' severity.
+function crossCheckSystem(lane) {
+  const { platformDocs } = require("./agent");
+  const rules = platformDocs().filter((d) => ["PRINCIPLES.md", "GUARDRAILS.md"].includes(d.name)).map((d) => `<!-- ${d.name} -->\n${d.content}`).join("\n\n");
+  return `You are an independent reviewer of a change to a factory software module. You did not write it and you cannot run it; you judge from the diff. Your reader is a production manager, so write findings in plain words.
+
+Mark a finding BLOCKING only when one of these is true:
+1. The requirement is not met: something it asks for is missing, wrong, or on the wrong screen when it names a screen.
+2. The change alters what people see or what happens on the floor beyond what the requirement asks, in a way a manager would notice. Say what they would notice.
+3. A migration file that already existed was edited, or a migration uses DROP, DELETE, UPDATE, TRUNCATE, GRANT, or any schema, role, function or trigger statement.
+4. Something that worked would plainly break: a route removed or renamed that a page still calls, a field renamed on one side only, invalid syntax, a page reading a column no migration creates.
+5. A hard rule in the guardrails below is broken (writing outside the module, importing outside the directory, new dependencies, a hard-coded /m/<name> path).
+
+Everything else is at most MINOR. In particular these are NOT violations and never block:
+- Supporting edits the change needs to work: server logic in routes.js for a functionality change, helper functions, styles, a NEW additive migration file, additions to the module.json smoke list or pages map.
+- Housekeeping the platform requires: tour.json steps kept true, reference.md updated, data-changed="vN" attributes on touched elements.
+- Small tidy-ups inside lines the change had to touch anyway, and wording changes that keep the meaning.
+- The requirement's "what stays the same" describes what the floor sees, not which files may be touched. Touching a file is fine if that behavior is unchanged.
+- Anything you cannot verify from the diff. Do not fail for what you cannot see or cannot run.
+${lane === "module" ? "\nThis is a brand-new module built from a confirmed design summary. The requirement is that design. Check that every screen, rule, number and connection the design names is there in some form, that visible text is in plain words (no API, database, schema, JSON, deploy, server, sync, token, prompt, backend, frontend), that every outside connection goes through the ctx services the contract allows and nothing reaches the network directly, and that a tour.json exists. A first version is meant to be small: leaving out what the design lists under \"What Rev 1 leaves out\" is correct, not a finding.\n" : ""}
+When in doubt between blocking and minor, choose minor. A blocking finding must quote the diff lines that show it. The verdict is pass when there is no blocking finding.
+
+${rules}`;
 }
 
 // Hit the module's declared smoke endpoints on the staged (or live) mount.
@@ -357,7 +420,7 @@ async function deploy(runId) {
   if (run.step !== "await_deploy" || run.status !== "waiting") throw new Error("run is not awaiting deploy");
   const result = await registry.deployVersion(run.company, run.module, run.to_version);
   await setRun(runId, { status: "deployed" });
-  await log(runId, { step: "deploy", note: `v${result.from} -> v${result.to} live` });
+  await log(runId, { step: "deploy", note: result.from ? `v${result.from} -> v${result.to} live` : `v${result.to} live: the module is on the floor` });
   const ps = await loadProposals(run.proposal_ids || [run.proposal_id]);
   const ev = run.evidence || {};
   const summary = (ev.what_changed || ev.build_summary || "").slice(0, 600);
@@ -365,6 +428,7 @@ async function deploy(runId) {
     await q("UPDATE platform.feedback SET status='done', outcome=$2, batch_id=NULL, updated_at=now() WHERE id=$1",
       [p.feedback_id, `Deployed v${result.to}${ps.length > 1 ? ` (batch of ${ps.length})` : ""}: ${summary || p.body.slice(0, 500)}`]);
   }
+  if (run.lane === "module") await require("./modulebuild").afterDeploy(await getRun(runId), result);
   kickQueue(run.company, run.module).catch((e) => console.error("queue kick failed:", e));
   return result;
 }
@@ -385,7 +449,7 @@ async function rollbackRun(runId) {
 async function retry(runId) {
   const run = await getRun(runId);
   if (run.status !== "failed") throw new Error("only failed runs can be retried");
-  const step = run.lane === "ui" || run.requirement ? "build" : "confirm_requirement";
+  const step = run.lane === "ui" || run.lane === "module" || run.requirement ? "build" : "confirm_requirement";
   const busy = await activeRun(run.company, run.module);
   const modRow = await registry.getModule(run.company, run.module);
   await setRun(runId, { step, status: busy ? "queued" : "running", from_version: modRow.live_version });
@@ -446,6 +510,7 @@ async function cancel(runId) {
   await q("UPDATE platform.proposals SET status='draft' WHERE id = ANY($1::int[])", [ps.map((p) => p.id)]);
   await q("UPDATE platform.feedback SET status='reviewing', batch_id=NULL, updated_at=now() WHERE id = ANY($1::int[])", [ps.map((p) => p.feedback_id)]);
   if (!wasRunning) await log(runId, { step: run.step, note: "cancelled by manager; proposals back to review" });
+  if (run.lane === "module") await require("./modulebuild").afterCancel(run);
   kickQueue(run.company, run.module).catch((e) => console.error("queue kick failed:", e));
 }
 
@@ -464,4 +529,8 @@ async function sweepOrphans() {
   return rows.length;
 }
 
-module.exports = { startRun, confirmRequirement, deploy, rollbackRun, retry, cancel, fix, override, getRun, smokeCheck, kickQueue, sweepOrphans, MAX_FIX_ROUNDS };
+module.exports = {
+  startRun, confirmRequirement, deploy, rollbackRun, retry, cancel, fix, override, getRun, smokeCheck, kickQueue, sweepOrphans, MAX_FIX_ROUNDS,
+  // shared with modulebuild.js (a brand-new module goes through the same runs table and the same gates)
+  setRun, log, addCost, failRun, activeRun, runStructuredCrossCheck, plainSummary, ACTIVE, advance,
+};

@@ -1,12 +1,14 @@
 // Module creation intake (docs/MODULE-CREATION.md). A manager answers the
 // fixed questions, Fable asks up to two more rounds of its own, then writes
 // the design summary the manager confirms. Everything here is platform code;
-// the in-app build agent never touches it. The build from a confirmed design
-// is the next release (push 4); this file ends at status "confirmed".
+// the in-app build agent never touches it. Confirm hands the design to
+// src/modulebuild.js, which builds the first version through the same gates
+// as any change.
 //
 // Statuses: answering (a round is open) -> thinking (Fable is working) ->
-// answering (a new round) or design (summary ready) -> confirmed. Also
-// abandoned, and failed (a model call died; the card offers Try again).
+// answering (a new round) or design (summary ready) -> confirmed -> building
+// -> done. Also abandoned, and failed (a model call died; the card offers
+// Try again).
 const express = require("express");
 const { q, logEvent } = require("./db");
 const agent = require("./agent");
@@ -117,7 +119,7 @@ async function answer(id, qid, value) {
   const answers = { ...(it.answers || {}) };
   const fields = {};
   if (qid === "name") {
-    const name = String(value || "").trim().slice(0, 60);
+    const name = String(value || "").trim().slice(0, 80);
     const slug = slugify(name) || (name ? `module-${it.id}` : "");
     if (slug && (await slugTaken(it.company, slug, it.id, name))) throw new Error(`"${name}" is already the name of a module here. Pick another.`);
     fields.name = name || null; fields.slug = slug || null;
@@ -198,9 +200,18 @@ async function confirm(id) {
   const it = await getIntake(id);
   if (!it || it.status !== "design" || !it.design) throw new Error("there is no design to confirm");
   if (await slugTaken(it.company, it.slug, it.id, it.name)) throw new Error(`a module named "${it.name}" now exists; rename this one first`);
-  const out = await setIntake(id, { status: "confirmed" });
+  let out = await setIntake(id, { status: "confirmed" });
   await setFeedback(it, { status: "reviewing" });
   await logEvent("intake_confirmed", id, { company: it.company, slug: it.slug, estimate: it.design.estimate_usd });
+  // confirmed means building: the first version goes straight to the agent,
+  // then the same gates as any change (Brendan, 2026-09-17)
+  try {
+    await require("./modulebuild").startBuild(out);
+    out = await getIntake(id);
+  } catch (e) {
+    console.error(`intake ${id} build start failed:`, e);
+    out = await setIntake(id, { error: `the build could not start: ${String(e.message || e).slice(0, 300)}` });
+  }
   return out;
 }
 
@@ -306,7 +317,7 @@ async function generateRound(it) {
       id: `r${roundNo}q${n}`, round: roundNo, kind: kind === "choice" && opts.length < 2 ? "text" : kind, required: kind !== "attach",
       text: text.text.trim(), hint: hint.text.trim(), multi: Boolean(raw.multi), other: true, attach: kind === "attach",
       options: kind === "choice" ? opts.map((o, i) => ({ id: `o${i + 1}`, label: o })) : [],
-      multiline: true, max: 1500, min: 1, maxItems: 10,
+      multiline: true, max: 6000, min: 1, maxItems: 10,
     });
   }
   const why = await plain.scrub(String(data.why || ""), { allow: ctx.allow, rewrite });
@@ -414,6 +425,7 @@ async function boardIntakes(company) {
       id: it.id, feedback_id: it.feedback_id, status: it.status, name: it.name, slug: it.slug, cost_usd: Number(it.cost_usd || 0), error: it.error,
       round: st.round, round_answered: st.answered, round_total: st.total, round_done: st.done, rounds_generated: (it.rounds || []).length,
       why: last ? last.why : "", bluf: it.design ? it.design.bluf : null, estimate_usd: it.design ? it.design.estimate_usd : null, flags: it.design ? (it.design.flags || []).length : 0,
+      run_id: (it.run_ids || []).slice(-1)[0] || null,
       updated_at: it.updated_at,
     };
   }
@@ -454,6 +466,18 @@ router.post("/api/intakes/:id/adjust", requireManager, json, async (req, res) =>
 router.post("/api/intakes/:id/confirm", requireManager, json, async (req, res) => {
   try { res.json(await view(await confirm(Number(req.params.id)))); }
   catch (e) { fail(res, e); }
+});
+// A confirmed design whose build never started (an older confirm, or a build
+// that was discarded at the gate): start it now.
+router.post("/api/intakes/:id/build", requireManager, json, async (req, res) => {
+  try {
+    const it = await getIntake(Number(req.params.id));
+    if (!it) return res.status(404).json({ error: "not found" });
+    if (it.status !== "confirmed" || !it.design) return res.status(400).json({ error: `nothing to build while the intake is ${it.status}` });
+    if (await slugTaken(it.company, it.slug, it.id, it.name)) return res.status(409).json({ error: `a module named "${it.name}" now exists; rename this one first` });
+    await require("./modulebuild").startBuild(it);
+    res.json(await view(await getIntake(it.id)));
+  } catch (e) { fail(res, e); }
 });
 router.post("/api/intakes/:id/restart", requireManager, json, async (req, res) => {
   try { res.json(await view(await restart(Number(req.params.id)))); }

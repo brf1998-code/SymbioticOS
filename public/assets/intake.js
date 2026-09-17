@@ -42,6 +42,8 @@ window.Intake = (() => {
   .ik-file button { border:none; background:none; color:var(--red,#b3261e); font-weight:700; cursor:pointer; margin:0; min-height:0; padding:4px; }
   .ik-attach { display:inline-block; border:1px solid var(--navy,#1f3a5f); color:var(--navy,#1f3a5f); background:#fff; border-radius:8px; padding:8px 12px; font-weight:700; cursor:pointer; font-size:13px; margin:6px 0 0; }
   .ik-attach input { display:none; }
+  .ik-count { font-size:11.5px; color:var(--steel,#51606f); text-align:right; margin:3px 0 6px; }
+  .ik-count.full { color:var(--red,#b3261e); font-weight:700; }
   .ik-err { background:#fdeceb; color:var(--red,#b3261e); border-radius:8px; padding:8px 10px; margin-top:10px; font-size:13px; }
   .ik-foot { display:flex; gap:8px; align-items:center; padding:12px 18px; border-top:1px solid var(--line,#d5dbe3); flex-wrap:wrap; }
   .ik-foot .ik-sp { flex:1 1 auto; }
@@ -80,7 +82,11 @@ window.Intake = (() => {
   async function open(id) {
     ID = id; ERR = ""; EDITING = false; CHECKS = new Set();
     if (!document.getElementById("ik-css")) { const s = document.createElement("style"); s.id = "ik-css"; s.textContent = CSS; document.head.appendChild(s); }
-    if (!ROOT) { ROOT = document.createElement("div"); ROOT.id = "intake-root"; document.body.appendChild(ROOT); }
+    if (!ROOT) {
+      ROOT = document.createElement("div"); ROOT.id = "intake-root"; document.body.appendChild(ROOT);
+      // every box with a limit says how much room is left once it gets close, and says so plainly when it is full
+      ROOT.addEventListener("input", (e) => counter(e.target));
+    }
     try { V = await api(`/api/intakes/${id}`); } catch (e) { alert(e.message); return; }
     IDX = firstOpen();
     MODE = modeFor();
@@ -153,6 +159,16 @@ window.Intake = (() => {
     return true;
   }
 
+  function counter(el) {
+    if (!el || !el.getAttribute || !el.getAttribute("maxlength")) return;
+    const max = Number(el.getAttribute("maxlength")), len = (el.value || "").length;
+    let c = el.nextElementSibling && el.nextElementSibling.classList && el.nextElementSibling.classList.contains("ik-count") ? el.nextElementSibling : null;
+    if (len < max * 0.8) { if (c) c.remove(); return; }
+    if (!c) { c = document.createElement("div"); c.className = "ik-count"; el.insertAdjacentElement("afterend", c); }
+    c.textContent = len >= max ? `This box is full (${max} characters). Shorten it, or put the rest in the next answer.` : `${max - len} characters left`;
+    c.classList.toggle("full", len >= max);
+  }
+
   // ---- rendering -----------------------------------------------------------------
   const roundLabel = () => (MODE === "design" || MODE === "edit" ? "The design" : MODE === "confirmed" ? "Confirmed" : V.round > 1 ? `Fable's questions, round ${V.round}` : "Your answers");
   const titleText = () => (V.name ? `New module: ${V.name}` : "New module");
@@ -165,13 +181,20 @@ window.Intake = (() => {
     else if (MODE === "think") { body = `<div class="ik-think"><div class="ik-spin"></div><b>Fable is reading your answers${V.attachments && V.attachments.length ? " and the files you attached" : ""}.</b><div class="ik-hint" style="margin-top:8px">${V.rounds_generated || V.enough ? "Writing the design summary." : "Deciding whether it needs to ask anything else, or can write the design."} This takes a minute or two. You can close this and come back; the card on the board shows when it is ready.</div></div>`; foot = `<span class="ik-sp"></span><button class="quiet" onclick="Intake.close()">Close for now</button>`; }
     else if (MODE === "design") { body = designHtml(); foot = designFoot(); }
     else if (MODE === "edit") { body = editHtml(); foot = `<button class="quiet" onclick="Intake.cancelEdit()">Cancel</button><span class="ik-sp"></span><button class="go" onclick="Intake.reissue()">Re-issue the design with my edits</button>`; }
-    else if (MODE === "confirmed") { body = `<div class="ik-done"><b>Design confirmed.</b><div class="ik-hint">The build of ${esc(V.name)} comes in the next release of the platform; the card stays in Reviewing until then. What you confirmed is kept as the module's reference.</div>${refDetails()}</div>`; foot = `<span class="ik-sp"></span><button class="primary" onclick="Intake.close()">Close</button>`; }
+    else if (MODE === "confirmed") {
+      const msg = V.status === "done" ? `<b>${esc(V.name)} is on the floor.</b><div class="ik-hint">Open it from the module strip. From here it improves through feedback like any other module. What you confirmed is kept as its reference.</div>`
+        : V.status === "building" ? `<b>Fable is building ${esc(V.name)}.</b><div class="ik-hint">Watch the card on the board: it shows each step, then a preview and the button that puts it on the floor. Building takes several minutes.</div>`
+        : V.error ? `<b>Design confirmed, but the build did not start.</b><div class="ik-hint">${esc(V.error)}. Use "Build it now" on the card to try again.</div>`
+        : `<b>Design confirmed.</b><div class="ik-hint">The build starts from the card on the board ("Build it now").</div>`;
+      body = `<div class="ik-done">${msg}${refDetails()}</div>`; foot = `<span class="ik-sp"></span><button class="primary" onclick="Intake.close()">Close</button>`;
+    }
     else { body = `<div class="ik-done"><b>This request was withdrawn.</b></div>`; foot = `<span class="ik-sp"></span><button class="primary" onclick="Intake.close()">Close</button>`; }
     ROOT.innerHTML = `<div class="ik-back" onclick="if(event.target===this)Intake.close()"><div class="ik-box" role="dialog" aria-modal="true">
       <div class="ik-head"><span class="ik-round">${esc(roundLabel())}</span><span class="ik-title">${esc(titleText())}</span><span class="ik-prog">${esc(progressText())}</span><button class="ik-x" onclick="Intake.close()">Close</button></div>
       <div class="ik-bar"><i style="width:${progressPct()}%"></i></div>
       <div class="ik-body">${body}${ERR ? `<div class="ik-err">${esc(ERR)}</div>` : ""}${V.error && MODE !== "think" ? `<div class="ik-err">Last time Fable was asked, it did not finish: ${esc(V.error)}. Try again below.</div>` : ""}</div>
       <div class="ik-foot">${foot}</div></div></div>`;
+    for (const el of ROOT.querySelectorAll("[maxlength]")) counter(el);
     const f = ROOT.querySelector(".ik-body textarea, .ik-body input[type=text]");
     if (f && MODE === "q" && window.innerWidth > 640) f.focus();
   }

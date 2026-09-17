@@ -11,10 +11,10 @@
 //   build    the agentic multi-turn run that edits files (most of the spend)
 //   review   one structured call that reviews the diff independently
 //
-// Cost controls:
-//   SOS_MAX_RUN_USD      per build run; the run is aborted past this (default 1.50)
-//   SOS_MONTHLY_CAP_USD  no new proposals or runs once this month's total
-//                        crosses it (default 25)
+// Cost controls (all optional; unset or 0 = no cap):
+//   SOS_MAX_RUN_USD      per build run; the run is aborted past this
+//   SOS_MAX_BATCH_USD    ceiling for a batch run
+//   SOS_MONTHLY_CAP_USD  no new proposals or runs once this month's total crosses it
 //
 // Reasoning effort for the build agent: SOS_AGENT_EFFORT (default "high";
 // low / medium / high / xhigh / max). Decided 2026-09-17: high everywhere.
@@ -23,11 +23,19 @@ const path = require("path");
 const { q, getSetting } = require("./db");
 
 const PRINCIPLES_DIR = process.env.PRINCIPLES_DIR || path.join(__dirname, "..", "principles");
-const MAX_RUN_USD = Number(process.env.SOS_MAX_RUN_USD || 1.5);
-// A batch gets MAX_RUN_USD per change, never more than this in one run.
-const MAX_BATCH_USD = Number(process.env.SOS_MAX_BATCH_USD || 6);
-const runCapUsd = (changes) => Math.min(MAX_RUN_USD * Math.max(1, changes || 1), MAX_BATCH_USD);
-const MONTHLY_CAP_USD = Number(process.env.SOS_MONTHLY_CAP_USD || 25);
+// Caps are off unless set (Brendan, 2026-09-17: development mode, spend what
+// the work needs). A value of 0 or unset means no cap. Set SOS_MAX_RUN_USD,
+// SOS_MAX_BATCH_USD and SOS_MONTHLY_CAP_USD to bring them back.
+const capEnv = (name) => { const v = Number(process.env[name] || 0); return Number.isFinite(v) && v > 0 ? v : 0; };
+const MAX_RUN_USD = capEnv("SOS_MAX_RUN_USD");
+// A batch gets MAX_RUN_USD per change, never more than MAX_BATCH_USD in one run.
+const MAX_BATCH_USD = capEnv("SOS_MAX_BATCH_USD");
+const runCapUsd = (changes) => {
+  if (!MAX_RUN_USD) return 0;
+  const usd = MAX_RUN_USD * Math.max(1, changes || 1);
+  return MAX_BATCH_USD ? Math.min(usd, MAX_BATCH_USD) : usd;
+};
+const MONTHLY_CAP_USD = capEnv("SOS_MONTHLY_CAP_USD");
 
 // Current Claude lineup (platform.claude.com/docs/en/models/overview, Sept 2026).
 // Prices are USD per million tokens, in / out.
@@ -106,6 +114,16 @@ function fakeMode() { return process.env.SOS_FAKE_AGENT === "1"; }
 function haveKey() { return Boolean(process.env.ANTHROPIC_API_KEY) || fakeMode(); }
 
 function fakeRunAgent({ dir, prompt }) {
+  if (/^NEW MODULE BUILD/m.test(prompt)) {
+    // the skeleton the platform wrote is already a working module; the fake
+    // agent only proves the loop by stamping the first page
+    const pages = path.join(dir, "pages");
+    for (const f of fs.existsSync(pages) ? fs.readdirSync(pages) : []) {
+      const p = path.join(pages, f);
+      fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace("</body>", `<p data-changed="v1" style="font-size:12px;color:#51606f;margin:8px 0">Built by the fake agent from the design (SOS_FAKE_AGENT=1).</p>\n</body>`));
+    }
+    return { text: "- Built the first version from the design: one list of the thing, its stages, a move button per item\n- No real AI was involved (SOS_FAKE_AGENT=1)", costUsd: 0 };
+  }
   const target = (/Target file: (\S+)/.exec(prompt) || [])[1];
   const pages = path.join(dir, "pages");
   const files = target && fs.existsSync(path.join(dir, target)) ? [path.join(dir, target)]
@@ -141,8 +159,8 @@ function fakeStructured(toolName, prompt) {
     },
     brand: { guide_md: "# Visual style: Fake Co (fake mode)\n\nPrimary color #1f3a5f, accent #c2620a, system font. (SOS_FAKE_AGENT=1)", primary: "#1f3a5f", accent: "#c2620a", background: "#f2f4f7", ink: "#1c242e", font_stack: "system-ui, sans-serif", company_name: "Fake Co", tone: "plain" },
     verdict: /FAKE-BAD/.test(prompt)
-      ? { verdict: "fail", summary: "Fake-mode cross-check: the diff carries a FAKE-BAD marker, which stands in for a change that does not meet the requirement. (SOS_FAKE_AGENT=1)" }
-      : { verdict: "pass", summary: "Fake-mode cross-check: diff reviewed, no violations. (SOS_FAKE_AGENT=1)" },
+      ? { verdict: "fail", summary: "Fake-mode cross-check: the diff carries a FAKE-BAD marker, which stands in for a change that does not meet the requirement. (SOS_FAKE_AGENT=1)", findings: [{ severity: "blocking", where: "the page", what: "carries the FAKE-BAD marker", evidence: "<!-- FAKE-BAD -->" }] }
+      : { verdict: "pass", summary: "Fake-mode cross-check: diff reviewed, no violations. (SOS_FAKE_AGENT=1)", findings: [] },
     summary: { title: `Fake change to ${target || "the module"}`, what_changed: "Fake-mode summary: a marker was stamped on the page named in the feedback. Nothing else changed. (SOS_FAKE_AGENT=1)" },
   };
   return { data: canned[toolName] || {}, costUsd: 0 };
@@ -175,8 +193,8 @@ const AGENT_EFFORT = process.env.SOS_AGENT_EFFORT || "high";
 // Returns { text, costUsd, modelsSeen }: modelsSeen is every model id the
 // run reported (the init message and each assistant message); a run built on
 // the requested model reports exactly one.
-async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd, signal }) {
-  const cap = capUsd || MAX_RUN_USD;
+async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd, signal, maxTurns }) {
+  const cap = capUsd || MAX_RUN_USD;   // 0 = no cap
   if (fakeMode()) {
     // fake builds take a moment so an abort can be exercised without a key
     await new Promise((r) => setTimeout(r, Number(process.env.SOS_FAKE_DELAY_MS || 1500)));
@@ -215,11 +233,12 @@ async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd, 
       // Railway runs. (Checked again on SDK 0.3.274: acceptEdits as root is fine.)
       permissionMode: "acceptEdits",
       effort: AGENT_EFFORT,
-      maxTurns: 40,
-      // Far safety rail only. The working limit is our own estimate below,
-      // which aborts at `cap`; this catches a run whose usage messages never
-      // arrived. Decided 2026-09-17: no hard kill at the working limit.
-      maxBudgetUsd: cap * 3,
+      maxTurns: maxTurns || Number(process.env.SOS_AGENT_MAX_TURNS || 40),
+      // Far safety rail only, and only when a cap is set. The working limit is
+      // our own estimate below, which aborts at `cap`; this catches a run whose
+      // usage messages never arrived. Decided 2026-09-17: no hard kill at the
+      // working limit, and no caps at all in development mode.
+      ...(cap ? { maxBudgetUsd: cap * 3 } : {}),
       abortController: abort,
       env: agentEnv(),
       stderr: (data) => { stderrTail = (stderrTail + String(data)).slice(-4000); },
@@ -235,7 +254,7 @@ async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd, 
         const u = msg.message.usage || {};
         estimate += (u.input_tokens || 0) * price.inTok + (u.output_tokens || 0) * price.outTok
           + (u.cache_read_input_tokens || 0) * price.inTok * 0.1 + (u.cache_creation_input_tokens || 0) * price.inTok * 1.25;
-        if (estimate > cap && !aborted && !killed) { aborted = true; abort.abort(); }
+        if (cap && estimate > cap && !aborted && !killed) { aborted = true; abort.abort(); }
       }
       if (msg.type === "result") {
         if (typeof msg.total_cost_usd === "number") costUsd = msg.total_cost_usd;
@@ -353,7 +372,7 @@ async function monthlySpend(company) {
          + COALESCE((SELECT SUM((brand->>'cost_usd')::numeric) FROM platform.companies WHERE brand IS NOT NULL AND (brand->>'built_at')::timestamptz >= date_trunc('month', now()) AND ($1::text IS NULL OR slug=$1)),0)
          + COALESCE((SELECT SUM(cost_usd) FROM platform.ai_usage WHERE created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR company=$1)),0) AS usd`, [company || null])).rows[0];
   const usd = Number(r.usd || 0);
-  return { usd, cap: MONTHLY_CAP_USD, capped: usd >= MONTHLY_CAP_USD };
+  return { usd, cap: MONTHLY_CAP_USD, capped: MONTHLY_CAP_USD > 0 && usd >= MONTHLY_CAP_USD };
 }
 
 async function assertUnderCap() {

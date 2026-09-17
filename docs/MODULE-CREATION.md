@@ -52,7 +52,7 @@ Proof: push, run one change build on Sonnet (regression), one on Fable (the proo
 
 ## The flow, on the board
 
-*Status 2026-09-17: push 3 built and tested in fake mode end to end (card, popout, all thirteen questions, photo and spreadsheet attachments, a generated round, the design gate with Adjust and Start over, Approve, Withdraw, the admin entry); the card stops at "Design confirmed" until push 4 wires the build. First live test still to do: one real intake on Fable, about $1.*
+*Status 2026-09-17: push 3 built and proven live (a real intake on Fable, "Roving Watch Logs", design confirmed for $0.85). Push 4 built the same evening: Approve build now starts the build at once, and the card runs the build, the checks, the preview and "Put it on the floor" like any change. Tested end to end in fake mode, including Discard at the gate (the module is removed again, the design goes back to Reviewing with "Build it now") and a second build. First live module build still to do.*
 
 A module request is a feedback row of kind `module_request` with an intake record behind it. It uses the four columns the way every card does:
 
@@ -122,7 +122,9 @@ The confirmed summary is both the module's reference doc and the build brief. Ev
 
 ## The build
 
-- Fable, effort `high`. Working limit `SOS_MAX_MODULE_USD` (25 to start), applied as a pause, not a kill. Far safety rail `maxBudgetUsd` at three times the estimate, and even that keeps the draft.
+*Built 2026-09-17 (`src/modulebuild.js`). What shipped differs from the plan below in two ways: there are no caps at all now (Brendan: development mode), so the pause-and-keep-going budget is not built, and the build is one agent run on top of a platform-written skeleton rather than three steps. The skeleton (one table of the thing with its stages, seed rows from the attached spreadsheet, a board screen, a tour) is itself a working module, so a build that runs out of road still leaves something that boots, which was the point of the steps.*
+
+- Fable, effort `high`, no cap; `SOS_MODULE_MAX_TURNS` (150) bounds the run.
 - A new platform doc, `principles/MODULE-CONTRACT.md`, that tells the agent what a module is: `module.json` fields (`name`, `title`, `description`, `entry`, `pages` with labels, `smoke`, optional `agents`, new `connections`), the `routes.js` signature and the `ctx` services including `ctx.connections`, migrations additive only and the words the validator rejects, pages computing `base` from `location.pathname`, the feedback widget injection, `tour.json` shape, `data-changed` marks, the scan-field pattern (a focused text field, Enter ends a scan, prefix and suffix stripped, works with any keyboard-mode scanner), the label template pattern (ZPL kept as a module file, previewed as an image before anything prints), no em or en dashes. Today's build prompt pins changes to an existing module's files; a from-scratch build needs the contract stated.
 - **In steps.** Step 1: manifest, migrations, routes, the one-glance screen. Step 2: the remaining screens, one per role. Step 3: rules, numbers, connections, starting data import, tour, reference doc. Each step is its own agent run against the same draft, staged and previewable when it lands, so the card can say "Screens done, wiring the printer" and a stop at any point leaves something to look at.
 - Validation before staging, no tokens: manifest parses; every page file exists; migrations pass `migrate.js`; `routes.js` loads in a throwaway require; the smoke endpoints answer on a staging mount over a scratch schema; declared connections exist in the platform's list of kinds.
@@ -130,6 +132,8 @@ The confirmed summary is both the module's reference doc and the build brief. Ev
 - Deploy gate as today, plus the setup walkthrough. Rev 1 goes live as v1 of the module.
 
 ## Budget without throw-away
+
+*2026-09-17: caps are off for the development period, so nothing below is built yet. The skeleton covers the "nothing to show" case for now. Revisit when per-company caps come with paying pilots.*
 
 The failure Brendan named: a company spends $25 and has nothing. So:
 

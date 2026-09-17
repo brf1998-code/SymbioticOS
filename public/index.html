@@ -215,7 +215,10 @@ const SLUG = location.pathname.split("/")[2];
 const LANES = {
   ui: ["build", "visual_check", "await_deploy"],
   functionality: ["confirm_requirement", "build", "cross_check", "test_run", "await_deploy"],
+  module: ["build", "cross_check", "test_run", "await_deploy"],
 };
+const TILES_PER_COLUMN = 3;   // a column shows this many tiles, then "Show the other N"
+const EXPANDED = new Set();   // columns the person opened up (kept across the 4s reload)
 const STEP_LABEL = {
   confirm_requirement: "Confirm requirement", build: "Agent build", cross_check: "Cross-check review",
   visual_check: "Visual check", test_run: "Internal tests", await_deploy: "Manager deploy gate",
@@ -346,8 +349,8 @@ async function buildReviewByScreen(id) {
   const groups = {};
   for (const f of open) (groups[f.proposal_target || "?"] = groups[f.proposal_target || "?"] || []).push(f.proposal_id);
   const n = Object.keys(groups).length;
-  const cap = Object.values(groups).reduce((a, g) => a + Math.min(DATA.maxRunUsd * g.length, DATA.maxBatchUsd || 6), 0);
-  if (!confirm(`Start ${n} builds, one per screen, with ${modelLabel(DATA.models.build)}? They run one after another. Together they stop themselves past about $${cap.toFixed(2)}.`)) return;
+  const cap = DATA.maxRunUsd ? Object.values(groups).reduce((a, g) => a + (DATA.maxBatchUsd ? Math.min(DATA.maxRunUsd * g.length, DATA.maxBatchUsd) : DATA.maxRunUsd * g.length), 0) : 0;
+  if (!confirm(`Start ${n} builds, one per screen, with ${modelLabel(DATA.models.build)}? They run one after another.${cap ? ` Together they stop themselves past about $${cap.toFixed(2)}.` : ""}`)) return;
   PENDING.set("batch", ACTION_LABELS.batch); renderBusy();
   for (const ids of Object.values(groups)) {
     const r = await fetch("/api/runs/batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ proposal_ids: ids }) });
@@ -420,9 +423,9 @@ function renderColumnBatches() {
       <button class="primary" onclick="reviewBatch(${b.id})">Review the ${fresh.length} new with AI</button><button class="quiet" onclick="if(confirm('Take every item out of this batch?'))act('/api/c/${SLUG}/batch/${b.id}/clear')">Clear batch</button>
       <div class="meta">Each gets its own proposal, then the batch waits in Reviewing to be built together.</div></div>`;
     if (ready.length || (!fresh.length && items.length)) {
-      const cap = Math.min(DATA.maxRunUsd * Math.max(1, ready.length), DATA.maxBatchUsd || 6);
+      const cap = DATA.maxRunUsd ? (DATA.maxBatchUsd ? Math.min(DATA.maxRunUsd * Math.max(1, ready.length), DATA.maxBatchUsd) : DATA.maxRunUsd * Math.max(1, ready.length)) : 0;
       rh += `<div class="colbatch ${busy}" data-key="batch">${pendingHtml("batch")}<b>Batch · ${esc(modTitle(b.module))}: ${ready.length} ready${fresh.length ? `, ${fresh.length} not reviewed yet` : ""}</b>
-        build with <select id="bm-${b.id}">${modelOptions(DATA.models.build)}</select> <span class="meta" style="display:inline">· stops itself past $${cap.toFixed(2)}</span>
+        build with <select id="bm-${b.id}">${modelOptions(DATA.models.build)}</select> ${cap ? `<span class="meta" style="display:inline">· stops itself past $${cap.toFixed(2)}</span>` : ""}
         <div><button class="go" ${ready.length ? "" : "disabled"} onclick="buildBatch(${b.id})">Build the ${ready.length} together as one change</button><button class="quiet" onclick="if(confirm('Take every item out of this batch?'))act('/api/c/${SLUG}/batch/${b.id}/clear')">Clear batch</button></div>
         ${fresh.length ? `<div class="meta">The ${fresh.length} not yet reviewed stay out of the build and leave the batch when it starts.</div>` : ""}</div>`;
     }
@@ -590,8 +593,21 @@ function requestCard(fb) {
   html += `<div class="msg">${esc(fb.message)}</div>`;
   html += `<div class="meta">#${fb.id} · <span class="chip screen">Module request</span> · started by ${esc(fb.name || "a manager")}${it.cost_usd ? ` · $${Number(it.cost_usd).toFixed(2)} so far` : ""}</div>`;
   const openBtn = (label, cls) => (MGR() ? `<button class="${cls || "primary"}" onclick="Intake.open(${fb.intake_id})">${label}</button>` : "");
-  const withdraw = MGR() && !["confirmed", "building", "done"].includes(it.status) ? `<button class="no" onclick="if(confirm('Withdraw this module request? The answers are kept on the record but nothing is built.'))act('/api/intakes/${fb.intake_id}/abandon')">Withdraw</button>` : "";
+  const withdraw = MGR() && !["building", "done"].includes(it.status) ? `<button class="no" onclick="if(confirm('Withdraw this module request? The answers are kept on the record but nothing is built.'))act('/api/intakes/${fb.intake_id}/abandon')">Withdraw</button>` : "";
   if (fb.status === "declined") { html += `<div class="fail-note">${esc(fb.outcome || "Withdrawn.")}</div>`; return html + "</div>"; }
+  const run = DATA.runs.find(r => (r.feedback_ids || [r.feedback_id]).includes(fb.id) && r.status !== "cancelled");
+  if (["building", "done"].includes(it.status) || (fb.status === "in_progress" && run)) {
+    if (it.status === "done" || fb.status === "done") {
+      html += `<div class="outcome">${esc(fb.outcome || "Built and live.")}</div>`;
+      const modRow = DATA.modules.find(m => m.name === fb.module);
+      if (modRow && modRow.live_version) html += `<a class="demo" href="/c/${SLUG}/m/${esc(fb.module)}/" target="_blank">Open ${esc(fb.message.replace(/^New module: /, ""))}</a>`;
+      html += openBtn("The design", "quiet");
+      return html + "</div>";
+    }
+    if (run) html += runBlock(fb, run);
+    else html += `<div class="stat"><span class="pulse"></span>Starting the build.</div>`;
+    return html + "</div>";
+  }
   switch (it.status) {
     case "answering":
       html += `<div class="stat">${it.round > 1 ? `<b>Fable has ${it.round_total} more question${it.round_total === 1 ? "" : "s"}</b> (round ${it.round} of 3). ` : ""}${it.round_answered} of ${it.round_total} answered${it.round_done ? ", ready to send to Fable" : ""}.</div>`;
@@ -605,7 +621,7 @@ function requestCard(fb) {
       html += openBtn("Review the design", "go") + withdraw;
       break;
     case "confirmed":
-      html += `<div class="stat"><b>Design confirmed.</b> ${esc(it.bluf || "")} The build comes in the next release of the platform; this card waits here until then.</div>` + openBtn("Open", "quiet");
+      html += `<div class="stat"><b>Design confirmed.</b> ${esc(it.bluf || "")}${it.error ? ` <span style="color:var(--red)">${esc(it.error)}</span>` : " The build has not started."}</div>` + openBtn("Open", "quiet") + (MGR() ? `<button class="go" onclick="act('/api/intakes/${fb.intake_id}/build')">Build it now</button>` : "") + withdraw;
       break;
     case "failed":
       html += `<div class="fail-note">Fable did not finish: ${esc(it.error || "unknown problem")}. Open it and try again.</div>` + openBtn("Open and try again") + withdraw;
@@ -614,6 +630,36 @@ function requestCard(fb) {
       html += `<div class="stat">${esc(it.status || "unknown")}</div>` + openBtn("Open", "quiet") + withdraw;
   }
   return html + "</div>";
+}
+
+// The build's progress on a card: lane, steps, the requirement gate, the
+// deploy gate with the preview, or the failure and what can be done about it.
+// Shared by feedback cards and module request cards.
+function runBlock(fb, run) {
+  let html = "";
+  const isModule = run.lane === "module";
+  const others = (run.feedback_ids || []).filter(i => i !== fb.id);
+  html += `<div class="meta" style="margin-top:6px"><span class="chip ${run.lane === "module" ? "functionality" : run.lane}">${run.lane === "ui" ? "UI LANE" : run.lane === "module" ? "NEW MODULE" : "FUNCTIONALITY LANE"}</span> run #${run.id} · ${run.from_version ? "v" + run.from_version : "nothing yet"}${run.to_version ? " → v" + run.to_version : ""} · ${esc(modelLabel(run.model))}${builtOnNote(run, run.evidence || {})} · $${Number(run.cost_usd).toFixed(2)}${others.length ? ` · <span class="chip rec">batch with #${others.join(", #")}</span>` : ""}</div>`;
+  if (run.status === "queued") {
+    html += `<div class="meta"><span class="pulse"></span>Queued: waiting for the current build on ${esc(run.module)} to finish.</div>`;
+    if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;
+    return html;
+  }
+  html += stepsHtml(run);
+  if (run.step === "confirm_requirement" && run.status === "waiting") html += reqHtml(run, true);
+  if (run.status === "running" && MGR()) html += abortBtn(run);
+  if (run.step === "await_deploy" && run.status === "waiting") {
+    const ev = run.evidence || {};
+    if (ev.what_changed || ev.build_summary) html += `<div class="prop">${esc(ev.what_changed || ev.build_summary)}</div>`;
+    if (ev.test_run) html += `<div class="meta">tests: ${ev.test_run.ok ? "passed" : "failed"} (${(ev.test_run.checked || []).length} checks)</div>`;
+    if (ev.cross_check) html += `<div class="meta">cross-check (${esc(modelLabel(ev.cross_check.model))}): ${esc(ev.cross_check.verdict)}${ev.cross_check.overridden ? " (overridden by the manager)" : ""} · ${esc((ev.cross_check.summary || "").slice(0, 400))}</div>`;
+    if (ev.fix_round) html += `<div class="meta">fixed by the agent in ${ev.fix_round} round(s) after a failed check</div>`;
+    if (ev.docs) html += `<div class="meta">guided by: ${esc(ev.docs.join(", "))}</div>`;
+    html += `<a class="demo" href="/c/${SLUG}/staging/m/${esc(run.module)}/" target="_blank">${isModule ? `Open the preview of ${esc(fb.message.replace(/^New module: /, ""))} (not live)` : `Open preview of v${run.to_version} (not live)`}</a><br>`;
+    if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/deploy')">${isModule ? "Put it on the floor" : `Deploy v${run.to_version} to floor`}</button><button class="no" onclick="if(confirm('${isModule ? "Discard this build? The module is removed again and the design goes back to Reviewing, where you can approve it again." : "Discard this build? The proposals go back to Reviewing."}'))act('/api/runs/${run.id}/cancel')">Discard</button>`;
+  }
+  if (run.status === "failed") html += failedHtml(run, isModule ? "The design goes back to Reviewing." : "The proposal goes back to Reviewing.");
+  return html;
 }
 
 function card(fb) {
@@ -657,29 +703,7 @@ function card(fb) {
     }
   }
 
-  if (fb.status === "in_progress" && run) {
-    const others = (run.feedback_ids || []).filter(i => i !== fb.id);
-    html += `<div class="meta" style="margin-top:6px"><span class="chip ${run.lane}">${run.lane === "ui" ? "UI LANE" : "FUNCTIONALITY LANE"}</span> run #${run.id} · v${run.from_version}${run.to_version ? " → v" + run.to_version : ""} · ${esc(modelLabel(run.model))}${builtOnNote(run, run.evidence || {})} · $${Number(run.cost_usd).toFixed(2)}${others.length ? ` · <span class="chip rec">batch with #${others.join(", #")}</span>` : ""}</div>`;
-    if (run.status === "queued") {
-      html += `<div class="meta"><span class="pulse"></span>Queued: waiting for the current build on ${esc(run.module)} to finish.</div>`;
-      if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;
-      return html + "</div>";
-    }
-    html += stepsHtml(run);
-    if (run.step === "confirm_requirement" && run.status === "waiting") html += reqHtml(run, true);
-    if (run.status === "running" && MGR()) html += abortBtn(run);
-    if (run.step === "await_deploy" && run.status === "waiting") {
-      const ev = run.evidence || {};
-      if (ev.what_changed || ev.build_summary) html += `<div class="prop">${esc(ev.what_changed || ev.build_summary)}</div>`;
-      if (ev.test_run) html += `<div class="meta">tests: ${ev.test_run.ok ? "passed" : "failed"} (${(ev.test_run.checked || []).length} checks)</div>`;
-      if (ev.cross_check) html += `<div class="meta">cross-check (${esc(modelLabel(ev.cross_check.model))}): ${esc(ev.cross_check.verdict)}${ev.cross_check.overridden ? " (overridden by the manager)" : ""} · ${esc((ev.cross_check.summary || "").slice(0, 400))}</div>`;
-      if (ev.fix_round) html += `<div class="meta">fixed by the agent in ${ev.fix_round} round(s) after a failed check</div>`;
-      if (ev.docs) html += `<div class="meta">guided by: ${esc(ev.docs.join(", "))}</div>`;
-      html += `<a class="demo" href="/c/${SLUG}/staging/m/${esc(fb.module)}/" target="_blank">Open preview of v${run.to_version} (not live)</a><br>`;
-      if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/deploy')">Deploy v${run.to_version} to floor</button><button class="no" onclick="if(confirm('Discard this build? The proposals go back to Reviewing.'))act('/api/runs/${run.id}/cancel')">Discard</button>`;
-    }
-    if (run.status === "failed") html += failedHtml(run, "The proposal goes back to Reviewing.");
-  }
+  if (fb.status === "in_progress" && run) html += runBlock(fb, run);
 
   if (fb.status === "done" || fb.status === "declined") {
     if (fb.outcome) html += `<div class="${fb.status === "done" ? "outcome" : "fail-note"}">${fb.status === "done" ? "You said / we did: " : "Declined: "}${esc(fb.outcome)}</div>`;
@@ -808,10 +832,10 @@ function render() {
     DATA.modules.map(m => {
       const on = visible(m.name);
       return `<div class="modcard ${many ? (on ? "on" : "off") : ""}">
-      ${many ? `<button class="tog" onclick="toggleModule('${m.name}')" title="${on ? (SEL ? "Hide this module" : "Show only this module") : "Show this module too"}">${esc(m.title)}</button>` : `<b>${esc(m.title)}</b>`}<span class="v">v${m.live_version}</span>
-      <a href="/c/${SLUG}/m/${m.name}/">Open live</a>
+      ${many ? `<button class="tog" onclick="toggleModule('${m.name}')" title="${on ? (SEL ? "Hide this module" : "Show only this module") : "Show this module too"}">${esc(m.title)}</button>` : `<b>${esc(m.title)}</b>`}<span class="v">${m.live_version ? "v" + m.live_version : ""}</span>
+      ${m.live_version ? `<a href="/c/${SLUG}/m/${m.name}/">Open live</a>` : `<span class="v">being built</span>`}
       ${m.staged_version ? `<a class="amber" href="/c/${SLUG}/staging/m/${m.name}/">Preview v${m.staged_version}</a>` : ""}
-      <a href="/c/${SLUG}/diagrams/${m.name}">Diagrams</a>${MGR() ? `<button class="vbtn" onclick="openVersions('${m.name}')">Versions</button>` : ""}</div>`;
+      ${m.live_version ? `<a href="/c/${SLUG}/diagrams/${m.name}">Diagrams</a>` : ""}${MGR() && m.live_version ? `<button class="vbtn" onclick="openVersions('${m.name}')">Versions</button>` : ""}</div>`;
     }).join("");
   document.getElementById("filterhint").textContent = SEL
     ? `Showing ${SEL.size === 1 ? "one module" : SEL.size + " modules"}. Tick a module to add it, tick it again to take it out, or All modules.`
@@ -825,7 +849,7 @@ function render() {
   document.getElementById("kpis").innerHTML = [
     [openFb, "new feedback"], [fbs.filter(f => f.status === "reviewing").length, "awaiting decision"],
     [active, "building now"], [deployed, "deployed this week"],
-    [`$${DATA.spend.usd.toFixed(2)}`, `AI spend of $${DATA.spend.cap.toFixed(0)} monthly cap · $${Number(DATA.maxRunUsd).toFixed(2)} per change, $${Number(DATA.maxBatchUsd || 6).toFixed(0)} per run`], [modelLabel(DATA.models.build), "build model"],
+    [`$${DATA.spend.usd.toFixed(2)}`, DATA.spend.cap ? `AI spend of $${DATA.spend.cap.toFixed(0)} monthly cap · $${Number(DATA.maxRunUsd).toFixed(2)} per change, $${Number(DATA.maxBatchUsd || 6).toFixed(0)} per run` : `AI spend this month · no caps set`], [modelLabel(DATA.models.build), "build model"],
   ].map(([v, l]) => `<div class="kpi"><b>${esc(v)}</b><span>${l}</span></div>`).join("");
   const buckets = { new: [], reviewing: [], in_progress: [], done: [], platform: [] };
   // batch runs render as one tile; their feedback items are folded into it
@@ -853,9 +877,15 @@ function render() {
   renderColumnBatches();
   const empty = SEL ? '<div class="empty">Nothing here for the modules shown.</div>' : '<div class="empty">Nothing here.</div>';
   for (const k of ["new", "reviewing", "in_progress", "done", "platform"]) {
-    const batches = (tiles[k] || []).map(t => batchCard({ ...t.run, feedback_ids: t.ids }));
-    document.getElementById("col-" + k).innerHTML = (batches.join("") + buckets[k].map(card).join("")) || (k === "platform" ? '<div class="empty">Nothing here.</div>' : empty);
-    document.getElementById("n-" + k).textContent = buckets[k].length + batches.length;
+    const all = (tiles[k] || []).map(t => batchCard({ ...t.run, feedback_ids: t.ids })).concat(buckets[k].map(card));
+    // a column shows the first few tiles; the rest fold under one button (Brendan, 2026-09-17)
+    const limit = k === "platform" ? all.length : TILES_PER_COLUMN;
+    const shown = EXPANDED.has(k) ? all : all.slice(0, limit);
+    const more = all.length - shown.length;
+    const fold = more > 0 ? `<button class="quiet" style="width:100%;margin:0 0 8px" onclick="EXPANDED.add('${k}');render()">Show the other ${more}</button>`
+      : (EXPANDED.has(k) && all.length > limit ? `<button class="quiet" style="width:100%;margin:0 0 8px" onclick="EXPANDED.delete('${k}');render()">Show fewer</button>` : "");
+    document.getElementById("col-" + k).innerHTML = (shown.join("") + fold) || (k === "platform" ? '<div class="empty">Nothing here.</div>' : empty);
+    document.getElementById("n-" + k).textContent = all.length;
   }
 }
 load();
