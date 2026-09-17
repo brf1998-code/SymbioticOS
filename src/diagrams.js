@@ -105,10 +105,13 @@ async function generate(company, mod, version, opts = {}) {
       });
       data = out.data; costUsd = out.costUsd || 0;
     }
+    // the model sometimes returns one object instead of an array, or a single
+    // string; accept those shapes rather than failing the whole drawing
+    const asList = (v) => (Array.isArray(v) ? v : v && typeof v === "object" ? [v] : typeof v === "string" ? [{ title: "Diagram", mermaid: v }] : []);
     const clean = {
-      overview: data.overview || "",
-      data_flows: (data.data_flows || []).map((d) => ({ ...d, mermaid: cleanMermaid(d.mermaid) })),
-      workflows: (data.workflows || []).map((d) => ({ ...d, mermaid: cleanMermaid(d.mermaid) })),
+      overview: String(data.overview || ""),
+      data_flows: asList(data.data_flows).filter((d) => d && d.mermaid).map((d) => ({ ...d, mermaid: cleanMermaid(d.mermaid) })),
+      workflows: asList(data.workflows).filter((d) => d && d.mermaid).map((d) => ({ ...d, mermaid: cleanMermaid(d.mermaid) })),
     };
     await q("UPDATE platform.diagrams SET status='done', content=$2, cost_usd=$3, finished_at=now() WHERE id=$1", [id, JSON.stringify(clean), costUsd]);
     await logEvent("diagrams_generated", `${company}/${mod}`, { version, model, costUsd, data: clean.data_flows.length, workflows: clean.workflows.length });
