@@ -15,6 +15,9 @@
 //   SOS_MAX_RUN_USD      per build run; the run is aborted past this (default 1.50)
 //   SOS_MONTHLY_CAP_USD  no new proposals or runs once this month's total
 //                        crosses it (default 25)
+//
+// Reasoning effort for the build agent: SOS_AGENT_EFFORT (default "high";
+// low / medium / high / xhigh / max). Decided 2026-09-17: high everywhere.
 const fs = require("fs");
 const path = require("path");
 const { q, getSetting } = require("./db");
@@ -32,9 +35,11 @@ const MODELS = [
   { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", in: 1, out: 5, note: "cheapest and fastest; fine for classifying feedback, weak for builds" },
   { id: "claude-sonnet-5", label: "Sonnet 5", in: 2, out: 10, note: "the default: good builds at a low price" },
   { id: "claude-opus-5", label: "Opus 5", in: 5, out: 25, note: "about 2.5x Sonnet 5; stronger on functionality builds and as an independent reviewer" },
-  { id: "claude-fable-5-1", label: "Fable 5.1", in: 10, out: 50, agent: false, note: "about 5x Sonnet 5; most capable. Proposals, system reviews and cross-checks only: the bundled Claude Code agent cannot run it as the builder" },
+  { id: "claude-fable-5-1", label: "Fable 5.1", in: 10, out: 50, note: "about 5x Sonnet 5; most capable, for builds, proposals, system reviews and cross-checks alike" },
 ];
-// Models the build agent (Claude Code) can run. Others are for one-shot calls.
+// Models the build agent (Claude Code) can run: all of them since the Agent SDK
+// upgrade of 2026-09-17 (0.1.77 predated Fable and died on it). `agent: false`
+// on a MODELS row still keeps a model out of builds, should that ever be needed.
 const canBuild = (id) => { const m = MODELS.find((x) => x.id === id); return !m || m.agent !== false; };
 // Pick the model for the build agent: the requested one if it can build,
 // otherwise the company's build model. Returns { model, substituted }.
@@ -157,17 +162,26 @@ function agentEnv() {
   }
   out.IS_SANDBOX = "1";
   out.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
+  // The CLI can swap in a fallback model when the chosen one is unavailable.
+  // A build must run on the model the manager picked or not at all, so that
+  // "built on Fable" (evidence.models_seen) is provable.
+  out.CLAUDE_CODE_NO_MODEL_FALLBACK = "1";
   return out;
 }
 
-// Run an agent turn inside a version directory. Returns { text, costUsd }.
+const AGENT_EFFORT = process.env.SOS_AGENT_EFFORT || "high";
+
+// Run an agent turn inside a version directory.
+// Returns { text, costUsd, modelsSeen }: modelsSeen is every model id the
+// run reported (the init message and each assistant message); a run built on
+// the requested model reports exactly one.
 async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd, signal }) {
   const cap = capUsd || MAX_RUN_USD;
   if (fakeMode()) {
     // fake builds take a moment so an abort can be exercised without a key
     await new Promise((r) => setTimeout(r, Number(process.env.SOS_FAKE_DELAY_MS || 1500)));
     if (signal && signal.aborted) { const e = new Error("build aborted by the manager"); e.aborted = true; throw e; }
-    return fakeRunAgent({ dir, prompt });
+    return { ...fakeRunAgent({ dir, prompt }), modelsSeen: [model] };
   }
   if (!haveKey()) throw new Error("ANTHROPIC_API_KEY not configured on this instance");
   const { query } = require("@anthropic-ai/claude-agent-sdk");
@@ -180,6 +194,7 @@ async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd, 
   let aborted = false;
   let stderrTail = "";
   let seen = 0, initSeen = false;
+  const modelsSeen = new Set();
   // manager abort (the run's Abort button) kills the agent process the same way the cost cap does
   let killed = false;
   const onKill = () => { killed = true; abort.abort(); };
@@ -190,12 +205,21 @@ async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd, 
       cwd: dir,
       model,
       systemPrompt: system,
+      // `tools` is the whole tool list the model gets (no Bash, no web, no
+      // subagents); `allowedTools` pre-approves them so acceptEdits never
+      // has to ask. Verified 2026-09-17: the init message lists only these.
+      tools,
       allowedTools: tools,
-      // acceptEdits auto-approves file edits inside cwd; the listed tools are
-      // pre-allowed. We avoid bypassPermissions: the bundled CLI refuses
-      // --dangerously-skip-permissions as root, which is how Railway runs.
+      // acceptEdits auto-approves file edits inside cwd. We avoid
+      // bypassPermissions: the bundled CLI refuses it as root, which is how
+      // Railway runs. (Checked again on SDK 0.3.274: acceptEdits as root is fine.)
       permissionMode: "acceptEdits",
+      effort: AGENT_EFFORT,
       maxTurns: 40,
+      // Far safety rail only. The working limit is our own estimate below,
+      // which aborts at `cap`; this catches a run whose usage messages never
+      // arrived. Decided 2026-09-17: no hard kill at the working limit.
+      maxBudgetUsd: cap * 3,
       abortController: abort,
       env: agentEnv(),
       stderr: (data) => { stderrTail = (stderrTail + String(data)).slice(-4000); },
@@ -204,8 +228,9 @@ async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd, 
   try {
     for await (const msg of it) {
       seen++;
-      if (msg.type === "system" && msg.subtype === "init") initSeen = true;
+      if (msg.type === "system" && msg.subtype === "init") { initSeen = true; if (msg.model) modelsSeen.add(msg.model); }
       if (msg.type === "assistant" && msg.message && Array.isArray(msg.message.content)) {
+        if (msg.message.model) modelsSeen.add(msg.message.model);
         for (const block of msg.message.content) if (block.type === "text") text += block.text;
         const u = msg.message.usage || {};
         estimate += (u.input_tokens || 0) * price.inTok + (u.output_tokens || 0) * price.outTok
@@ -214,7 +239,11 @@ async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd, 
       }
       if (msg.type === "result") {
         if (typeof msg.total_cost_usd === "number") costUsd = msg.total_cost_usd;
+        // On this SDK a turn that ended on an API error still comes back as
+        // subtype "success" with is_error set and the error text in result.
+        if (msg.is_error && !aborted && !killed) throw new Error(`the model's API answered with an error: ${String(msg.result || "").slice(0, 300)}`);
         if (msg.result) text = msg.result;
+        if (msg.subtype === "error_max_budget_usd" && !aborted && !killed) throw new Error(`build stopped at the safety budget ($${(cap * 3).toFixed(2)})`);
         if (msg.subtype && msg.subtype !== "success" && !aborted) throw new Error(`agent run ended: ${msg.subtype}`);
       }
     }
@@ -227,7 +256,7 @@ async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd, 
       const said = text.trim() ? `; the model's last words: "${text.trim().slice(-200)}"` : "";
       const err = new Error(`build agent failed: ${e.message} (${stage}; model ${model}${detail ? `; ${detail}` : "; nothing on stderr"}${said})`);
       err.costUsd = costUsd || estimate;
-      err.diag = { model, messages: seen, initSeen, stderr: stderrTail.slice(-4000), lastText: text.slice(-600), promptChars: prompt.length, systemChars: (system || "").length };
+      err.diag = { model, modelsSeen: [...modelsSeen], effort: AGENT_EFFORT, messages: seen, initSeen, stderr: stderrTail.slice(-4000), lastText: text.slice(-600), promptChars: prompt.length, systemChars: (system || "").length };
       throw err;
     }
   }
@@ -238,7 +267,7 @@ async function runAgent({ model, system, dir, prompt, readOnly = false, capUsd, 
     e.costUsd = costUsd || estimate;
     throw e;
   }
-  return { text: text.trim(), costUsd: costUsd || estimate };
+  return { text: text.trim(), costUsd: costUsd || estimate, modelsSeen: [...modelsSeen] };
 }
 
 // One-shot structured call (no file tools) for proposals/classification/verdicts.
@@ -331,5 +360,5 @@ async function assertUnderCap() {
 
 module.exports = {
   runAgent, runStructured, runChat, recordUsage, haveKey, fakeMode, guidanceFor, platformDocs, modelFor, modelInfo, buildModelFor, canBuild,
-  MODELS, DEFAULT_MODELS, MAX_RUN_USD, MAX_BATCH_USD, runCapUsd, MONTHLY_CAP_USD, monthlySpend, assertUnderCap,
+  MODELS, DEFAULT_MODELS, MAX_RUN_USD, MAX_BATCH_USD, runCapUsd, MONTHLY_CAP_USD, monthlySpend, assertUnderCap, AGENT_EFFORT,
 };

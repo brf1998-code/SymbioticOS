@@ -233,7 +233,7 @@ how you exercise the failure branches on demand.
 | S0-67 | Admin overview | Companies, modules, docs and spend per company |
 | S0-68 | Events log | Proposal, run, deploy, import and review events all present |
 | S0-69 | Change the three model roles on the Agents page | Persisted per company, used by the next run |
-| S0-70 | Open the build model dropdown | Fable 5.1 absent (`agent: false`) |
+| S0-70 | Open the build model dropdown | All four models listed, Fable 5.1 included (Agent SDK 0.3.x, 2026-09-17) |
 | S0-71 | Edit COMPANY.md, add a module doc, delete a doc | Next run's `evidence.docs` lists exactly what it read |
 | S0-72 | Deploy with fake agent on | Diagrams generated, version selector works, Redraw is manager only |
 | S0-73 | Restart with a new `SOS_BOOT_ID` while a board tab is open | Tab reloads itself rather than running old page code |
@@ -261,7 +261,7 @@ before budgeting anything else.
 | S1-04 | Read the plain summary | Title 8 words or fewer, "what changed" readable by someone who was not in the room |
 | S1-05 | Approve a proposal, then Adjust the target file to a different screen, then build | The cross-check should fail a diff that lands on the wrong screen. If it passes, that is a real finding |
 | S1-06 | Run one propose call on each of Haiku, Sonnet, Opus and Fable | All four return a valid structured proposal; the Fable `tool_choice` fallback works and is remembered |
-| S1-07 | Select Fable as the per-run build model | Substitution happens, the run log names the substitute |
+| S1-07 | Select Fable as the per-run build model and build one UI change | The run completes on Fable: `evidence.models_seen` is exactly `["claude-fable-5-1"]`, `evidence.effort` is `high`, the log line says "confirmed by the agent", the board shows a check mark after the model name, cost about $0.35 to $1.60 |
 | S1-08 | One system review with Sonnet (cheapest) | 3 to 12 findings filed as held items, nothing builds on its own |
 | S1-09 | Set `SOS_MAX_RUN_USD=0.05`, run a functionality build | Aborts with the cap message; the partial cost is still recorded on the run; the draft state is recoverable |
 | S1-10 | Set `SOS_MONTHLY_CAP_USD` just below current spend | New proposals and runs refused with the cap message, existing runs unaffected |
@@ -527,8 +527,10 @@ Found while reading the code. Each maps to a case above.
    text. S3-14.
 8. **Cross-check diff truncated at 40,000 characters.** A large batch can have
    an unreviewed tail. S3-09.
-9. **Fable rejects forced `tool_choice`** and cannot run as the build agent.
-   Covered by the runner, but worth confirming after any model change. S1-06,
+9. **Fable rejects forced `tool_choice`**; the structured runner falls back
+   to `auto`. Fable builds since the Agent SDK upgrade of 2026-09-17; a
+   model swap by the CLI would show as a red "ran on X" on the board
+   (`CLAUDE_CODE_NO_MODEL_FALLBACK=1` should make it impossible). S1-06,
    S1-07.
 10. **Model IDs and prices are hardcoded** in `src/agent.js MODELS`. They go
     stale. Re-check against platform.claude.com before each stage that spends.

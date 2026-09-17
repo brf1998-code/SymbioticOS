@@ -11,7 +11,7 @@
 // ONE agent run, one staged demo, one deploy. Only one run is active per
 // module at a time; further runs queue and start when the active one ends.
 const { q, logEvent } = require("./db");
-const { runAgent, runStructured, haveKey, assertUnderCap, modelFor, buildModelFor, guidanceFor, runCapUsd, MODELS } = require("./agent");
+const { runAgent, runStructured, haveKey, assertUnderCap, modelFor, buildModelFor, guidanceFor, runCapUsd, MODELS, AGENT_EFFORT } = require("./agent");
 const registry = require("./registry");
 
 const CROSS_CHECK_SCHEMA = {
@@ -233,11 +233,19 @@ ${isBatch ? "- Implement every change in the batch. Keep them independent where 
 - Your final message must be ONLY a short bullet list of what changed (one bullet per change, naming the screen), in plain language for a production manager. No preamble, no headings, no code talk.`,
         });
       } finally { ACTIVE.delete(runId); }
-      const { text, costUsd } = agentOut;
+      const { text, costUsd, modelsSeen } = agentOut;
       await addCost(runId, costUsd);
       const cur = await getRun(runId);
-      await setRun(runId, { evidence: { ...cur.evidence, build_summary: text, docs: guidance.names, model, cap_usd: capUsd } });
-      await log(runId, { step: "build", note: `agent build complete (${model})` });
+      // models_seen is the proof of which model actually built this: every
+      // model id the agent process reported. Anything but exactly {model}
+      // means the CLI swapped models, which CLAUDE_CODE_NO_MODEL_FALLBACK
+      // should make impossible; it is logged loudly rather than hidden.
+      const seen = Array.isArray(modelsSeen) ? modelsSeen : [];
+      const swapped = seen.length && (seen.length > 1 || seen[0] !== model);
+      await setRun(runId, { evidence: { ...cur.evidence, build_summary: text, docs: guidance.names, model, models_seen: seen, effort: AGENT_EFFORT, cap_usd: capUsd } });
+      await log(runId, { step: "build", note: swapped
+        ? `agent build complete, but the agent reported running on ${seen.join(", ")} instead of ${model}`
+        : `agent build complete (${model}, effort ${AGENT_EFFORT}${seen.length ? ", confirmed by the agent" : ""})` });
       // Plain-language title and summary for the version list, the Done card
       // and the feedback outcome. Cheap model; the agent's own final text is
       // often chatty despite the instruction.

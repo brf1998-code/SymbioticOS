@@ -209,6 +209,14 @@ const CHECKED = new Set();     // "runId:i" boxes the manager has ticked at the 
 const MGR = () => DATA && (DATA.role === "manager" || DATA.role === "admin");
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
 function modelLabel(id) { const m = (DATA.models.list || []).find(x => x.id === id); return m ? m.label : (id || ""); }
+// What the agent process itself reported running on (evidence.models_seen).
+// Silent when it matches the chosen model; loud when it does not.
+function builtOnNote(run, ev) {
+  const seen = Array.isArray(ev && ev.models_seen) ? ev.models_seen : [];
+  if (!seen.length) return "";
+  const ok = seen.length === 1 && seen[0] === (ev.model || run.model);
+  return ok ? ` <span title="the agent confirmed it ran on ${esc(modelLabel(seen[0]))}">✓</span>` : ` <b style="color:#b3261e" title="the agent reported a different model">ran on ${esc(seen.map(modelLabel).join(", "))}</b>`;
+}
 // forBuild: models the build agent cannot run are left out
 function modelOptions(sel, forBuild = true) {
   return DATA.models.list.filter(m => !forBuild || m.agent !== false).map(m => `<option value="${m.id}" ${m.id === sel ? "selected" : ""}>${m.label} ($${m.in}/$${m.out} per M tokens)</option>`).join("");
@@ -483,7 +491,7 @@ function batchCard(run) {
   const pk = "run:" + run.id;
   let html = `<div class="card batch ${PENDING.has(pk) ? "busy" : ""}" data-key="${pk}">${pendingHtml(pk)}`;
   html += `<div class="bhead"><span class="n">${items.length}</span>${ev.title ? esc(ev.title) : `${items.length} changes built as one`}${review ? `<span class="chip review">REVIEW #${review.review_id}</span>` : ""}<span class="chip ${run.lane}">${run.lane === "ui" ? "UI" : "FUNCTIONALITY"}</span></div>`;
-  html += `<div class="meta">run #${run.id} · ${esc(mod.title || run.module)} · v${run.from_version}${run.to_version ? " → v" + run.to_version : ""} · ${esc(modelLabel(run.model))} · $${Number(run.cost_usd).toFixed(2)}</div>`;
+  html += `<div class="meta">run #${run.id} · ${esc(mod.title || run.module)} · v${run.from_version}${run.to_version ? " → v" + run.to_version : ""} · ${esc(modelLabel(run.model))}${builtOnNote(run, ev)} · $${Number(run.cost_usd).toFixed(2)}</div>`;
   if (run.status === "deployed" || run.status === "rolled_back") {
     html += `<div class="${run.status === "deployed" ? "outcome" : "fail-note"}">${run.status === "deployed" ? "We did: " : "Rolled back: "}${esc(ev.what_changed || ev.build_summary || "").slice(0, 600)}</div>`;
   }
@@ -559,7 +567,7 @@ function card(fb) {
 
   if (fb.status === "in_progress" && run) {
     const others = (run.feedback_ids || []).filter(i => i !== fb.id);
-    html += `<div class="meta" style="margin-top:6px"><span class="chip ${run.lane}">${run.lane === "ui" ? "UI LANE" : "FUNCTIONALITY LANE"}</span> run #${run.id} · v${run.from_version}${run.to_version ? " → v" + run.to_version : ""} · ${esc(modelLabel(run.model))} · $${Number(run.cost_usd).toFixed(2)}${others.length ? ` · <span class="chip rec">batch with #${others.join(", #")}</span>` : ""}</div>`;
+    html += `<div class="meta" style="margin-top:6px"><span class="chip ${run.lane}">${run.lane === "ui" ? "UI LANE" : "FUNCTIONALITY LANE"}</span> run #${run.id} · v${run.from_version}${run.to_version ? " → v" + run.to_version : ""} · ${esc(modelLabel(run.model))}${builtOnNote(run, run.evidence || {})} · $${Number(run.cost_usd).toFixed(2)}${others.length ? ` · <span class="chip rec">batch with #${others.join(", #")}</span>` : ""}</div>`;
     if (run.status === "queued") {
       html += `<div class="meta"><span class="pulse"></span>Queued: waiting for the current build on ${esc(run.module)} to finish.</div>`;
       if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;

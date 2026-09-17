@@ -1,4 +1,4 @@
-# Symbiotic OS — Workspace Guide (current as of 2026-09-14)
+# Symbiotic OS — Workspace Guide (current as of 2026-09-17)
 
 **This file is the single source of truth for how this repo and the live
 instance are worked on.** Repo: `brf1998-code/SymbioticOS` (private). Live:
@@ -70,11 +70,29 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   into `evidence.title` / `evidence.what_changed`; the title becomes the
   version's `notes` (shown in the Versions panel) and what_changed is the
   feedback outcome and the Done card text. `SOS_MODEL_SUMMARY` overrides.
-- **Build-agent models**: `MODELS[].agent === false` marks models the bundled
-  Claude Code CLI cannot run as the builder (Fable 5.1: the process exits 1
-  after its first reply). `agent.buildModelFor` substitutes the company build
-  model and the run log says so; build dropdowns leave those models out.
-  Fable stays available for proposals, cross-checks and system reviews.
+- **Build-agent models, Agent SDK 0.3.x (2026-09-17)**: every model in
+  `MODELS` can be the builder, Fable 5.1 included. The old "Fable exits 1
+  after its first reply" was the Agent SDK pinned at 0.1.77 (January 2026,
+  before Fable existed); `package.json` now pins `^0.3.274`, which bundles
+  Claude Code 2.1.274 as a native binary per platform (optional dependency
+  `@anthropic-ai/claude-agent-sdk-linux-x64` on Railway) and needs
+  `@anthropic-ai/sdk` >= 0.93, `zod` 4 and `@modelcontextprotocol/sdk` as
+  dependencies. `package-lock.json` must be regenerated in the cloud sandbox
+  (the Mac VM has no network) whenever dependencies change. `runAgent` now
+  passes `tools` (the whole tool list: Read, Write, Edit, Glob, Grep and
+  nothing else; the init message confirms it), `effort` (`SOS_AGENT_EFFORT`,
+  default `high`, decided 2026-09-17: high everywhere) and `maxBudgetUsd` at
+  three times the run cap as a far safety rail (our own estimate still stops
+  the run at the cap). `agentEnv()` sets `CLAUDE_CODE_NO_MODEL_FALLBACK=1` so
+  the CLI can never swap models silently, and the run records every model id
+  the agent reported (`evidence.models_seen`, plus `evidence.effort`); the
+  board shows a check mark after the model name when it matches and a red
+  "ran on X" when it does not. A turn that ends on an API error comes back
+  from this SDK as subtype `success` with `is_error`; the runner throws on it
+  instead of storing the error text as the build summary. `MODELS[].agent
+  === false` still works to keep a model out of builds; nothing uses it now.
+  Structured calls keep the `tool_choice` fallback (Fable still rejects a
+  forced tool).
 - **Boot id**: `SOS_BOOT_ID` is set at process start and returned by the
   board API; the board reloads itself when it changes, so an open tab picks
   up a redeploy instead of running old page code against new data.
@@ -344,11 +362,16 @@ If a future session does have the repo attached as a source, pushing from the
 sandbox works the same way (`git push` from a clone) and the Terminal step
 goes away.
 
-`node_modules` exists in the mounted folder from an earlier local install; the
-sandbox can reuse it (tar without `@anthropic-ai/claude-agent-sdk`, stage,
-untar) to run the app locally against the sandbox's Postgres 16
-(`pg_ctlcluster 16 main start`, user/db `sos`/`sos`). `SOS_FAKE_AGENT=1` runs
-the whole loop with zero API spend. The sandbox has no npm registry access.
+The cloud sandbox has npm registry access (through its proxy) and Postgres 16
+(`pg_ctlcluster 16 main start`, then create user/db `sos`/`sos`), so the app
+runs there from a plain `npm install`: tar the repo without `node_modules`
+and `.git` in the mounted folder, stage the tarball, untar, install, boot with
+`SOS_FAKE_AGENT=1`. That is also where `package-lock.json` is regenerated
+after a dependency change. The `node_modules` in the mounted folder is a stale
+local install from before the SDK upgrade; Railway never sees it. The
+sandbox can reach api.anthropic.com but has no key, so a real agent run is
+tested on the live instance; a launch test with a bogus key (init message,
+tool list, 401 from the API) proves the CLI itself starts.
 
 ## Live instance env vars (Railway service `SymbioticOS`)
 
@@ -358,7 +381,8 @@ the whole loop with zero API spend. The sandbox has no npm registry access.
 (instance defaults: claude-sonnet-5 / claude-sonnet-5 / claude-opus-5;
 companies override on their Agent settings page), `SOS_MAX_RUN_USD` (per
 build run, default 1.50), `SOS_MONTHLY_CAP_USD` (default 25),
-`SOS_FAKE_AGENT` (0/1). Optional: `SOS_SESSION_DAYS` (default 30; sessions
+`SOS_FAKE_AGENT` (0/1). Optional: `SOS_AGENT_EFFORT` (build agent reasoning
+effort, default `high`), `SOS_SESSION_DAYS` (default 30; sessions
 expire server-side, not just via cookie Max-Age), `SOS_LOGIN_MAX_FAILS`
 (default 10) and `SOS_LOGIN_WINDOW_MIN` (default 15) for the per-IP login
 limiter (in-memory, uses `cf-connecting-ip`).
