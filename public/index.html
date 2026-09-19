@@ -12,39 +12,41 @@
   * { box-sizing:border-box; margin:0; }
   body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); padding:0 0 56px; }
   a { color:var(--navy); }
-  .band { background:var(--navy); color:#fff; padding:12px 22px; }
-  .band .inner { display:flex; align-items:center; gap:18px; max-width:1500px; margin:0 auto; }
-  .band .main { flex:1 1 auto; min-width:0; }
-  .band .row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-  .band h1 { font-size:20px; font-weight:800; letter-spacing:.01em; display:flex; align-items:center; gap:10px; }
+  /* The band: one title row, one quiet module line. Everything in it is text
+     sized; the printable wall sign lives behind a link instead of a tile. */
+  .band { background:var(--navy); color:#fff; padding:8px 22px 7px; }
+  .band .inner { display:flex; align-items:center; gap:14px; max-width:1500px; margin:0 auto; flex-wrap:wrap; }
+  .band .row { min-height:30px; }
+  .band h1 { font-size:17px; font-weight:800; letter-spacing:.01em; display:flex; align-items:center; gap:9px; }
   .band h1 small { font-size:12.5px; opacity:.75; font-weight:500; }
-  .band h1 img.mark { width:26px; height:26px; border-radius:6px; background:#fff; display:none; }
-  .band .right { margin-left:auto; font-size:12.5px; opacity:.9; }
+  .band h1 img.mark { width:22px; height:22px; border-radius:5px; background:#fff; display:none; }
+  .band .right { margin-left:auto; font-size:12px; opacity:.9; white-space:nowrap; }
   .band .right a { color:#fff; }
-  .modstrip { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
-  .modcard { background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); border-radius:10px; padding:8px 12px; font-size:12.5px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-  .modcard b { font-size:13.5px; }
-  .modcard a { color:#fff; text-decoration:none; background:rgba(255,255,255,.14); border-radius:14px; padding:4px 10px; font-weight:600; }
-  .modcard a.amber { background:var(--amber); }
-  .modcard .v { opacity:.8; }
+  .modstrip { display:flex; gap:6px 10px; flex-wrap:wrap; align-items:center; margin-top:6px; font-size:12px; }
+  .modcard { display:inline-flex; gap:7px; align-items:center; padding:2px 8px 2px 4px; border-radius:8px; background:rgba(255,255,255,.07); white-space:nowrap; }
+  .modcard b { font-size:12.5px; }
+  .modcard a { color:#fff; text-decoration:none; opacity:.8; font-weight:500; }
+  .modcard a:hover, .modcard a:focus, .modcard button.vbtn:hover { opacity:1; text-decoration:underline; }
+  .modcard a.amber { color:#ffd9b0; opacity:1; font-weight:700; }
+  .modcard .v { opacity:.6; font-size:11px; }
+  .modcard .sep { opacity:.3; }
   /* module filter: the title of each module card is a toggle; "All modules" resets */
-  .modcard .tog, .modall { background:none; border:1px solid rgba(255,255,255,.55); color:#fff; border-radius:14px; padding:4px 11px; font-weight:800; font-size:13.5px; cursor:pointer; font-family:inherit; margin:0; min-height:0; display:inline-flex; align-items:center; gap:6px; }
-  .modcard .tog::before, .modall::before { content:""; width:12px; height:12px; border:2px solid rgba(255,255,255,.75); border-radius:4px; flex:none; box-sizing:border-box; }
-  .modcard.on .tog, .modall.on { background:#fff; color:var(--navy); border-color:#fff; }
-  .modcard.on .tog::before, .modall.on::before { background:var(--green); border-color:var(--green); }
-  .modcard.off { opacity:.55; }
+  .modcard .tog, .modall { background:none; border:none; color:#fff; border-radius:6px; padding:3px 6px; font-weight:800; font-size:12.5px; cursor:pointer; font-family:inherit; margin:0; min-height:0; display:inline-flex; align-items:center; gap:6px; }
+  .modcard .tog::before, .modall::before { content:""; width:8px; height:8px; border-radius:50%; background:rgba(255,255,255,.35); flex:none; }
+  .modcard.on .tog::before, .modall.on::before { background:#7ed39a; }
+  .modcard.off { opacity:.5; }
   .modcard.off:hover { opacity:.85; }
-  .modall { align-self:center; font-size:12.5px; }
-  .modall.on::before { background:var(--navy); border-color:var(--navy); }
-  .modall.newmod { border-style:dashed; order:99; } .modall.newmod::before { display:none; }
-  .filterhint { font-size:12px; opacity:.85; margin-top:6px; }
+  .modall { font-size:12px; font-weight:700; opacity:.85; }
+  .modall.on { opacity:1; }
+  .modall.newmod { border:1px dashed rgba(255,255,255,.45); order:99; padding:2px 9px; font-weight:600; } .modall.newmod::before { display:none; }
+  .filterhint { font-size:11.5px; opacity:.7; }
   /* a module request card: the intake lives in the popout, the tile is its status */
   .card.request { border-left:4px solid var(--teal); }
   .card.request .msg { font-size:14px; }
   .card.request .stat { margin-top:8px; font-size:12.5px; line-height:1.5; }
   .card.request .stat b { color:var(--navy); }
   .wrap { max-width:1500px; margin:0 auto; padding:14px 22px 0; }
-  .modcard button.vbtn { background:rgba(255,255,255,.14); color:#fff; border:none; border-radius:14px; padding:4px 10px; font-weight:600; font-size:12.5px; cursor:pointer; font-family:inherit; }
+  .modcard button.vbtn { background:none; color:#fff; border:none; padding:0; margin:0; min-height:0; font-weight:500; font-size:12px; opacity:.8; cursor:pointer; font-family:inherit; }
   .vpanel { background:#fff; border:1px solid var(--line); border-left:4px solid var(--navy); border-radius:10px; padding:12px 14px; margin-bottom:12px; font-size:13px; }
   .vpanel h3 { font-size:14px; margin-bottom:6px; display:flex; gap:10px; align-items:center; }
   .vpanel h3 .x { margin-left:auto; cursor:pointer; color:var(--steel); font-weight:400; }
@@ -55,8 +57,8 @@
   .vrow button { border:1px solid var(--line); background:#f6f8fa; color:var(--ink); border-radius:7px; padding:5px 9px; font-size:12px; font-weight:600; cursor:pointer; font-family:inherit; }
   .vrow button:disabled { opacity:.45; cursor:default; }
   .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:12px; }
-  .kpi { background:#fff; border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
-  .kpi b { display:block; font-size:22px; line-height:1.1; }
+  .kpi { background:#fff; border:1px solid var(--line); border-radius:10px; padding:8px 12px; }
+  .kpi b { display:block; font-size:19px; line-height:1.1; }
   .kpi span { font-size:11px; color:var(--steel); text-transform:uppercase; letter-spacing:.05em; }
   .warn { color:var(--amber); font-size:12.5px; margin:0 0 10px; font-weight:600; }
   .cols { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; align-items:start; }
@@ -137,12 +139,8 @@
   details.platform .hint { font-size:12.5px; color:var(--steel); margin:8px 0; line-height:1.5; }
   details.platform .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:10px; }
   .empty { color:var(--steel); font-size:12.5px; padding:10px 4px; }
-  /* board QR: the tile at the right end of the band (spans title and module strip), and the big printable card behind it */
-  .qrtile { flex:none; align-self:stretch; background:#fff; border-radius:10px; padding:6px 6px 5px; text-align:center; cursor:pointer; border:1px solid rgba(255,255,255,.35); line-height:0; display:flex; flex-direction:column; justify-content:center; }
-  .qrtile img { width:112px; height:112px; display:block; margin:0 auto; }
-  .qrtile span { display:block; font-size:9.5px; line-height:1.2; color:var(--steel); font-weight:700; text-transform:uppercase; letter-spacing:.04em; margin-top:4px; }
-  .qrtile:hover, .qrtile:focus { outline:2px solid rgba(255,255,255,.6); }
-  @media (max-width: 640px) { .band .inner { flex-wrap:wrap; } .qrtile { align-self:auto; order:2; } .qrtile img { width:88px; height:88px; } }
+  /* board QR: a "Wall sign" link in the band opens the big printable card */
+  @media (max-width: 640px) { .band .right { margin-left:0; white-space:normal; } .modcard { white-space:normal; flex-wrap:wrap; row-gap:2px; } }
   #qrmodal { display:none; position:fixed; inset:0; background:rgba(28,36,46,.55); z-index:20; align-items:center; justify-content:center; padding:20px; }
   #qrmodal.on { display:flex; }
   .qrcard { background:#fff; border-radius:14px; padding:22px; width:100%; max-width:420px; text-align:center; }
@@ -164,20 +162,12 @@
 </head>
 <body>
   <div class="band">
-    <div class="inner">
-      <div class="main">
-        <div class="row">
-          <h1><img class="mark" id="comark" alt="">Improvement Board <small id="coname"></small></h1>
-          <span class="right" id="who"></span><span id="global-busy"><span class="spin"></span><span id="global-busy-text">working</span></span>
-        </div>
-        <div class="modstrip" id="modules"></div>
-        <div class="filterhint" id="filterhint"></div>
-      </div>
-      <div class="qrtile" id="qrtile" role="button" tabindex="0" title="Scan to open this board"
-           onclick="openQr()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openQr();}">
-        <img id="qrimg" alt="QR code that opens this board"><span>Scan for<br>this board</span>
-      </div>
+    <div class="inner row">
+      <h1><img class="mark" id="comark" alt="">Improvement Board <small id="coname"></small></h1>
+      <span id="global-busy"><span class="spin"></span><span id="global-busy-text">working</span></span>
+      <span class="right" id="who"></span>
     </div>
+    <div class="inner modstrip" id="modules"></div>
   </div>
   <div class="wrap">
     <div class="warn" id="aiwarn" style="display:none"></div>
@@ -813,13 +803,11 @@ async function load() {
   document.title = `${DATA.company.name} · Improvement Board`;
   document.getElementById("coname").textContent = DATA.company.name;
   applyBrand(DATA.brand);
-  const qrimg = document.getElementById("qrimg");
-  if (!qrimg.getAttribute("src")) qrimg.src = `/api/c/${SLUG}/qr.svg?px=264`;  // set once; a reload must not reflow the band
   const w = document.getElementById("aiwarn");
   if (!DATA.aiConfigured) { w.style.display = "block"; w.textContent = "AI is not configured on this instance (set ANTHROPIC_API_KEY). Proposals will be placeholders."; }
   else if (DATA.fakeAgent) { w.style.display = "block"; w.textContent = "Fake agent mode (SOS_FAKE_AGENT=1): the loop runs but the agent only stamps a marker on pages."; }
   else w.style.display = "none";
-  document.getElementById("who").innerHTML = `signed in as <b>${esc(DATA.role)}</b>${DATA.role === "admin" ? ' · <a href="/admin">admin</a>' : ""}${MGR() ? ` · <a href="/c/${SLUG}/agents">agent settings</a> · <a href="/c/${SLUG}/checks">checks log</a>` : ""} · <a href="/logout">sign out</a>`;
+  document.getElementById("who").innerHTML = `signed in as <b>${esc(DATA.role)}</b>${DATA.role === "admin" ? ' · <a href="/admin">admin</a>' : ""}${MGR() ? ` · <a href="/c/${SLUG}/agents">agent settings</a> · <a href="/c/${SLUG}/checks">checks log</a> · <a href="/api/c/${SLUG}/record/export" download title="Everything said and decided on this board, word for word, as a file. This company's own record.">record</a>` : ""} · <a href="#" onclick="openQr();return false" title="The code that opens this board, large enough to print for the wall">wall sign</a> · <a href="/logout">sign out</a>`;
   normalizeSel();
   writeSel();   // the URL always shows the pick in force (cleans a stale ?m=, remembers a linked one)
   render();
@@ -832,20 +820,24 @@ async function load() {
 // a toggle redraws without another fetch.
 function render() {
   const many = DATA.modules.length > 1;
+  // One quiet line: each module is a name (the filter toggle when there are
+  // several), its version, and small text links. The hint sits at the end of
+  // the same line only while a filter is in force.
+  const links = (m) => [
+    m.live_version ? `<a href="/c/${SLUG}/m/${m.name}/">Open live</a>` : `<span class="v">being built</span>`,
+    m.staged_version ? `<a class="amber" href="/c/${SLUG}/staging/m/${m.name}/">Preview v${m.staged_version}</a>` : "",
+    m.live_version ? `<a href="/c/${SLUG}/diagrams/${m.name}">Diagrams</a>` : "",
+    MGR() && m.live_version ? `<button class="vbtn" onclick="openVersions('${m.name}')">Versions</button>` : "",
+  ].filter(Boolean).join('<span class="sep">·</span>');
   document.getElementById("modules").innerHTML =
-    (many ? `<button class="modall ${SEL ? "" : "on"}" onclick="selectAll()" title="Show every module">All modules</button>` : "") +
-    (MGR() ? `<button class="modall newmod" onclick="Intake.start()" title="Describe a new module in plain words; Fable designs it, you confirm, then it is built">+ New module</button>` : "") +
+    (many ? `<button class="modall ${SEL ? "" : "on"}" onclick="selectAll()" title="Show every module's feedback">All</button>` : "") +
     DATA.modules.map(m => {
       const on = visible(m.name);
-      return `<div class="modcard ${many ? (on ? "on" : "off") : ""}">
-      ${many ? `<button class="tog" onclick="toggleModule('${m.name}')" title="${on ? (SEL ? "Hide this module" : "Show only this module") : "Show this module too"}">${esc(m.title)}</button>` : `<b>${esc(m.title)}</b>`}<span class="v">${m.live_version ? "v" + m.live_version : ""}</span>
-      ${m.live_version ? `<a href="/c/${SLUG}/m/${m.name}/">Open live</a>` : `<span class="v">being built</span>`}
-      ${m.staged_version ? `<a class="amber" href="/c/${SLUG}/staging/m/${m.name}/">Preview v${m.staged_version}</a>` : ""}
-      ${m.live_version ? `<a href="/c/${SLUG}/diagrams/${m.name}">Diagrams</a>` : ""}${MGR() && m.live_version ? `<button class="vbtn" onclick="openVersions('${m.name}')">Versions</button>` : ""}</div>`;
-    }).join("");
-  document.getElementById("filterhint").textContent = SEL
-    ? `Showing ${SEL.size === 1 ? "one module" : SEL.size + " modules"}. Tick a module to add it, tick it again to take it out, or All modules.`
-    : (many ? "Tick a module to look at its feedback on its own." : "");
+      return `<span class="modcard ${many ? (on ? "on" : "off") : ""}">
+      ${many ? `<button class="tog" onclick="toggleModule('${m.name}')" title="${on ? (SEL ? "Hide this module's feedback" : "Show only this module's feedback") : "Show this module's feedback too"}">${esc(m.title)}</button>` : `<b>${esc(m.title)}</b>`}<span class="v">${m.live_version ? "v" + m.live_version : ""}</span>${links(m)}</span>`;
+    }).join("") +
+    (MGR() ? `<button class="modall newmod" onclick="Intake.start()" title="Describe a new module in plain words; Fable designs it, you confirm, then it is built">+ New module</button>` : "") +
+    (SEL ? `<span class="filterhint">showing ${SEL.size === 1 ? "one module" : SEL.size + " modules"} · <a href="#" style="color:#fff" onclick="selectAll();return false">show all</a></span>` : "");
   const runs = DATA.runs.filter(r => visible(r.module));
   const fbs = DATA.feedback.filter(f => visible(f.module));
   const active = runs.filter(r => ["running", "waiting", "queued"].includes(r.status)).length;

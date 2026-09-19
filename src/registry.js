@@ -197,6 +197,10 @@ function moduleServices(company, mod, manifest) {
         const m = model && agent.MODELS.some((x) => x.id === model) ? model : await agent.modelFor(company, "propose");
         const out = await agent.runChat({ model: m, system, messages, maxTokens });
         await agent.recordUsage(company, mod, kind || "chat", m, out.costUsd, detail);
+        const asked = [...(messages || [])].reverse().find((x) => x && x.role === "user");
+        const rec = require("./record").record;
+        await rec("chat_question", { company, module: mod, actor: "person", after: asked ? String(asked.content) : null, detail: { persona: kind || "chat" } });
+        await rec("chat_answer", { company, module: mod, actor: "agent", after: out.text, detail: { persona: kind || "chat", model: m, cost_usd: out.costUsd || 0 } });
         return { ...out, model: m };
       },
     },

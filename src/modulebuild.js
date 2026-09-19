@@ -16,6 +16,7 @@ const agent = require("./agent");
 const registry = require("./registry");
 const migrate = require("./migrate");
 const gate = require("./modulegate");
+const { record } = require("./record");
 const attachments = require("./attachments");
 const plain = require("./plainwords");
 const Q = require("./intake-questions");
@@ -361,6 +362,7 @@ Rules for this build:
       const cur = await P.getRun(runId);
       await P.setRun(runId, { evidence: { ...cur.evidence, build_summary: out.text, docs: guidance.names.concat(["platform: MODULE-CONTRACT.md", "platform: PLAIN-WORDS.md"]), model: run.model, models_seen: seen, effort: agent.AGENT_EFFORT, cap_usd: 0 } });
       await P.log(runId, { step: "build", note: swapped ? `agent build complete, but the agent reported running on ${seen.join(", ")} instead of ${run.model}` : `agent build complete (${run.model}, effort ${agent.AGENT_EFFORT}${seen.length ? ", confirmed by the agent" : ""})` });
+      await record("build_finished", { company, module: slug, actor: "agent", run_id: runId, intake_id: ev.intake_id || null, version: 1, after: out.text, detail: { model: run.model, models_seen: seen, effort: agent.AGENT_EFFORT, cost_usd: out.costUsd || 0, fix_round: ev.fix_round || 0, lane: "module" } });
       // The module gate first (src/modulegate.js): validateModule below loads
       // routes.js into this process to see that it returns a router, so the
       // text has to pass the gate before that happens.
@@ -370,6 +372,7 @@ Rules for this build:
         const c1 = await P.getRun(runId);
         await P.setRun(runId, { step: "cross_check", evidence: { ...c1.evidence, gate: gate.record(verdict), cross_check: { verdict: "fail", model: "platform checks", summary: gate.summarize(verdict), findings: gate.asFindings(verdict) } } });
         await logEvent("gate_refused", runId, { company, module: slug, version: 1, lane: "module", rules: verdict.violations.map((f) => f.rule) });
+        await record("check_verdict", { company, module: slug, actor: "platform", run_id: runId, version: 1, after: gate.summarize(verdict), detail: { by: "platform checks", verdict: "fail", rules: verdict.violations.map((f) => f.rule) } });
         throw new Error(`platform checks failed: ${gate.oneLine(verdict)}`);
       }
       { const c1 = await P.getRun(runId); await P.setRun(runId, { evidence: { ...c1.evidence, gate: gate.record(verdict) } }); }
@@ -408,6 +411,7 @@ Rules for this build:
         const p = (await q("SELECT * FROM platform.proposals WHERE id=$1", [run.proposal_id])).rows[0];
         const { data, costUsd } = await P.runStructuredCrossCheck(run, p, cur, model, listingAsDiff(dir));
         await P.addCost(runId, costUsd);
+        await record("check_verdict", { company, module: slug, actor: "agent", run_id: runId, version: 1, after: data.summary, detail: { by: model, verdict: data.verdict, findings: data.findings, cost_usd: costUsd || 0, lane: "module" } });
         if (data.verdict === "fail") {
           const c2 = await P.getRun(runId);
           await P.setRun(runId, { evidence: { ...c2.evidence, cross_check: { ...data, model } } });

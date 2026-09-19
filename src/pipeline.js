@@ -14,6 +14,7 @@ const { q, logEvent } = require("./db");
 const { runAgent, runStructured, haveKey, assertUnderCap, modelFor, buildModelFor, guidanceFor, runCapUsd, MODELS, AGENT_EFFORT } = require("./agent");
 const registry = require("./registry");
 const gate = require("./modulegate");
+const { record } = require("./record");
 
 const CROSS_CHECK_SCHEMA = {
   type: "object",
@@ -199,6 +200,7 @@ async function advance(runId) {
       const cur0 = await getRun(runId);
       await setRun(runId, { requirement, status: "waiting", evidence: { ...cur0.evidence, req_bluf: bluf.slice(0, 400), req_items: items } });
       await log(runId, { step: "confirm_requirement", note: "requirement drafted, waiting on manager confirmation" });
+      await record("requirement_drafted", { company, module: mod, actor: "agent", run_id: runId, proposal_id: run.proposal_id, after: requirement, detail: { bluf, items, cost_usd: cost } });
       return; // resumes via confirmRequirement()
     }
 
@@ -281,10 +283,12 @@ ${isBatch ? "- Implement every change in the batch. Keep them independent where 
         const fromFiles = run.from_version ? await registry.versionFiles(company, mod, run.from_version) : null;
         const verdict = gate.checkDir(draft.dir, { fromFiles, lane: run.lane });
         const c2 = await getRun(runId);
+        await record("build_finished", { company, module: mod, actor: "agent", run_id: runId, proposal_id: run.proposal_id, version: draft.version, after: text, detail: { model, models_seen: seen, effort: AGENT_EFFORT, cost_usd: costUsd || 0, fix_round: ev0.fix_round || 0, gate_ok: verdict.ok } });
         if (!verdict.ok) {
           await registry.persistVersion(company, mod, draft.version);
           await setRun(runId, { step: "cross_check", evidence: { ...c2.evidence, gate: gate.record(verdict), cross_check: { verdict: "fail", model: "platform checks", summary: gate.summarize(verdict), findings: gate.asFindings(verdict) } } });
           await logEvent("gate_refused", runId, { company, module: mod, version: draft.version, lane: run.lane, rules: verdict.violations.map((f) => f.rule) });
+          await record("check_verdict", { company, module: mod, actor: "platform", run_id: runId, version: draft.version, after: gate.summarize(verdict), detail: { by: "platform checks", verdict: "fail", rules: verdict.violations.map((f) => f.rule) } });
           throw new Error(`platform checks failed: ${gate.oneLine(verdict)}`);
         }
         await setRun(runId, { evidence: { ...c2.evidence, gate: gate.record(verdict) } });
@@ -299,6 +303,7 @@ ${isBatch ? "- Implement every change in the batch. Keep them independent where 
         const c3 = await getRun(runId);
         await setRun(runId, { evidence: { ...c3.evidence, title: plain.title, what_changed: plain.what_changed } });
         await q("UPDATE platform.module_versions SET notes=$4 WHERE company=$1 AND module=$2 AND version=$3", [company, mod, c3.to_version, plain.title]);
+        await record("build_summarized", { company, module: mod, actor: "platform", run_id: runId, version: c3.to_version, after: plain.what_changed, detail: { title: plain.title, cost_usd: plain.costUsd || 0 } });
       } catch (e) { await log(runId, { step: "build", note: `summary skipped: ${e.message}` }); }
       await registry.stageVersion(company, mod, (await getRun(runId)).to_version);
       await log(runId, { step: "stage", note: "staged version mounted for preview" });
@@ -323,6 +328,7 @@ ${isBatch ? "- Implement every change in the batch. Keep them independent where 
         const { data, costUsd } = await runStructuredCrossCheck(run, p, cur, model);
         await addCost(runId, costUsd);
         evidenceUpdate = { cross_check: { ...data, model } };
+        await record("check_verdict", { company, module: mod, actor: "agent", run_id: runId, version: cur.to_version, after: data.summary, detail: { by: model, verdict: data.verdict, model_verdict: data.model_verdict, findings: data.findings, cost_usd: costUsd || 0 } });
         if (data.verdict === "fail") {
           const c2 = await getRun(runId);
           await setRun(runId, { evidence: { ...c2.evidence, cross_check: { ...data, model } } });
@@ -341,7 +347,7 @@ ${isBatch ? "- Implement every change in the batch. Keep them independent where 
       const ok = await smokeCheck(company, mod, true);
       const cur = await getRun(runId);
       await setRun(runId, { evidence: { ...cur.evidence, test_run: ok } });
-      if (!ok.ok) throw new Error(`internal tests failed: ${ok.detail}`);
+      if (!ok.ok) { await record("check_verdict", { company, module: mod, actor: "platform", run_id: runId, version: cur.to_version, after: ok.detail, detail: { by: "platform tests", verdict: "fail", checked: ok.checked } }); throw new Error(`internal tests failed: ${ok.detail}`); }
       await setRun(runId, { step: "await_deploy", status: "waiting" });
       await log(runId, { step: "test_run", note: `smoke checks passed (${ok.checked.length} endpoints)` });
       return;

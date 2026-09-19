@@ -186,6 +186,11 @@ how you exercise the failure branches on demand.
 | S0-80 | New module whose name contains GATECHECK, approve the design | First build stopped by the gate before `validateModule` loads its code; the fix round builds, passes and reaches "Put it on the floor" |
 | S0-81 | A build draft that failed a check and was cancelled: open the Versions panel | It is marked NEVER APPROVED and Switch is disabled; `POST .../goto` to it is refused server-side; the floor version does not move |
 | S0-82 | `node scripts/test-modulegate.js` | 87 unit cases pass, including the page rules and the header rules |
+| S0-83 | File feedback, let the AI propose, edit the proposal and approve, edit the requirement and confirm, build, deploy | `GET /api/c/<slug>/record?feedback_id=<id>` reads as a thread: feedback_filed, proposal_drafted (agent), proposal_edited with the AI's words in `before` and the manager's in `after`, proposal_approved with who and the run; the run's rows carry requirement_drafted, requirement_confirmed (before and after), build_finished, check_verdict, build_summarized, deployed |
+| S0-84 | Decline a proposal with a reason; close a feedback item; send findings back on a gate stop; cancel a run; switch a version; save an agent doc twice with the same text | proposal_declined keeps the reason (there was no event for a decline before); feedback_closed, run_fixed, run_cancelled, version_switched (from and to) are on the record; the unchanged doc save writes nothing |
+| S0-85 | `UPDATE` or `DELETE` a row of `platform.record` directly in the database | Refused by the trigger: the record is insert-only. Deleting the company from /admin removes that company's rows and nothing else |
+| S0-86 | Click "record" on the board (manager) and "Download the record" on /admin | A JSON file `record-<slug>-<date>.json` downloads with that company's rows only; a backup carries the record table |
+| S0-87 | Open the board at 1280 by 800 and on a phone | The band (title, who, module chips) takes about a tenth of a laptop screen and the columns start in the top third; on the phone the chips wrap and nothing overflows sideways |
 
 ### Batch and queue
 

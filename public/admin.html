@@ -95,7 +95,7 @@ async function load() {
   </div>`).join("") || '<div class="sub">No modules in the repo library.</div>';
   document.getElementById("companies").innerHTML = D.companies.map(c => `<div class="card">
     <h2>${esc(c.name)} <small>/c/${c.slug}/ · since ${new Date(c.created_at).toLocaleDateString()}</small></h2>
-    <div class="links"><a href="/c/${c.slug}/">Improvement board</a><a href="/c/${c.slug}/agents">Agent settings and docs</a>${c.modules.map(m => `<a href="/c/${c.slug}/m/${m.name}/">${esc(m.title)} (v${m.live_version})</a>`).join("")}</div>
+    <div class="links"><a href="/c/${c.slug}/">Improvement board</a><a href="/c/${c.slug}/agents">Agent settings and docs</a><a href="/api/c/${c.slug}/record/export" download title="The interaction record: everything said and decided, word for word, insert-only">Download the record</a>${c.modules.map(m => `<a href="/c/${c.slug}/m/${m.name}/">${esc(m.title)} (v${m.live_version})</a>`).join("")}</div>
     <div class="grid">
       <div class="kpi"><b>${c.feedback.open}</b><span>open feedback</span></div>
       <div class="kpi"><b>${c.feedback.total}</b><span>feedback total</span></div>

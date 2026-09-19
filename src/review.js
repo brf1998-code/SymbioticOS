@@ -156,6 +156,7 @@ async function runReview(reviewId) {
     "UPDATE platform.reviews SET status='done', summary=$2, item_count=$3, cost_usd=$4, finished_at=now() WHERE id=$1",
     [reviewId, data.summary || "", findings.length, costUsd]);
   await logEvent("review_done", reviewId, { company, module: mod, model, items: findings.length, costUsd });
+  await require("./record").record("review_findings", { company, module: mod, actor: "agent", after: data.summary || "", detail: { review_id: reviewId, model, items: findings.map((f) => ({ title: f.title, class: f.class, target: f.target_file, priority: f.priority })), cost_usd: costUsd || 0 } });
 }
 
 async function listReviews(company) {

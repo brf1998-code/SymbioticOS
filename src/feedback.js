@@ -16,6 +16,7 @@ const brand = require("./brand");
 const backup = require("./backup");
 const migrate = require("./migrate");
 const intake = require("./intake");
+const { record, actor } = require("./record");
 
 const router = express.Router();
 // the restore route carries a whole backup and parses its own body
@@ -50,6 +51,7 @@ router.post("/api/feedback", async (req, res) => {
     `INSERT INTO platform.feedback (company, module, page, screen, target_file, message, name) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
     [co.slug, mod || "platform", page || null, screen, target, message.trim().slice(0, 2000), (name || "").slice(0, 80) || null]);
   await logEvent("feedback_submitted", r.rows[0].id, { company: co.slug, module: mod, screen });
+  await record("feedback_filed", { company: co.slug, module: mod || "platform", actor: actor(req, name), feedback_id: r.rows[0].id, after: message.trim(), detail: { screen, page } });
   res.json(r.rows[0]);
 });
 
@@ -71,6 +73,7 @@ router.post("/api/feedback/:id/close", requireManager, async (req, res) => {
   const { outcome, declined } = req.body || {};
   const r = await q("UPDATE platform.feedback SET status=$2, outcome=$3, updated_at=now() WHERE id=$1 RETURNING *",
     [req.params.id, declined ? "declined" : "done", outcome || null]);
+  if (r.rows[0]) await record("feedback_closed", { company: r.rows[0].company, module: r.rows[0].module, actor: actor(req), feedback_id: r.rows[0].id, after: outcome || null, detail: { declined: Boolean(declined) } });
   res.json(r.rows[0]);
 });
 
@@ -103,7 +106,11 @@ router.post("/api/c/:slug/modules/:name/goto", requireManager, async (req, res) 
   const busy = (await q(
     "SELECT id FROM platform.build_runs WHERE company=$1 AND module=$2 AND status='running'", [req.params.slug, req.params.name])).rows[0];
   if (busy) return res.status(409).json({ error: "a build is running on this module; wait for it to reach the gate or cancel it first" });
-  try { res.json(await registry.goToVersion(req.params.slug, req.params.name, Number(version), { restoreData: !!restore_data })); }
+  try {
+    const out = await registry.goToVersion(req.params.slug, req.params.name, Number(version), { restoreData: !!restore_data });
+    await record("version_switched", { company: req.params.slug, module: req.params.name, actor: actor(req), version: out.to, detail: { from: out.from, to: out.to, restored: out.restored } });
+    res.json(out);
+  }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 
@@ -172,6 +179,7 @@ router.post("/api/c/:slug/batch/:id/build", requireManager, async (req, res) => 
   try {
     await q("UPDATE platform.proposals SET status='approved' WHERE id = ANY($1::int[]) AND status='draft'", [ids]);
     const run = await pipeline.startRun(ids, { model: (req.body || {}).model });
+    for (const it of items) await record("proposal_approved", { company: req.params.slug, module: b.module, actor: actor(req), feedback_id: it.id, proposal_id: it.proposal_id, run_id: run.id, detail: { batch: b.id, model: (req.body || {}).model || null } });
     await q("UPDATE platform.batches SET run_id=$2 WHERE id=$1", [b.id, run.id]);
     await q("UPDATE platform.feedback SET batch_id=NULL, updated_at=now() WHERE batch_id=$1 AND status <> 'in_progress'", [b.id]);
     res.json({ ok: true, run, built: ids.length });
@@ -278,18 +286,26 @@ router.post("/api/feedback/:id/review", requireManager, async (req, res) => {
 router.post("/api/proposals/:id/decide", requireManager, async (req, res) => {
   const { decision, note, editedBody, editedClass, editedTarget, model } = req.body || {};
   try {
+    // the proposal as it stands, before anything the manager typed lands on it
+    const was = (await q("SELECT p.*, f.company, f.module FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id WHERE p.id=$1", [req.params.id])).rows[0];
+    if (!was) return res.status(404).json({ error: "not found" });
+    const ids = { company: was.company, module: was.module, feedback_id: was.feedback_id, proposal_id: was.id };
     if (editedBody || editedClass || editedTarget) {
       await q("UPDATE platform.proposals SET body=COALESCE($2,body), class=COALESCE($3,class), target_file=COALESCE($4,target_file) WHERE id=$1",
         [req.params.id, editedBody || null, editedClass || null, editedTarget || null]);
+      const changed = (editedBody && editedBody !== was.body) || (editedClass && editedClass !== was.class) || (editedTarget && editedTarget !== was.target_file);
+      if (changed) await record("proposal_edited", { ...ids, actor: actor(req), before: was.body, after: editedBody || was.body, detail: { class_before: was.class, class_after: editedClass || was.class, target_before: was.target_file, target_after: editedTarget || was.target_file, model_before: was.model } });
     }
     if (decision === "approve") {
       await q("UPDATE platform.proposals SET status='approved', manager_note=$2 WHERE id=$1", [req.params.id, note || null]);
       const run = await pipeline.startRun(Number(req.params.id), { model });
+      await record("proposal_approved", { ...ids, actor: actor(req), run_id: run.id, after: note || null, detail: { model: model || null, edited: Boolean(editedBody || editedClass || editedTarget) } });
       return res.json({ ok: true, run });
     }
     if (decision === "decline") {
       const p = (await q("UPDATE platform.proposals SET status='declined', manager_note=$2 WHERE id=$1 RETURNING *", [req.params.id, note || null])).rows[0];
       await q("UPDATE platform.feedback SET status='declined', outcome=$2, updated_at=now() WHERE id=$1", [p.feedback_id, note || "declined"]);
+      await record("proposal_declined", { ...ids, actor: actor(req), after: note || null });
       return res.json({ ok: true });
     }
     if (decision === "save") return res.json({ ok: true });
@@ -307,36 +323,45 @@ router.post("/api/runs/batch", requireManager, async (req, res) => {
     if (owners.some((c) => !auth.ownsCompany(req, c))) return res.status(403).json({ error: "this login is for another company" });
     await q("UPDATE platform.proposals SET status='approved' WHERE id = ANY($1::int[]) AND status='draft'", [ids]);
     const run = await pipeline.startRun(ids, { model: (req.body || {}).model });
+    for (const p of (await q("SELECT p.id, p.feedback_id, f.company, f.module FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id WHERE p.id = ANY($1::int[])", [ids])).rows)
+      await record("proposal_approved", { company: p.company, module: p.module, actor: actor(req), feedback_id: p.feedback_id, proposal_id: p.id, run_id: run.id, detail: { batch: true, model: (req.body || {}).model || null } });
     res.json({ ok: true, run });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// A manager's decision on a run, with who made it, on the record.
+async function runIds(id) { const r = await pipeline.getRun(Number(id)); return r ? { run: r, ids: { company: r.company, module: r.module, run_id: r.id, feedback_id: null, proposal_id: r.proposal_id, version: r.to_version || null } } : null; }
 router.post("/api/runs/:id/cancel", requireManager, async (req, res) => {
-  try { await pipeline.cancel(Number(req.params.id)); res.json({ ok: true }); }
+  try { const x = await runIds(req.params.id); await pipeline.cancel(Number(req.params.id)); if (x) await record("run_cancelled", { ...x.ids, actor: actor(req), detail: { step: x.run.step, status_before: x.run.status } }); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 router.post("/api/runs/:id/confirm", requireManager, async (req, res) => {
-  try { await pipeline.confirmRequirement(Number(req.params.id), (req.body || {}).requirement); res.json({ ok: true }); }
+  try {
+    const x = await runIds(req.params.id); const edited = (req.body || {}).requirement;
+    await pipeline.confirmRequirement(Number(req.params.id), edited);
+    if (x) await record("requirement_confirmed", { ...x.ids, actor: actor(req), before: x.run.requirement, after: edited || x.run.requirement, detail: { edited: Boolean(edited && edited !== x.run.requirement) } });
+    res.json({ ok: true });
+  }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 router.post("/api/runs/:id/deploy", requireManager, async (req, res) => {
-  try { res.json(await pipeline.deploy(Number(req.params.id))); }
+  try { const x = await runIds(req.params.id); const out = await pipeline.deploy(Number(req.params.id)); if (x) await record("deployed", { ...x.ids, actor: actor(req), version: out.to, detail: { from: out.from, to: out.to, lane: x.run.lane } }); res.json(out); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 router.post("/api/runs/:id/fix", requireManager, async (req, res) => {
-  try { await pipeline.fix(Number(req.params.id)); res.json({ ok: true }); }
+  try { const x = await runIds(req.params.id); await pipeline.fix(Number(req.params.id)); if (x) await record("run_fixed", { ...x.ids, actor: actor(req), before: ((x.run.evidence || {}).cross_check || {}).summary || null, detail: { round: ((x.run.evidence || {}).fix_round || 0) + 1 } }); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 router.post("/api/runs/:id/override", requireManager, async (req, res) => {
-  try { await pipeline.override(Number(req.params.id)); res.json({ ok: true }); }
+  try { const x = await runIds(req.params.id); await pipeline.override(Number(req.params.id)); if (x) await record("run_overridden", { ...x.ids, actor: actor(req), before: ((x.run.evidence || {}).cross_check || {}).summary || null }); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 router.post("/api/runs/:id/rollback", requireManager, async (req, res) => {
-  try { res.json(await pipeline.rollbackRun(Number(req.params.id))); }
+  try { const x = await runIds(req.params.id); const out = await pipeline.rollbackRun(Number(req.params.id)); if (x) await record("rolled_back", { ...x.ids, actor: actor(req), version: out.to, detail: { to: out.to } }); res.json(out); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 router.post("/api/runs/:id/retry", requireManager, async (req, res) => {
-  try { await pipeline.retry(Number(req.params.id)); res.json({ ok: true }); }
+  try { const x = await runIds(req.params.id); await pipeline.retry(Number(req.params.id)); if (x) await record("run_retried", { ...x.ids, actor: actor(req), detail: { step: x.run.step } }); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 router.get("/api/runs/:id", async (req, res) => {
@@ -349,6 +374,7 @@ router.get("/api/c/:slug/reviews/estimate", requireManager, async (req, res) => 
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 router.post("/api/c/:slug/reviews", requireManager, async (req, res) => {
+  await record("review_started", { company: req.params.slug, module: (req.body || {}).module || null, actor: actor(req), detail: { model: (req.body || {}).model || null } });
   const { module: mod, model, requested_by } = req.body || {};
   try { res.json(await review.startReview(req.params.slug, mod, model || "claude-fable-5-1", requested_by)); }
   catch (e) { res.status(500).json({ error: e.message }); }
@@ -400,23 +426,39 @@ router.post("/api/c/:slug/agents/models", requireManager, async (req, res) => {
   const ok = (id) => (id === "" || id == null) ? null : (agent.MODELS.some((m) => m.id === id) ? id : undefined);
   const vals = { propose: ok(b.propose), build: ok(b.build), review: ok(b.review) };
   if (Object.values(vals).includes(undefined)) return res.status(400).json({ error: "unknown model id" });
+  const wasModels = (await q("SELECT model_propose, model_build, model_review FROM platform.companies WHERE slug=$1", [req.params.slug])).rows[0] || {};
   await q("UPDATE platform.companies SET model_propose=$2, model_build=$3, model_review=$4 WHERE slug=$1",
     [req.params.slug, vals.propose, vals.build, vals.review]);
   await logEvent("models_changed", req.params.slug, vals);
+  await record("models_changed", { company: req.params.slug, actor: actor(req), before: JSON.stringify(wasModels), after: JSON.stringify(vals) });
   res.json({ ok: true });
 });
 
 router.post("/api/c/:slug/agents/docs", requireManager, async (req, res) => {
   const { module: mod, name, content } = req.body || {};
   if (!name || !/^[A-Za-z0-9_.-]{1,60}$/.test(name)) return res.status(400).json({ error: "name must be a simple filename like NOTES.md" });
+  const wasDoc = (await q("SELECT content FROM platform.agent_docs WHERE company=$1 AND module IS NOT DISTINCT FROM $2 AND name=$3 ORDER BY id DESC LIMIT 1", [req.params.slug, mod || null, name])).rows[0];
   const row = await upsertDoc(req.params.slug, mod || null, name, String(content || ""), "user", false);
   await logEvent("agent_doc_saved", req.params.slug, { module: mod || null, name });
+  if (!wasDoc || wasDoc.content !== String(content || "")) await record("doc_saved", { company: req.params.slug, module: mod || null, actor: actor(req), before: wasDoc ? wasDoc.content : null, after: String(content || ""), detail: { name } });
   res.json(row);
 });
 
 router.delete("/api/c/:slug/agents/docs/:id", requireManager, async (req, res) => {
-  await q("DELETE FROM platform.agent_docs WHERE company=$1 AND id=$2", [req.params.slug, req.params.id]);
+  const gone = (await q("DELETE FROM platform.agent_docs WHERE company=$1 AND id=$2 RETURNING module, name, content", [req.params.slug, req.params.id])).rows[0];
+  if (gone) await record("doc_deleted", { company: req.params.slug, module: gone.module, actor: actor(req), before: gone.content, detail: { name: gone.name } });
   res.json({ ok: true });
+});
+
+// ---- the interaction record: the plant's own, readable and exportable by its manager
+router.get("/api/c/:slug/record", requireManager, async (req, res) => {
+  const { kind, feedback_id, run_id, limit, before_id } = req.query;
+  res.set("Cache-Control", "no-store").json({ company: req.params.slug, rows: await require("./record").list(req.params.slug, { kind, feedback_id, run_id, limit, before_id }) });
+});
+router.get("/api/c/:slug/record/export", requireManager, async (req, res) => {
+  const rows = await require("./record").list(req.params.slug, { limit: 5000, before_id: req.query.before_id });
+  res.set("Content-Disposition", `attachment; filename="record-${req.params.slug}-${new Date().toISOString().slice(0, 10)}.json"`);
+  res.json({ format: "sos-record-1", company: req.params.slug, taken_at: new Date().toISOString(), count: rows.length, rows });
 });
 
 // ---- admin: companies across the instance ------------------------------------
@@ -577,6 +619,7 @@ router.post("/api/admin/companies/:slug/delete", requireAdmin, async (req, res) 
     for (const t of ["batches", "agent_docs", "reviews", "diagrams", "module_versions", "modules", "schema_snapshots", "attachments", "module_intakes", "company_access"]) {
       counts[t] = (await q(`DELETE FROM platform.${t} WHERE company=$1`, [co.slug])).rowCount;
     }
+    counts.record = await require("./record").deleteCompany(co.slug);
     await q("DELETE FROM platform.companies WHERE slug=$1", [co.slug]);
     await logEvent("company_deleted", co.slug, { name: co.name, modules: mods, counts });
     res.json({ ok: true, counts });

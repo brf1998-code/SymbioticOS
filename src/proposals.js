@@ -3,6 +3,7 @@
 const { q, logEvent } = require("./db");
 const { runStructured, haveKey, assertUnderCap, modelFor, guidanceFor } = require("./agent");
 const registry = require("./registry");
+const { record } = require("./record");
 
 function proposalSchema(files) {
   return {
@@ -69,6 +70,7 @@ async function generateProposal(feedbackId) {
     [feedbackId, data.proposal, data.class, data.target_file || fb.target_file || null, data.rationale, model, costUsd || 0]);
   await q("UPDATE platform.feedback SET status='reviewing', updated_at=now() WHERE id=$1", [feedbackId]);
   await logEvent("proposal_generated", feedbackId, { class: data.class, target: data.target_file, model, costUsd });
+  await record("proposal_drafted", { company: fb.company, module: fb.module, actor: "agent", feedback_id: feedbackId, proposal_id: r.rows[0].id, after: data.proposal, detail: { class: data.class, target: data.target_file || fb.target_file || null, rationale: data.rationale, model, cost_usd: costUsd || 0 } });
   return r.rows[0];
 }
 

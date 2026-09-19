@@ -13,6 +13,7 @@ const { q } = require("./db");
 const registry = require("./registry");
 const agent = require("./agent");
 const { requireManager } = require("./auth");
+const { record, actor } = require("./record");
 
 // Why a run stopped, in one word the campaign can count on.
 function reasonFor(run) {
@@ -145,6 +146,8 @@ router.post("/api/runs/:id/label", requireManager, json, async (req, res) => {
     else await q(`INSERT INTO platform.check_labels (run_id, label, note, labeled_by) VALUES ($1,$2,$3,$4)
                   ON CONFLICT (run_id) DO UPDATE SET label=EXCLUDED.label, note=EXCLUDED.note, labeled_by=EXCLUDED.labeled_by, updated_at=now()`,
       [Number(req.params.id), label, String(note || "").slice(0, 1000) || null, req.sosRole]);
+    const run = (await q("SELECT company, module, to_version FROM platform.build_runs WHERE id=$1", [Number(req.params.id)])).rows[0];
+    if (run) await record("label_set", { company: run.company, module: run.module, actor: actor(req), run_id: Number(req.params.id), version: run.to_version, after: label || null, detail: { note: String(note || "").slice(0, 1000) || null } });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

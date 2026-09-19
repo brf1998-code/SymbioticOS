@@ -1,4 +1,4 @@
-# Symbiotic OS — Workspace Guide (current as of 2026-09-19)
+# Symbiotic OS — Workspace Guide (current as of 2026-09-19, evening)
 
 **This file is the single source of truth for how this repo and the live
 instance are worked on.** Repo: `brf1998-code/SymbioticOS` (private). Live:
@@ -356,6 +356,45 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   (attachment bytes), and includes `company_access`; an older backup with no
   `company_access` brings its companies back on the shared passwords rather
   than locking anyone out. Round-tripped in the test run.
+- **The interaction record** (2026-09-19, `src/record.js`, `platform.record`,
+  build order item 3). What everyone said and decided, word for word, tied to
+  the build it led to and how it turned out. One insert-only table (a trigger,
+  `platform.record_guard`, refuses UPDATE and DELETE; the one sanctioned delete
+  is a company's own, through `record.deleteCompany`, which sets a
+  transaction-local flag the trigger honours). Each row: company, module,
+  kind, actor_role (floor / manager / admin / agent / platform / person),
+  actor_name (the name typed with feedback; a person once operators have an
+  identity), the ids it ties to (feedback, proposal, run, intake, version),
+  `before`, `after`, detail JSONB. Kinds: feedback_filed, feedback_closed,
+  proposal_drafted (the AI's text), proposal_edited (the AI's text BEFORE,
+  the manager's AFTER: until this the edit overwrote the AI's words in place),
+  proposal_approved, proposal_declined (until this a decline logged nothing),
+  requirement_drafted, requirement_confirmed (before/after, edited flag),
+  build_finished, build_summarized, check_verdict (the gate, the tests, or the
+  reviewer, with findings), run_fixed, run_overridden, run_retried,
+  run_cancelled, deployed, rolled_back, version_switched, review_started,
+  review_findings, intake_answered (each answer, before/after), intake_round,
+  intake_design, intake_adjusted (before/after plus what was asked),
+  intake_confirmed, intake_abandoned, doc_saved (before/after), doc_deleted,
+  models_changed, label_set, chat_question, chat_answer. `record()` never
+  throws: a failed write logs `[record]` and the loop goes on. Read back:
+  `GET /api/c/<slug>/record?kind=&feedback_id=&run_id=&limit=&before_id=`
+  (manager) and `GET /api/c/<slug>/record/export` (a JSON download, linked
+  as "record" in the board header and "Download the record" on the admin
+  card). In `backup.js PLATFORM_TABLES`, so a backup carries it and a restore
+  brings it back. Data terms decided 2026-09-18: the plant owns its record,
+  Anetix uses it to improve that plant, anonymized cross-plant use is an
+  opt-in clause; the cross-plant copy does not exist yet, and defense tenants
+  stay out of it. Not recorded yet: which person acted (no operator identity
+  until item 2b), and a proposal's rationale edits. What it feeds next:
+  per-plant memory (lessons from adjusted and declined proposals), prompt and
+  brief regression, a failure taxonomy, intake tuning, the pattern library.
+- **Board band** (2026-09-19): one title row and one quiet module line
+  (`.band`, `.modstrip`, `.modcard`), 70px on a desktop against roughly a
+  third of the screen before. Module names are the filter toggles, versions
+  and links are small text, the printable QR moved from a permanent tile to a
+  "wall sign" link that opens the same card, the filter hint sits at the end
+  of the module line only while a filter is in force. Chips wrap on phones.
 - **Board tiles fold** (2026-09-17): each of the four columns shows
   `TILES_PER_COLUMN` (3) tiles and a "Show the other N" button; `EXPANDED`
   keeps opened columns across the 4s reload. The header count is the total.

@@ -13,12 +13,14 @@ const diagrams = require("./src/diagrams");
 const pipeline = require("./src/pipeline");
 const intake = require("./src/intake");
 const checks = require("./src/checks");
+const record = require("./src/record");
 
 const PORT = process.env.PORT || 3000;
 const page = (name) => path.join(__dirname, "public", name);
 
 async function main() {
   await initPlatformSchema();
+  await record.init();   // the interaction record: insert-only, what everyone said and decided
 
   const app = express();
   app.disable("x-powered-by");

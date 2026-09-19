@@ -4,3 +4,4 @@ data/
 pat.md
 *.tgz
 .DS_Store
+_to_delete/

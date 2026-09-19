@@ -109,6 +109,8 @@ async function create(company, role) {
   return it;
 }
 
+const { record } = require("./record");
+
 async function answer(id, qid, value) {
   const it = await getIntake(id);
   if (!it) throw new Error("intake not found");
@@ -130,6 +132,9 @@ async function answer(id, qid, value) {
   }
   fields.answers = answers;
   if (it.status === "failed") { fields.status = "answering"; fields.error = null; }
+  const before = (it.answers || {})[qid];
+  if (JSON.stringify(before) !== JSON.stringify(qid === "name" ? answers.name : value))
+    await record("intake_answered", { company: it.company, module: it.slug || null, actor: "manager", intake_id: id, feedback_id: it.feedback_id, before: before == null ? null : (typeof before === "string" ? before : JSON.stringify(before)), after: typeof value === "string" ? value : JSON.stringify(value), detail: { question: qid, text: qn.text } });
   return setIntake(id, fields);
 }
 
@@ -165,6 +170,7 @@ async function think(id) {
       await setIntake(id, { rounds, status: "answering", cost_usd: Number(it.cost_usd || 0) + round.cost_usd });
       await setFeedback(it, { status: "new" });
       await logEvent("intake_round", id, { round: round.round, questions: round.questions.length, model: round.model, costUsd: round.cost_usd });
+      await record("intake_round", { company: it.company, module: it.slug || null, actor: "agent", intake_id: id, feedback_id: it.feedback_id, after: JSON.stringify(round.questions), detail: { round: round.round, why: round.why || null, model: round.model, cost_usd: round.cost_usd } });
       return;
     }
     it = await setIntake(id, { rounds, cost_usd: Number(it.cost_usd || 0) + round.cost_usd });
@@ -174,6 +180,7 @@ async function think(id) {
   await setIntake(id, { design, status: "design", cost_usd: Number(it.cost_usd || 0) + design.cost_usd });
   await setFeedback(it, { status: "reviewing" });
   await logEvent("intake_design", id, { model: design.model, costUsd: design.cost_usd, estimate: design.estimate_usd, screens: (design.screens || []).length });
+  await record("intake_design", { company: it.company, module: it.slug || null, actor: "agent", intake_id: id, feedback_id: it.feedback_id, after: design.reference_md, detail: { bluf: design.bluf, items: design.items, estimate_usd: design.estimate_usd, model: design.model, cost_usd: design.cost_usd } });
 }
 
 // The manager edited the summary text: Fable re-issues the design against it.
@@ -188,6 +195,7 @@ async function adjust(id, text) {
       design.adjustments = [...(prev.adjustments || []), { at: new Date().toISOString(), text: String(text || "").slice(0, 20000) }];
       const cur = await getIntake(id);
       await setIntake(id, { design, status: "design", cost_usd: Number(cur.cost_usd || 0) + design.cost_usd });
+      await record("intake_adjusted", { company: it.company, module: it.slug || null, actor: "manager", intake_id: id, feedback_id: it.feedback_id, before: prev.reference_md || null, after: design.reference_md, detail: { asked: String(text || "").slice(0, 20000), model: design.model, cost_usd: design.cost_usd } });
     } catch (e) {
       console.error(`intake ${id} adjust failed:`, e);
       await setIntake(id, { status: "design", error: String(e.message || e).slice(0, 500) });
@@ -203,6 +211,7 @@ async function confirm(id) {
   let out = await setIntake(id, { status: "confirmed" });
   await setFeedback(it, { status: "reviewing" });
   await logEvent("intake_confirmed", id, { company: it.company, slug: it.slug, estimate: it.design.estimate_usd });
+  await record("intake_confirmed", { company: it.company, module: it.slug || null, actor: "manager", intake_id: id, feedback_id: it.feedback_id, after: it.design.reference_md, detail: { estimate_usd: it.design.estimate_usd, adjustments: (it.design.adjustments || []).length } });
   // confirmed means building: the first version goes straight to the agent,
   // then the same gates as any change (Brendan, 2026-09-17)
   try {
@@ -233,6 +242,7 @@ async function abandon(id) {
   const out = await setIntake(id, { status: "abandoned" });
   await setFeedback(it, { status: "declined", outcome: "Module request withdrawn." });
   await logEvent("intake_abandoned", id, {});
+  await record("intake_abandoned", { company: it.company, module: it.slug || null, actor: "manager", intake_id: id, feedback_id: it.feedback_id, detail: { status_before: it.status } });
   return out;
 }
 

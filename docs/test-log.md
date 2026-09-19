@@ -28,6 +28,11 @@ S3-07 | 2026-09-19 | PASS | sandbox two-company matrix, 60 checks: every cross-c
 S3-08 | 2026-09-19 | PASS | sandbox: setting a company's passwords signed its people out, left the other company signed in | pilot | n/a
 S3-09 | 2026-09-19 | PASS | sandbox: acme at $5 of a $2 budget refused with a plain reason; demo unaffected; board showed acme's own budget | pilot | n/a
 S3-10 | 2026-09-19 | PASS | sandbox: backup round trip identical incl. logins, intakes, attachment bytes, check labels; old-format backup fell back to shared passwords | pilot | n/a
+S0-83 | 2026-09-19 | PASS | sandbox, fake agent: one feedback item read as a thread on the record (filed, drafted, edited with both texts, approved with run); run rows carried requirement before/after, build, verdict, summary, deploy | pilot | n/a
+S0-84 | 2026-09-19 | PASS | sandbox: decline reason, close, run_fixed with findings, cancel, version switch, doc before/after all on the record; unchanged doc save wrote nothing; chat question and answer, intake answers with their questions, Fable rounds, design, adjustment, confirm all present (34 of 34 checks) | pilot | n/a
+S0-85 | 2026-09-19 | PASS | sandbox: UPDATE and DELETE on platform.record refused by the trigger; deleting acme removed acme's rows only | pilot | n/a
+S0-86 | 2026-09-19 | PASS | sandbox: export downloaded as an attachment with the company's rows; backup carried the record table | pilot | n/a
+S0-87 | 2026-09-19 | PASS | headless browser at 1280x800: band 70px (9% of the screen), columns start at 205px; at 390x844 the band is 225px, chips wrap, no sideways scroll, no console errors | pilot | n/a
 
 ## Stage 1
 
