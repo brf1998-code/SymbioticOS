@@ -596,17 +596,32 @@ async function erpFetch(company, mod, name, qname, params) {
   const resolved = resolveFields(decl.fields, def, known.length ? known : columns);
   return { rows: mapRows(raw, decl.fields, resolved.map), raw_count: raw.length, url: url.replace(/\?.*/, ""), columns, how: resolved.how };
 }
-const paramsHash = (params) => crypto.createHash("md5").update(JSON.stringify(params || {}, Object.keys(params || {}).sort())).digest("hex");
+// The cache key: the params AND the fields the module declares, so a version
+// that reads one more field never gets rows cached without it.
+const paramsHash = (params, fields) => crypto.createHash("md5").update(JSON.stringify(params || {}, Object.keys(params || {}).sort()) + "|" + [...(fields || [])].sort().join(",")).digest("hex");
+const refreshing = new Set();
 // What a module calls: fresh rows from the cache, else the ERP, else stale
 // rows with fresh=false; and a plain error when nothing is there.
-async function erpQuery(company, mod, name, qname, params) {
+async function erpQuery(company, mod, name, qname, params, opts = {}) {
   const c = await row(company, mod, name);
   const s = erpSettings(c);
   const def = s.queries[qname] || {};
   const fresh_s = def.freshness_s || s.freshness_s;
-  const h = paramsHash(params);
+  const live = await liveDeclaration(company, mod, name);
+  const h = paramsHash(params, live && live.queries && live.queries[qname] ? live.queries[qname].fields : []);
   const cached = (await q("SELECT rows, fetched_at FROM platform.erp_cache WHERE company=$1 AND module=$2 AND connection=$3 AND query=$4 AND params_hash=$5", [company, mod, name, qname, h])).rows[0];
-  if (cached && Date.now() - new Date(cached.fetched_at).getTime() < fresh_s * 1000) return { rows: cached.rows, fetched_at: cached.fetched_at, fresh: true, from_cache: true };
+  const age = cached ? Date.now() - new Date(cached.fetched_at).getTime() : Infinity;
+  if (cached && age < fresh_s * 1000) return { rows: cached.rows, fetched_at: cached.fetched_at, fresh: true, from_cache: true };
+  // A little stale (under an hour): the floor does not wait on the ERP. Hand
+  // back what we have, marked not fresh, and refresh behind it.
+  if (cached && age < 3600e3 && !opts.refresh) {
+    const key = `${company}|${mod}|${name}|${qname}|${h}`;
+    if (!refreshing.has(key)) {
+      refreshing.add(key);
+      setImmediate(() => erpQuery(company, mod, name, qname, params, { refresh: true }).catch(() => {}).finally(() => refreshing.delete(key)));
+    }
+    return { rows: cached.rows, fetched_at: cached.fetched_at, fresh: false, from_cache: true, refreshing: true };
+  }
   try {
     const out = await erpFetch(company, mod, name, qname, params);
     await q(`INSERT INTO platform.erp_cache (company, module, connection, query, params_hash, rows, fetched_at) VALUES ($1,$2,$3,$4,$5,$6,now())
@@ -648,6 +663,9 @@ async function setErp(company, mod, name, { settings, secrets, clear_secrets, pu
   await q("DELETE FROM platform.erp_cache WHERE company=$1 AND module=$2 AND connection=$3", [company, mod, name]);
   await record("connection_settings", { company, module: mod, actor: actor || "admin", before: JSON.stringify(before), after: JSON.stringify(next), detail: { connection: name, kind: "erp", login: clear_secrets ? "cleared" : secrets && (secrets.user || secrets.api_key) ? "set" : "kept" } });
   await writeFieldsDoc(company, mod).catch((e) => console.error("[connections] fields doc:", e.message));
+  // the field list changed: feedback that was waiting on ERP data is proposed again, behind this answer
+  const names = (st) => Object.entries(st.queries).map(([qn, qv]) => `${qn}:${Object.keys(qv.catalog || {}).sort().join(",")}`).join("|");
+  if (names(before) !== names(next)) setImmediate(() => require("./datacheck").catalogChanged(company, mod).catch((e) => console.error("[datacheck] catalog change:", e.message)));
   return { settings: next, has_login: Boolean(enc) };
 }
 // The one-button test: every declared query with its test params.
@@ -665,7 +683,7 @@ async function testErp(company, mod, name, actor) {
     try {
       const out = await erpFetch(company, mod, name, qname, def.test_params || {});
       const empty = decl.fields.filter((f) => out.rows.length && out.rows.every((r) => r[f] == null));
-      results.push({ query: qname, ok: true, rows: out.rows.length, raw_count: out.raw_count, sample: out.rows[0] || null, empty_fields: empty, url: out.url, columns: out.columns, how: out.how });
+      results.push({ query: qname, ok: true, rows: out.rows.length, raw_count: out.raw_count, capped: out.raw_count >= ERP_MAX_ROWS, sample: out.rows[0] || null, empty_fields: empty, url: out.url, columns: out.columns, how: out.how });
     } catch (e) { results.push({ query: qname, ok: false, error: e.message }); }
   }
   const ok = results.every((r) => r.ok);
@@ -931,7 +949,10 @@ const KIND_TEXT = {
   printer: { what: "Labels printed on a Zebra printer from the PC or tablet that asks for them. The module keeps the label layouts; the platform sends each label to the printer chosen on that device.", person: "On each PC or tablet that prints: install Zebra Browser Print (free, from zebra.com), open this page or a module screen, choose the printer when asked, print a test label." },
   erp: { what: "Read-only lookups in the company's ERP or scheduling system, a short fixed list the module names. The platform runs each lookup, keeps the answer for a few minutes, and shows the last good answer if the system is down. Nothing is ever written back.", person: "Send the note below to IT and get a read-only login. Anetix enters the login and the lookups on the platform; you press Test." },
 };
-async function companyView(company) {
+// admin: the whole ERP card. Anyone else: the ERP stays on the admin side
+// (Brendan, 2026-09-19): a manager sees that the connection exists and
+// whether it works, never lookups, fields, addresses, samples or notes to IT.
+async function companyView(company, { admin = false } = {}) {
   const registry = require("./registry");
   const mods = (await q("SELECT name, title, live_version FROM platform.modules WHERE company=$1 ORDER BY name", [company])).rows;
   const out = [];
@@ -952,6 +973,10 @@ async function companyView(company) {
         item.uploads = (await q("SELECT id, filename, row_count, status, loaded_rows, actor, created_at, loaded_at FROM platform.connection_uploads WHERE company=$1 AND module=$2 AND connection=$3 AND status='loaded' ORDER BY id DESC LIMIT 5", [company, m.name, name])).rows;
       }
       if (d.kind === "printer") { item.templates = d.templates; item.settings = printerSettings(c); item.jobs = await jobs(company, m.name, name, 10); }
+      if (d.kind === "erp" && !admin) {
+        list.push({ name, kind: "erp", label: d.label, status: item.status, managed: true, text: { what: "What your ERP says, shown where the floor needs it. Read only: nothing is ever written back.", person: "Nothing. Anetix sets this up and keeps it working with your IT." } });
+        continue;
+      }
       if (d.kind === "erp") {
         const s = erpSettings(c);
         item.queries = Object.entries(d.queries).map(([qn, qd]) => ({ name: qn, ...qd, defined: Boolean(s.queries[qn] && s.queries[qn].path), definition: s.queries[qn] || null }));

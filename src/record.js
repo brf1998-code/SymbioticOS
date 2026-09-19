@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS platform.record (
   detail      JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE platform.record ADD COLUMN IF NOT EXISTS actor_person INTEGER;
 CREATE INDEX IF NOT EXISTS record_company_time ON platform.record (company, created_at);
 CREATE INDEX IF NOT EXISTS record_feedback ON platform.record (feedback_id) WHERE feedback_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS record_run ON platform.record (run_id) WHERE run_id IS NOT NULL;
@@ -72,11 +73,11 @@ async function record(kind, fields = {}) {
   try {
     const actor = typeof fields.actor === "string" ? { role: fields.actor } : fields.actor || {};
     await q(
-      `INSERT INTO platform.record (company, module, kind, actor_role, actor_name, feedback_id, proposal_id, run_id, intake_id, version, before, after, detail)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      `INSERT INTO platform.record (company, module, kind, actor_role, actor_name, feedback_id, proposal_id, run_id, intake_id, version, before, after, detail, actor_person)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [fields.company, fields.module || null, kind, actor.role || null, clip(actor.name, 120),
        fields.feedback_id || null, fields.proposal_id || null, fields.run_id || null, fields.intake_id || null, fields.version || null,
-       clip(fields.before), clip(fields.after), JSON.stringify(fields.detail || {})]);
+       clip(fields.before), clip(fields.after), JSON.stringify(fields.detail || {}), actor.person || null]);
   } catch (e) {
     console.error(`[record] could not write ${kind} for ${fields.company}:`, e.message);
   }
@@ -85,8 +86,10 @@ async function record(kind, fields = {}) {
 // Who is acting, from a request: the role in the session, and a name when the
 // request carries one (the name typed with feedback; a person, once operators
 // have an identity).
+// A person signed in on the device (src/people.js: name and PIN) wins over a
+// name typed into a box.
 function actor(req, name) {
-  return { role: (req && req.sosRole) || null, name: name || (req && req.sosPerson) || null };
+  return { role: (req && req.sosRole) || null, name: (req && req.sosPerson) || name || null, person: (req && req.sosPersonId) || null };
 }
 
 // Read back: a company's record, newest first, optionally one kind or one

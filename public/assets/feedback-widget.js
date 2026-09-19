@@ -1,4 +1,4 @@
-// Feedback widget — injected into every module page by the runtime, and used by
+// Feedback widget: injected into every module page by the runtime, and used by
 // the platform's own pages with data-module="platform".
 // Posts to /api/feedback with the company, module name and page path (the page
 // path is how the platform knows which screen the feedback is about).
@@ -26,6 +26,7 @@
   panel.innerHTML =
     '<div style="font-weight:700;font-size:14px;color:#1c242e;margin-bottom:8px">Something in the way?</div>' +
     '<textarea id="fbw-msg" rows="3" placeholder="What is slowing you down?" style="width:100%;border:1px solid #d5dbe3;border-radius:6px;padding:8px;font-size:14px;font-family:inherit;box-sizing:border-box"></textarea>' +
+    '<div id="fbw-who" style="display:none;font-size:13px;color:#51606f;margin-top:8px"></div>' +
     '<input id="fbw-name" placeholder="Your name (optional)" style="width:100%;border:1px solid #d5dbe3;border-radius:6px;padding:8px;font-size:14px;margin-top:8px;font-family:inherit;box-sizing:border-box">' +
     '<button id="fbw-send" style="margin:10px 0 0!important;width:100%!important;min-height:0!important;background:#2e7d4f!important;color:#fff!important;border:none!important;border-radius:6px!important;padding:11px!important;font-size:14px!important;font-weight:700!important;cursor:pointer">Send</button>' +
     '<div id="fbw-done" style="display:none;color:#2e7d4f;font-size:13px;margin-top:8px">Sent. It goes straight on the improvement board.</div>';
@@ -227,6 +228,78 @@
   }
   function esc(t) { return String(t == null ? "" : t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
+  // ---- who is standing here: a name and a PIN (src/people.js) ----------------------------
+  // The device stays signed in with the company's password; the person is
+  // picked from the company's names and proven with a short PIN. A shared
+  // tablet changes hands from the chip in this panel. window.sosPerson lets
+  // the platform's own pages (the board) show and switch the same person.
+  const who = { people: [], me: null, listeners: [] };
+  const peopleApi = (p, opts) => fetch("/api/c/" + encodeURIComponent(company) + "/who" + p, Object.assign({ credentials: "same-origin" }, opts || {}));
+  async function loadWho() {
+    try { const r = await peopleApi("", { cache: "no-store" }); if (!r.ok) return; const j = await r.json(); who.people = j.people || []; who.me = j.me || null; } catch (e) { /* the list is a nicety; the button works without it */ }
+    renderWho(); who.listeners.forEach((f) => { try { f(who.me); } catch (e) {} });
+  }
+  function renderWho() {
+    const el = panel.querySelector("#fbw-who"), nameEl = panel.querySelector("#fbw-name"); if (!el) return;
+    if (who.me) { el.style.display = "block"; nameEl.style.display = "none"; el.innerHTML = "Sending as <b>" + esc(who.me.name) + "</b> · <a href=\"#\" id=\"fbw-switch\" style=\"color:#1f3a5f\">not you?</a>"; }
+    else if (who.people.length) { el.style.display = "block"; nameEl.style.display = ""; el.innerHTML = "<a href=\"#\" id=\"fbw-switch\" style=\"color:#1f3a5f;font-weight:700\">Tap your name</a> so this comes back to you, or just type it below."; }
+    else { el.style.display = "none"; nameEl.style.display = ""; }
+    const sw = panel.querySelector("#fbw-switch"); if (sw) sw.onclick = (e) => { e.preventDefault(); openPicker(); };
+  }
+  let picker = null;
+  // the PIN pad listens to the keyboard only while it is open, as a listener of its own:
+  // it never touches a handler the page set, and digits typed for the PIN never land in a field behind it
+  let keyHandler = null;
+  function setKeys(h) { if (keyHandler) document.removeEventListener("keydown", keyHandler, true); keyHandler = h; if (h) document.addEventListener("keydown", h, true); }
+  function closePicker() { setKeys(null); if (picker) { picker.remove(); picker = null; } }
+  const bigBtn = "display:block;width:100%;text-align:left;margin:6px 0;padding:14px;border:1px solid #d5dbe3;border-radius:10px;background:#f2f4f7;font:700 16px system-ui,sans-serif;color:#1c242e;cursor:pointer;min-height:0";
+  function openPicker() {
+    closePicker();
+    picker = document.createElement("div");
+    picker.style.cssText = "position:fixed;inset:0;background:rgba(28,36,46,.55);z-index:10001;display:flex;align-items:center;justify-content:center;padding:16px;font-family:system-ui,sans-serif";
+    const card = document.createElement("div");
+    card.style.cssText = "background:#fff;color:#1c242e;border-radius:14px;padding:18px;width:100%;max-width:380px;max-height:90vh;overflow:auto";
+    picker.appendChild(card); picker.onclick = (e) => { if (e.target === picker) closePicker(); };
+    document.body.appendChild(picker);
+    names(card);
+  }
+  function names(card) {
+    setKeys(null);
+    card.innerHTML = "<div style=\"font-size:18px;font-weight:700;margin-bottom:6px\">Who is this?</div>" + (who.people.length ? "" : "<div style=\"color:#51606f;font-size:14px\">No names yet. A manager adds people from the improvement board.</div>");
+    who.people.forEach((p) => { const b = document.createElement("button"); b.style.cssText = bigBtn; b.textContent = p.name; b.onclick = () => pinPad(card, p); card.appendChild(b); });
+    const row = document.createElement("div"); row.style.cssText = "display:flex;gap:8px;justify-content:flex-end;margin-top:8px";
+    if (who.me) { const out = document.createElement("button"); out.textContent = "Nobody (sign " + who.me.name + " out)"; out.style.cssText = "padding:10px 12px;border:1px solid #d5dbe3;border-radius:8px;background:#fff;font:14px system-ui,sans-serif;cursor:pointer;min-height:0;width:auto"; out.onclick = async () => { await peopleApi("/sign-out", { method: "POST" }); closePicker(); loadWho(); }; row.appendChild(out); }
+    const no = document.createElement("button"); no.textContent = "Cancel"; no.style.cssText = "padding:10px 12px;border:none;border-radius:8px;background:#e5e9ee;font:700 14px system-ui,sans-serif;cursor:pointer;min-height:0;width:auto"; no.onclick = closePicker; row.appendChild(no);
+    card.appendChild(row);
+  }
+  function pinPad(card, p) {
+    let pin = "";
+    card.innerHTML = "<div style=\"font-size:18px;font-weight:700\">" + esc(p.name) + "</div><div style=\"color:#51606f;font-size:14px;margin:2px 0 10px\">Your PIN</div><div id=\"fbw-dots\" style=\"font-size:30px;letter-spacing:10px;min-height:40px;text-align:center\"></div><div id=\"fbw-pinerr\" style=\"color:#b3261e;font-size:13px;min-height:18px;text-align:center\"></div><div id=\"fbw-pad\" style=\"display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:6px\"></div>";
+    const dots = card.querySelector("#fbw-dots"), err = card.querySelector("#fbw-pinerr"), pad = card.querySelector("#fbw-pad");
+    const draw = () => { dots.textContent = "\u2022".repeat(pin.length); };
+    const go = async () => {
+      if (pin.length < 4) { err.textContent = "A PIN is at least 4 digits."; return; }
+      const r = await peopleApi("/sign-in", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: p.id, pin }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { pin = ""; draw(); err.textContent = j.error || "That did not work."; return; }
+      closePicker(); await loadWho();
+    };
+    ["1", "2", "3", "4", "5", "6", "7", "8", "9", "back", "0", "OK"].forEach((k) => {
+      const b = document.createElement("button"); b.textContent = k === "back" ? "\u232b" : k;
+      b.style.cssText = "padding:16px 0;border:1px solid #d5dbe3;border-radius:10px;background:" + (k === "OK" ? "#2e7d4f" : "#f2f4f7") + ";color:" + (k === "OK" ? "#fff" : "#1c242e") + ";font:700 20px system-ui,sans-serif;cursor:pointer;min-height:0;width:auto;margin:0";
+      b.onclick = () => { err.textContent = ""; if (k === "back") pin = pin.slice(0, -1); else if (k === "OK") return go(); else if (pin.length < 8) pin += k; draw(); };
+      pad.appendChild(b);
+    });
+    const back = document.createElement("button"); back.textContent = "Someone else"; back.style.cssText = "margin-top:10px;padding:10px 12px;border:none;border-radius:8px;background:#e5e9ee;font:700 14px system-ui,sans-serif;cursor:pointer;min-height:0;width:100%"; back.onclick = () => names(card); card.appendChild(back);
+    setKeys((e) => {
+      if (!picker) { setKeys(null); return; }
+      const k = e.key; if (!/^\d$/.test(k) && !["Backspace", "Enter", "Escape"].includes(k)) return;
+      e.preventDefault(); e.stopPropagation(); err.textContent = "";
+      if (/^\d$/.test(k)) { if (pin.length < 8) pin += k; draw(); } else if (k === "Backspace") { pin = pin.slice(0, -1); draw(); } else if (k === "Enter") go(); else closePicker();
+    });
+  }
+  window.sosPerson = { me: () => who.me, people: () => who.people, open: openPicker, refresh: loadWho, onChange: (f) => { who.listeners.push(f); } };
+
   document.addEventListener("DOMContentLoaded", init);
   if (document.readyState !== "loading") init();
   function init() {
@@ -234,6 +307,7 @@
     document.body.appendChild(btn);
     document.body.appendChild(panel);
     watchVersion();
+    loadWho();
     setTimeout(maybeTour, 400); // give the page's own first render a moment so targets exist
     const nameEl = panel.querySelector("#fbw-name");
     try { nameEl.value = localStorage.getItem("sos.name") || ""; } catch (e) {}
@@ -243,7 +317,7 @@
       try { localStorage.setItem("sos.name", nameEl.value); } catch (e) {}
       const res = await fetch("/api/feedback", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ company, module: mod, page: location.pathname, message: msg, name: nameEl.value }),
+        body: JSON.stringify({ company, module: mod, page: location.pathname, message: msg, name: who.me ? who.me.name : nameEl.value }),
       });
       if (res.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
       panel.querySelector("#fbw-msg").value = "";

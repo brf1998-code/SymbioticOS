@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Symbiotic OS · People</title>
+<style>
+  :root { --ink:#1c242e; --steel:#51606f; --line:#d5dbe3; --fog:#f2f4f7; --navy:#1f3a5f; --amber:#c2620a; --green:#2e7d4f; --red:#b3261e; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); padding:0 0 60px; }
+  .band { background:var(--navy); color:#fff; padding:12px 22px; }
+  .band h1 { font-size:20px; } .band a { color:#fff; } .band .sub { font-size:12.5px; color:#fff; opacity:.85; margin-top:4px; }
+  .wrap { max-width:820px; margin:0 auto; padding:14px 22px 0; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px; margin:10px 0; font-size:13.5px; line-height:1.5; }
+  .sub { color:var(--steel); font-size:12.5px; }
+  button { border:none; border-radius:7px; padding:8px 12px; font-size:12.5px; font-weight:700; cursor:pointer; font-family:inherit; margin:4px 6px 0 0; min-height:36px; }
+  .go { background:var(--green); color:#fff; } .quiet { background:#e5e9ee; color:var(--ink); } .danger { background:#fff; color:var(--red); border:1px solid var(--red); }
+  input, select { font-family:inherit; font-size:14px; border:1px solid var(--line); border-radius:7px; padding:8px; }
+  table { border-collapse:collapse; width:100%; margin-top:6px; }
+  th, td { border-bottom:1px solid var(--line); padding:7px 8px; text-align:left; vertical-align:middle; }
+  th { font-size:11px; color:var(--steel); text-transform:uppercase; letter-spacing:.04em; }
+  tr.off td { color:var(--steel); }
+  .pin { background:#fff4e5; border:1px solid #f0c987; border-radius:10px; padding:12px; margin-top:10px; font-size:15px; }
+  .pin b { font-size:26px; letter-spacing:4px; }
+  .pill { display:inline-block; font-size:10.5px; font-weight:700; border-radius:10px; padding:2px 8px; color:#fff; background:var(--steel); text-transform:uppercase; }
+  .pill.lock { background:var(--amber); } .pill.offp { background:var(--steel); }
+  .bad { color:var(--red); font-weight:700; }
+</style>
+</head>
+<body>
+  <div class="band"><h1>People</h1><div class="sub" id="sub">Who works here, so a request comes back to the person who made it.</div></div>
+  <div class="wrap">
+    <div class="card">
+      <b>How it works.</b> Each device stays signed in with the company's floor or manager password, as before. On top of that, a person taps their name on the feedback button and types a short PIN, so their requests are theirs on any tablet or phone, and the board shows who asked and who approved. Nobody has to: a device with no one signed in still works and says "anonymous". A PIN is shown once, here, when you add someone or reset it. Five wrong tries lock a name for five minutes.
+    </div>
+    <div class="card">
+      <b>Add a person</b>
+      <div style="margin-top:8px"><input id="p-name" placeholder="Name, as the floor says it (e.g. Maria G)" style="width:260px"> <select id="p-role"><option value="floor">works the floor</option><option value="lead">lead</option><option value="manager">manager</option></select> <input id="p-pin" placeholder="PIN (leave blank: one is made)" inputmode="numeric" style="width:220px"> <button class="go" onclick="addPerson()">Add</button></div>
+      <div id="out"></div>
+    </div>
+    <div class="card"><b>The list</b><div id="list" class="sub" style="margin-top:6px">Loading...</div></div>
+    <div class="sub" style="margin-top:10px"><a id="back" href="#">Back to the improvement board</a></div>
+  </div>
+<script>
+const SLUG = location.pathname.split("/")[2];
+document.getElementById("back").href = `/c/${SLUG}/`;
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
+async function api(p, body) {
+  const r = await fetch(`/api/c/${SLUG}/people${p}`, body === undefined ? { cache: "no-store" } : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); throw new Error("login"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+  return j;
+}
+function showPin(name, pin, what) {
+  document.getElementById("out").innerHTML = `<div class="pin">${esc(what)} <b>${esc(pin)}</b><div class="sub">For ${esc(name)}. Write it down or tell them now: it is not shown again. They can ask you for a new one any time.</div></div>`;
+}
+async function load() {
+  const j = await api("");
+  document.getElementById("sub").textContent = `${SLUG}: ${j.people.filter(p => p.active).length} people on the list`;
+  document.getElementById("list").innerHTML = j.people.length ? `<table><tr><th>Name</th><th>Role</th><th>Last seen</th><th></th></tr>${j.people.map(p => `<tr class="${p.active ? "" : "off"}">
+    <td><b>${esc(p.name)}</b> ${p.locked ? '<span class="pill lock">locked for a few minutes</span>' : ""} ${p.active ? "" : '<span class="pill offp">switched off</span>'}</td>
+    <td>${p.role === "floor" ? "floor" : esc(p.role)}</td><td>${p.last_seen_at ? new Date(p.last_seen_at).toLocaleString() : "not yet"}</td>
+    <td style="text-align:right"><button class="quiet" onclick="resetPin(${p.id}, '${esc(p.name).replace(/'/g, "&#39;")}')">New PIN</button>${p.active ? `<button class="danger" onclick="setActive(${p.id}, false)">Switch off</button>` : `<button class="quiet" onclick="setActive(${p.id}, true)">Switch on</button>`}</td></tr>`).join("")}</table>` : "Nobody yet. Add the people who will use the floor screens; it takes a minute.";
+}
+async function addPerson() {
+  const name = document.getElementById("p-name").value, role = document.getElementById("p-role").value, pin = document.getElementById("p-pin").value.trim();
+  try { const j = await api("", { name, role, pin }); showPin(j.person.name, j.pin, "PIN:"); document.getElementById("p-name").value = ""; document.getElementById("p-pin").value = ""; load(); }
+  catch (e) { document.getElementById("out").innerHTML = `<div class="bad" style="margin-top:8px">${esc(e.message)}</div>`; }
+}
+async function resetPin(id, name) {
+  try { const j = await api(`/${id}/pin`, {}); showPin(name, j.pin, "New PIN:"); load(); window.scrollTo(0, 0); }
+  catch (e) { document.getElementById("out").innerHTML = `<div class="bad" style="margin-top:8px">${esc(e.message)}</div>`; }
+}
+async function setActive(id, active) {
+  try { await api(`/${id}/active`, { active }); document.getElementById("out").innerHTML = ""; load(); }
+  catch (e) { document.getElementById("out").innerHTML = `<div class="bad" style="margin-top:8px">${esc(e.message)}</div>`; window.scrollTo(0, 0); }
+}
+load().catch(e => { document.getElementById("list").innerHTML = `<span class="bad">${esc(e.message)}</span>`; });
+</script>
+<script src="/assets/feedback-widget.js" data-module="platform"></script>
+</body>
+</html>

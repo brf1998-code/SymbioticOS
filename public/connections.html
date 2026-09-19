@@ -70,6 +70,7 @@ async function load() {
 }
 function card(m, c) {
   const id = `${m.module}-${c.name}`;
+  if (c.managed) return `<div class="card" id="c-${id}"><div class="head"><b>${esc(c.label)}</b> <span class="pill ${c.status}">${c.status === "connected" ? "connected" : c.status === "error" ? "being looked at" : "being set up"}</span> <span class="kind">ERP, read only</span></div><div class="sub">${esc(c.text.what)} <b>What a person does:</b> ${esc(c.text.person)}</div></div>`;
   const status = `<span class="pill ${c.status}">${c.status === "connected" ? "connected" : c.status === "error" ? "trouble" : "not connected yet"}</span>`;
   let body = "";
   if (c.kind === "files") {
@@ -116,7 +117,7 @@ function card(m, c) {
       <div style="margin-top:6px"><button class="go" onclick="testErp('${m.module}','${c.name}')">Test the lookups</button> <a href="/api/c/${SLUG}/connections/${m.module}/${c.name}/it-note.txt" download><button class="quiet">Download the note for IT</button></a></div>
       <div id="t-${id}"></div>
       <details style="margin-top:8px"><summary class="sub" style="cursor:pointer">The note to send IT (plain words, with the technical part filled in as far as it is known)</summary><pre class="note">${esc(c.it_note)}</pre></details>
-      ${ROLE === "admin" ? adminErp(m, c) : `<div class="sub" style="margin-top:8px">Where the system is, the lookups and the login are entered by Anetix on the platform once IT answers.</div>`}`;
+      ${adminErp(m, c)}`;
   }
   return `<div class="card" id="c-${id}">
     <div class="head"><b>${esc(c.label)}</b> ${status} <span class="kind">${c.kind === "files" ? "spreadsheet" : c.kind === "printer" ? "label printer" : "ERP, read only"}</span></div>

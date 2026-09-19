@@ -64,6 +64,10 @@
     <div class="hwrap"><table class="health" id="h-table"></table></div>
     <p class="sub" id="h-note" style="margin-top:8px">Counts are for the window; open items, what is waiting, and the quiet stretch are as of now. Same shift means feedback to floor within 8 hours. To floor runs from the feedback item to the deploy (the oldest item in a batch). Manager wait is proposal drafted to decided, then ready to deployed. Stops are where builds stopped: the platform's own checks (gate), the reviewer, the tests, or something else. Quiet is days since the last reviewer or test stop, gate stop, and rollback; a long quiet stretch is the signal to try a cheaper build model. Edited is how many approved proposals the manager changed first (on the record since Sept 19). Decision times before the record use the run's start.</p>
   </div>
+  <div class="card" id="data-card" style="display:none">
+    <h2>Data requests <small>changes the floor asked for that need ERP data the connection does not give yet. The manager only sees "waiting on data".</small></h2>
+    <div id="data-list"></div>
+  </div>
   <div class="card" id="library-card">
     <h2>Module library <small>what ships in the repo, before any company changes it</small></h2>
     <p class="sub">Every module starts here as version 1. Start tour opens the module on a company's floor and walks a new operator through its screens, step by step, with the feedback button as the last stop. The tour is <code>tour.json</code> inside the module; agents can keep it current as the screens change.</p>
@@ -119,7 +123,7 @@ function healthRow(c) {
     <td class="co">${esc(c.name)}${c.builds.in_flight ? ` <small>· ${c.builds.in_flight} building</small>` : ""}<br><small>${modelsCell(c.builds.models)}</small></td>
     <td>${c.feedback.filed}</td>
     <td>${c.feedback.open}${c.feedback.open ? `<br><small>oldest ${hrs(c.feedback.oldest_open_hours)}</small>` : ""}</td>
-    <td class="${waiting ? "warn" : ""}">${waiting}${waiting ? `<br><small>${c.decisions.waiting} to decide${c.decisions.waiting ? ` (oldest ${hrs(c.decisions.oldest_waiting_hours)})` : ""}<br>${c.builds.waiting_confirm} to confirm, ${c.builds.waiting_deploy} to deploy</small>` : ""}</td>
+    <td class="${waiting || c.decisions.waiting_data ? "warn" : ""}">${waiting}${waiting ? `<br><small>${c.decisions.waiting} to decide${c.decisions.waiting ? ` (oldest ${hrs(c.decisions.oldest_waiting_hours)})` : ""}<br>${c.builds.waiting_confirm} to confirm, ${c.builds.waiting_deploy} to deploy</small>` : ""}${c.decisions.waiting_data ? `<br><small class="warn">${c.decisions.waiting_data} on us (ERP data, oldest ${hrs(c.decisions.oldest_waiting_data_hours)})</small>` : ""}</td>
     <td><b>${c.builds.shipped}</b>${c.builds.rolled_back ? `<br><small class="warn">${c.builds.rolled_back} rolled back</small>` : ""}${c.builds.cancelled ? `<br><small>${c.builds.cancelled} cancelled</small>` : ""}</td>
     <td>${pct(c.floor.same_shift, c.floor.n)}${c.floor.n ? `<br><small>${c.floor.same_shift} of ${c.floor.n}</small>` : ""}</td>
     <td>${hrs(c.floor.median_hours)}${c.floor.n > 1 ? `<br><small>p90 ${hrs(c.floor.p90_hours)}</small>` : ""}</td>
@@ -143,6 +147,7 @@ async function loadHealth() {
     [hrs(f.floor.median_hours), "to the floor", f.floor.n > 1 ? `median · p90 ${hrs(f.floor.p90_hours)}` : "feedback to deploy"],
     [hrs(f.decisions.wait_median_hours), "manager wait", f.floor.deploy_wait_n ? `to decide · then ${hrs(f.floor.deploy_wait_median_hours)} to deploy` : "proposal to decision"],
     [waiting, "waiting on a manager", `${f.decisions.waiting} to decide, ${f.builds.waiting_confirm} to confirm, ${f.builds.waiting_deploy} to deploy`],
+    [f.decisions.waiting_data, "waiting on us", f.decisions.waiting_data ? `ERP data to add · oldest ${hrs(f.decisions.oldest_waiting_data_hours)}` : "no data requests open"],
     [nstops, "stops", `gate ${st.gate} · reviewer ${st.reviewer} · tests ${st.tests} · other ${st.other}`],
     [usd(f.spend.window_usd), "AI spend", f.spend.per_shipped_usd != null ? `${usd(f.spend.per_shipped_usd)} a shipped change` : "in the window"],
     [dys(f.quiet.check_stop_days), "since a check stop", `rollback ${dys(f.quiet.rollback_days)} · gate ${dys(f.quiet.gate_stop_days)}`],
@@ -150,7 +155,34 @@ async function loadHealth() {
   document.getElementById("h-table").innerHTML = `<tr><th>Company</th><th>Filed</th><th>Open</th><th>Waiting</th><th>Shipped</th><th>Same shift</th><th>To floor</th><th>Manager wait</th><th>Decisions</th><th>Stops</th><th>AI spend</th><th>Quiet</th></tr>`
     + H.companies.map(healthRow).join("") + (H.companies.length > 1 ? healthRow({ ...f, name: "Fleet" }) : "");
 }
+// ---- data requests (src/datacheck.js): admin side only ----
+async function loadData() {
+  const r = await fetch("/api/admin/data-requests"); if (!r.ok) return;
+  const rows = (await r.json()).requests; const cardEl = document.getElementById("data-card");
+  cardEl.style.display = rows.length ? "" : "none";
+  document.getElementById("data-list").innerHTML = rows.map(x => `<div class="brand" style="margin-top:8px">
+    <b>${esc(x.company_name || x.company)}</b> · ${esc(x.module_title || x.module)} · asked ${new Date(x.created_at).toLocaleString()}<br>
+    Needs: <b>${esc(x.what)}</b>${x.lookup ? ` <span class="sub">(the agent expected it from the lookup <code>${esc(x.lookup)}</code>)</span>` : ""}<br>
+    <span class="sub">The floor said: "${esc(x.message || "")}"${x.reporter ? ` (${esc(x.reporter)})` : ""}</span><br>
+    <a href="/c/${x.company}/connections">Open the connections page</a> <span class="sub">widen the lookup in the ERP, Test, publish the new column; the change is proposed again on its own when the field list changes.</span><br>
+    <button class="quiet" onclick="dataAct(${x.id},'resolve')" title="The data is there now (or never needed the ERP): propose the change again">It is there now: propose again</button>
+    <button class="danger" onclick="dataAct(${x.id},'dismiss')">Cannot be provided</button></div>`).join("");
+}
+function dataAct(id, what) {
+  if (what === "dismiss") {
+    openModal(`<h2>Cannot be provided</h2><p class="sub">One sentence the manager will read on the card: why can the ERP not provide this?</p>
+      <input id="dr-note" placeholder="e.g. Your ERP does not record which operator ran the job." autocomplete="off">
+      <button class="danger" onclick="dataSend(${id},'dismiss',document.getElementById('dr-note').value)">Tell the manager</button> <button class="quiet" onclick="closeModal()">Cancel</button>`);
+    return;
+  }
+  dataSend(id, what, "");
+}
+async function dataSend(id, what, note) {
+  if (what === "dismiss" && !String(note).trim()) return;
+  await post(`/api/admin/data-requests/${id}/${what}`, { note }); closeModal(); loadData(); loadHealth();
+}
 async function load() {
+  loadData().catch((e) => console.error("data requests:", e));
   const r = await fetch("/api/admin/overview");
   if (r.status === 401) { location.href = "/login?next=/admin"; return; }
   if (r.status === 403) { document.body.innerHTML = "<p style='padding:20px'>Admin login required.</p>"; return; }

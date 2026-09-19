@@ -142,6 +142,9 @@ function verify(token) {
   return { role, company, gen: Number(gen) || 0 };
 }
 
+// A MAC under the session secret, for other platform cookies (src/people.js). The secret itself stays in this file.
+function hmac(payload) { return crypto.createHmac("sha256", SECRET).update(String(payload)).digest("base64url"); }
+
 function parseCookies(req) {
   const out = {};
   for (const part of (req.headers.cookie || "").split(";")) {
@@ -299,5 +302,5 @@ function logoutHandler(_req, res) {
 
 module.exports = {
   middleware, companyGuard, ownsCompany, requireManager, requireAdmin, loginHandler, logoutHandler, checkAdminPassword,
-  setPasswords, generatePassword, ensureAccessRows, accessRow, accessPublic, hashPassword, checkHash, sign, verify, OPEN, ALL,
+  setPasswords, generatePassword, ensureAccessRows, accessRow, accessPublic, hashPassword, checkHash, sign, verify, OPEN, ALL, hmac, parseCookies,
 };

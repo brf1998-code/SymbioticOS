@@ -688,9 +688,19 @@ function card(fb) {
     if (EDITING === fb.proposal_id) { html += editForm(fb); return html + "</div>"; }
     html += `<div class="prop"><span class="chip ${fb.proposal_class}">${fb.proposal_class === "ui" ? "UI CHANGE" : "FUNCTIONALITY"}</span><span class="chip screen">Will change: ${esc(screenLabel(fb.module, fb.proposal_target))}</span><br>${esc(fb.proposal_body)}</div>`;
     if (fb.proposal_rationale) html += `<div class="meta">${esc(fb.proposal_rationale)}${fb.proposal_model ? " · proposed by " + esc(modelLabel(fb.proposal_model)) : ""}</div>`;
+    const pd = fb.proposal_data || {};
+    if (pd.status === "waiting") {
+      // the data check: the ERP connection cannot give this yet; Anetix has the request, the manager has nothing to do
+      html += `<div class="meta" style="background:#fff4e5;border-radius:8px;padding:8px;color:#7a4a00"><b>Waiting on data.</b> This needs ${esc((pd.missing || []).join("; ") || "data")} from your ERP, which this tool cannot read yet. Anetix has been told and is adding it. It comes back here on its own; nothing for you to do.</div>`;
+      if (MGR()) html += `<button class="no" onclick="decline(${fb.proposal_id})">Decline</button>`;
+      return html + "</div>";
+    }
+    if (pd.status === "unavailable") html += `<div class="meta" style="background:#fdecea;border-radius:8px;padding:8px;color:#7a1d17"><b>Your ERP cannot provide this.</b> ${esc(pd.reason || "")} Adjust the change so it does not need that data, or decline it.</div>`;
     if (MGR()) {
-      html += `<button class="go" ${inBatch(fb) ? "disabled title=\"in the batch: build it from the batch panel at the top of the column\"" : ""} onclick="act('/api/proposals/${fb.proposal_id}/decide',{decision:'approve'})">Approve build (${esc(modelLabel(DATA.models.build))})</button>`;
-      html += batchBtns(fb);
+      if (pd.status !== "unavailable") {
+        html += `<button class="go" ${inBatch(fb) ? "disabled title=\"in the batch: build it from the batch panel at the top of the column\"" : ""} onclick="act('/api/proposals/${fb.proposal_id}/decide',{decision:'approve'})">Approve build (${esc(modelLabel(DATA.models.build))})</button>`;
+        html += batchBtns(fb);
+      }
       html += `<button class="quiet" onclick="EDITING=${fb.proposal_id};load()">Adjust</button>`;
       html += `<button class="no" onclick="decline(${fb.proposal_id})">Decline</button>`;
     } else {
@@ -807,7 +817,9 @@ async function load() {
   if (!DATA.aiConfigured) { w.style.display = "block"; w.textContent = "AI is not configured on this instance (set ANTHROPIC_API_KEY). Proposals will be placeholders."; }
   else if (DATA.fakeAgent) { w.style.display = "block"; w.textContent = "Fake agent mode (SOS_FAKE_AGENT=1): the loop runs but the agent only stamps a marker on pages."; }
   else w.style.display = "none";
-  document.getElementById("who").innerHTML = `signed in as <b>${esc(DATA.role)}</b>${DATA.role === "admin" ? ' · <a href="/admin">admin</a>' : ""}${MGR() ? ` · <a href="/c/${SLUG}/agents">agent settings</a> · <a href="/c/${SLUG}/checks">checks log</a> · <a href="/c/${SLUG}/connections" title="Spreadsheets and label printers the modules use: set up once here">connections</a> · <a href="/api/c/${SLUG}/record/export" download title="Everything said and decided on this board, word for word, as a file. This company's own record.">record</a>` : ""} · <a href="#" onclick="openQr();return false" title="The code that opens this board, large enough to print for the wall">wall sign</a> · <a href="/logout">sign out</a>`;
+  const me = window.sosPerson && window.sosPerson.me(), anyPeople = window.sosPerson && window.sosPerson.people().length;
+  const meHtml = me ? ` · <a href="#" onclick="window.sosPerson.open();return false" title="Who is at this screen. Approvals and requests carry this name.">${esc(me.name)}</a>` : anyPeople ? ` · <a href="#" onclick="window.sosPerson.open();return false" title="Tap your name and type your PIN so approvals and requests carry your name">who is this?</a>` : "";
+  document.getElementById("who").innerHTML = `signed in as <b>${esc(DATA.role)}</b>${meHtml}${DATA.role === "admin" ? ' · <a href="/admin">admin</a>' : ""}${MGR() ? ` · <a href="/c/${SLUG}/people" title="Names and PINs, so a request comes back to the person who made it">people</a> · <a href="/c/${SLUG}/agents">agent settings</a> · <a href="/c/${SLUG}/checks">checks log</a> · <a href="/c/${SLUG}/connections" title="Spreadsheets and label printers the modules use: set up once here">connections</a> · <a href="/api/c/${SLUG}/record/export" download title="Everything said and decided on this board, word for word, as a file. This company's own record.">record</a>` : ""} · <a href="#" onclick="openQr();return false" title="The code that opens this board, large enough to print for the wall">wall sign</a> · <a href="/logout">sign out</a>`;
   normalizeSel();
   writeSel();   // the URL always shows the pick in force (cleans a stale ?m=, remembers a linked one)
   render();
@@ -891,5 +903,6 @@ setInterval(() => { if (EDITING === null) load(); }, 4000);
 </script>
 <script src="/assets/intake.js"></script>
 <script src="/assets/feedback-widget.js" data-module="platform"></script>
+<script>if (window.sosPerson) window.sosPerson.onChange(() => { if (EDITING === null) load(); });</script>
 </body>
 </html>

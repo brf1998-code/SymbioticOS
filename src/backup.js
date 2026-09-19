@@ -19,7 +19,7 @@ const PLATFORM_TABLES = [
   "companies", "company_access", "settings", "modules", "module_versions", "feedback", "proposals", "build_runs",
   "agent_docs", "reviews", "diagrams", "events", "schema_snapshots", "batches", "ai_usage",
   "module_intakes", "attachments", "check_labels", "check_replays", "record",
-  "connections", "connection_uploads", "print_jobs",
+  "connections", "connection_uploads", "print_jobs", "erp_cache", "data_requests", "people",
 ];
 
 async function columnInfo(schema, table) {

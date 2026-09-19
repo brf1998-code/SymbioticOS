@@ -4,17 +4,21 @@ const { q, logEvent } = require("./db");
 const { runStructured, haveKey, assertUnderCap, modelFor, guidanceFor } = require("./agent");
 const registry = require("./registry");
 const { record } = require("./record");
+const datacheck = require("./datacheck");
 
-function proposalSchema(files) {
+// erpLookups: the module's ERP lookup names, when it has an ERP connection.
+// Only then is the model asked what ERP data the change needs (src/datacheck.js).
+function proposalSchema(files, erpLookups) {
   return {
     type: "object",
     properties: {
+      ...(erpLookups && erpLookups.length ? { erp_data: datacheck.schemaFor(erpLookups) } : {}),
       proposal: { type: "string", description: "Plain-language description of the change: what will change, on which screen, and what it will look like. Written for a production manager, not a developer. 2 to 5 sentences." },
       class: { type: "string", enum: ["ui", "functionality"], description: "ui = layout, styling, copy, view arrangement, or displaying a field that the page already receives. functionality = any logic, data, calculation, workflow state, or integration change. When uncertain, choose functionality." },
       target_file: { type: "string", enum: files, description: "The one file the change lands in. Default to the file behind the screen the feedback came from; pick another only when the feedback clearly talks about a different screen." },
       rationale: { type: "string", description: "One or two sentences on why this class, this file, and this approach." },
     },
-    required: ["proposal", "class", "target_file", "rationale"],
+    required: ["proposal", "class", "target_file", "rationale", ...(erpLookups && erpLookups.length ? ["erp_data"] : [])],
   };
 }
 
@@ -58,11 +62,14 @@ async function generateProposal(feedbackId) {
 
   const model = await modelFor(fb.company, "propose");
   const guidance = await guidanceFor(fb.company, fb.module);
+  // the data check: a module with an ERP connection is asked what ERP data the change needs
+  const erpLookups = Object.keys(await datacheck.erpState(fb.company, fb.module).catch(() => ({})));
+  const erpAsk = erpLookups.length ? `\n\nThis module can read the company's ERP through these lookups: ${erpLookups.join(", ")}. ERP-FIELDS.md above lists every field each one can give. List under erp_data every piece of ERP data this change needs, naming the listed field that covers it; when no listed field covers it, leave its field empty and still write the proposal as it will work once the data is there. Do not tell the manager about lookups or fields.\nERP lookups available to this module: ${erpLookups.join(", ")}` : "";
   const { data, costUsd } = await runStructured({
     model,
     system: "You draft improvement proposals for a factory operations platform. The reader is a production manager with no software background. Be concrete and short. Never mention code internals in the proposal text. Prefer the smallest change that removes the reported friction. The feedback was filed from a specific screen; the change belongs on that screen unless the feedback clearly says otherwise.\n\n" + guidance.text,
-    prompt: `Floor feedback (reported by ${fb.name || "anonymous"}, reported ${fb.recurrence} time(s))\n${screenLine}\n\n"${fb.message}"\n\nCurrent module for context:\n${ctx.text}\n\nDraft the proposal, classify it, and name the target file.`,
-    schema: proposalSchema(ctx.files.length ? ctx.files : ["routes.js"]),
+    prompt: `Floor feedback (reported by ${fb.name || "anonymous"}, reported ${fb.recurrence} time(s))\n${screenLine}\n\n"${fb.message}"\n\nCurrent module for context:\n${ctx.text}\n\nDraft the proposal, classify it, and name the target file.${erpAsk}`,
+    schema: proposalSchema(ctx.files.length ? ctx.files : ["routes.js"], erpLookups),
     toolName: "proposal",
   });
   const r = await q(
@@ -71,7 +78,9 @@ async function generateProposal(feedbackId) {
   await q("UPDATE platform.feedback SET status='reviewing', updated_at=now() WHERE id=$1", [feedbackId]);
   await logEvent("proposal_generated", feedbackId, { class: data.class, target: data.target_file, model, costUsd });
   await record("proposal_drafted", { company: fb.company, module: fb.module, actor: "agent", feedback_id: feedbackId, proposal_id: r.rows[0].id, after: data.proposal, detail: { class: data.class, target: data.target_file || fb.target_file || null, rationale: data.rationale, model, cost_usd: costUsd || 0 } });
-  return r.rows[0];
+  // can the ERP connection give what this change needs? the platform checks, not the model
+  const check = erpLookups.length ? await datacheck.apply(r.rows[0], fb, data.erp_data).catch((e) => { console.error("[datacheck]", e.message); return null; }) : null;
+  return { ...r.rows[0], data_check: check };
 }
 
 module.exports = { generateProposal, moduleContext };

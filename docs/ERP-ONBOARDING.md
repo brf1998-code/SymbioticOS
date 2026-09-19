@@ -8,18 +8,24 @@ Reads only, ever. A module never knows where the ERP is or how to log in. It dec
 
 So our time goes into a lookup exactly once: when it is first built. The work is to make that once short.
 
+## Who sees what (decided 2026-09-19)
+
+The ERP is the admin's side, all of it. A floor manager never sees a lookup, a field, a BAQ, an address, a sample value or a note to IT; on the connections page the ERP is one line with a status and "nothing for you to do". Managers still set up their own printers and spreadsheets.
+
+What the manager does get is the data check. When the AI reviews a piece of floor feedback for a tool that has an ERP connection, it lists what ERP data the change needs and which published field covers each need. The platform, not the model, then checks each named field against the connection. If everything is there, the card looks like any other. If something is not, the card says one sentence ("Waiting on data: this needs the date each job is due from your ERP... Anetix has been told... nothing for you to do"), Approve is not offered, and a data request lands on /admin with the company, the tool, the floor's own words, what is needed and the lookup the agent expected it from. We widen the lookup in the ERP, Test, publish the new column; the change is proposed again on its own the moment the field list changes, and the manager approves it like any other. If the ERP cannot give it at all, we dismiss the request with one sentence the manager reads, and they adjust the ask or decline. Loop health counts these as "waiting on us", apart from what waits on a manager.
+
 ## The steps, and who does each
 
 | # | Step | Who | Built? | Time |
 |---|---|---|---|---|
 | 0 | Find out which system, which version, where it runs, who can build queries in it, whether it can be reached from outside (the questions below) | Anetix, first call | checklist below | [MEASURE] |
 | 1 | The module's design names its lookups (intake question 11 and round 2; the build writes them into module.json) | the agent, approved by the manager | yes | none of ours |
-| 2 | "Download the note for IT": what read-only access, which lookups and fields, where calls come from, how the login is kept, what we need back | manager sends it | yes (templated) | [MEASURE] waiting on IT |
+| 2 | "Download the note for IT": what read-only access, which lookups and fields, where calls come from, how the login is kept, what we need back | Anetix sends it to the plant's IT (admin side) | yes (templated) | [MEASURE] waiting on IT |
 | 3 | "Draft what IT needs to build": the model writes each lookup's definition, wide on purpose, with what it was unsure of | admin, one click | yes | a model call |
 | 4 | Someone with query-design rights in the ERP builds the lookups from the draft | the plant's IT or their ERP partner; us only on a system we were given design rights on | their side | [MEASURE] |
 | 5 | Admin enters the base URL, the login, each lookup's path; presses Test | Anetix | yes | [MEASURE] |
 | 6 | "Publish every column under a plain name"; tidy names, add a note where a column is not obvious; leave out cost, price and people's details | Anetix | yes | [MEASURE] |
-| 7 | From here on: new fields from existing lookups need nobody. A new KIND of data (a new lookup) repeats 3 to 6 for that lookup only | the loop | yes | none of ours |
+| 7 | From here on: new fields from existing lookups need nobody. The data check at review time tells us when a change needs something no lookup returns: that opens a data request on /admin, and steps 3 to 6 repeat for that column or lookup only | the loop, then Anetix | yes | none of ours until a request opens |
 
 What the Test button tells you, so nobody debugs by hand: the login was refused (and whether the system wants an API key as well), the path does not exist, the answer was not JSON (usually a login page), the certificate is not trusted, how many rows came back after paging, which declared fields came back empty, how each declared field was resolved (mapped by hand, from the catalog, matched by the column's own name, not found), and a path that uses a parameter the lookup does not have.
 
@@ -81,7 +87,7 @@ NEWP's first questions: which SAP product and version, who hosts it, who their S
 
 ## What is built, and what is not
 
-Built: the ERP kind with SAP, Epicor and plain JSON flavors; paging; the encrypted login; the Test button; the field catalog with automatic plain names and loose matching; `ERP-FIELDS.md` for the agents; the run-log line that says whether a build's ERP fields are available; the templated IT note; the model-written lookup drafts; two stand-in ERPs on the instance for the showroom and for tests (`/erp-demo/parts`, SAP shaped, and `/erp-demo/epicor/BaqSvc/SOS_Jobs/Data`, Epicor shaped with 1230 rows, a 100-row page cap and both credentials required).
+Built: the ERP kind with SAP, Epicor and plain JSON flavors; paging; the encrypted login; the Test button; the field catalog with automatic plain names and loose matching; `ERP-FIELDS.md` for the agents; the review-time data check with admin-side data requests and automatic re-proposal when the field list changes; answers served at once when a little stale and refreshed behind (the floor never waits on the ERP once a lookup is warm); the run-log line that says whether a build's ERP fields are available; the templated IT note; the model-written lookup drafts; two stand-in ERPs on the instance for the showroom and for tests (`/erp-demo/parts`, SAP shaped, and `/erp-demo/epicor/BaqSvc/SOS_Jobs/Data`, Epicor shaped with 1230 rows, a 100-row page cap and both credentials required).
 
 Not built, in the order I would build them once a real system says which is needed: the bridge transport (a small program inside the plant's network that polls the platform for lookups, runs them, posts the rows; the same pattern as the label print helper); the Business One flavor; an unattended file push into the spreadsheet connection; automatic creation of BAQs over REST (only if Wednesday shows it is real, and only for environments where IT grants it on purpose).
 

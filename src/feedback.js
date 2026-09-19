@@ -19,6 +19,8 @@ const intake = require("./intake");
 const { record, actor } = require("./record");
 const health = require("./health");
 const connections = require("./connections");
+const datacheck = require("./datacheck");
+const people = require("./people");
 
 const router = express.Router();
 // the restore route carries a whole backup and parses its own body
@@ -49,9 +51,11 @@ router.post("/api/feedback", async (req, res) => {
   } else if (page) {
     screen = /\/agents/.test(page) ? "Agent settings page" : /\/admin/.test(page) ? "Admin page" : "Improvement board";
   }
+  // a person signed in on this device (name and PIN) files under their own name; a typed name is only for a device nobody is signed in on
+  const mine = req.sosPersonId && req.sosPersonCompany === co.slug;
   const r = await q(
-    `INSERT INTO platform.feedback (company, module, page, screen, target_file, message, name) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-    [co.slug, mod || "platform", page || null, screen, target, message.trim().slice(0, 2000), (name || "").slice(0, 80) || null]);
+    `INSERT INTO platform.feedback (company, module, page, screen, target_file, message, name, person_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [co.slug, mod || "platform", page || null, screen, target, message.trim().slice(0, 2000), ((mine ? req.sosPerson : name) || "").slice(0, 80) || null, mine ? req.sosPersonId : null]);
   await logEvent("feedback_submitted", r.rows[0].id, { company: co.slug, module: mod, screen });
   await record("feedback_filed", { company: co.slug, module: mod || "platform", actor: actor(req, name), feedback_id: r.rows[0].id, after: message.trim(), detail: { screen, page } });
   res.json(r.rows[0]);
@@ -179,6 +183,7 @@ router.post("/api/c/:slug/batch/:id/build", requireManager, async (req, res) => 
   const ids = items.map((i) => i.proposal_id).filter(Boolean);
   if (!ids.length) return res.status(400).json({ error: "nothing in this batch has a proposal yet; review the items first" });
   try {
+    if (await waitingOnData(ids)) return res.status(409).json({ error: "One of these changes is waiting on data from your ERP connection. Take it out of the batch, or build the batch once it is back." });
     await q("UPDATE platform.proposals SET status='approved' WHERE id = ANY($1::int[]) AND status='draft'", [ids]);
     const run = await pipeline.startRun(ids, { model: (req.body || {}).model });
     for (const it of items) await record("proposal_approved", { company: req.params.slug, module: b.module, actor: actor(req), feedback_id: it.id, proposal_id: it.proposal_id, run_id: run.id, detail: { batch: b.id, model: (req.body || {}).model || null } });
@@ -239,7 +244,8 @@ router.get("/api/c/:slug/board", async (req, res) => {
   if (!co) return res.status(404).json({ error: "unknown company" });
   const feedback = (await q(
     `SELECT f.*, p.id AS proposal_id, p.body AS proposal_body, p.class AS proposal_class,
-            p.target_file AS proposal_target, p.rationale AS proposal_rationale, p.status AS proposal_status, p.model AS proposal_model
+            p.target_file AS proposal_target, p.rationale AS proposal_rationale, p.status AS proposal_status, p.model AS proposal_model,
+            CASE WHEN p.data_check IS NULL THEN NULL ELSE jsonb_build_object('status', p.data_check->'status', 'reason', p.data_check->'reason', 'missing', (SELECT COALESCE(jsonb_agg(m->'what'), '[]'::jsonb) FROM jsonb_array_elements(COALESCE(p.data_check->'missing','[]'::jsonb)) m)) END AS proposal_data
        FROM platform.feedback f
        LEFT JOIN LATERAL (SELECT * FROM platform.proposals WHERE feedback_id=f.id ORDER BY id DESC LIMIT 1) p ON true
       WHERE f.company=$1
@@ -284,6 +290,11 @@ router.post("/api/feedback/:id/review", requireManager, async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// The data check (src/datacheck.js): is any of these proposals waiting on ERP data, or in need of data the ERP cannot give?
+async function waitingOnData(proposalIds) {
+  return (await q("SELECT 1 FROM platform.proposals WHERE id = ANY($1::int[]) AND data_check->>'status' IN ('waiting','unavailable') LIMIT 1", [proposalIds])).rows.length > 0;
+}
+
 // Manager decision on a proposal (approve/decline, with optional edits)
 router.post("/api/proposals/:id/decide", requireManager, async (req, res) => {
   const { decision, note, editedBody, editedClass, editedTarget, model } = req.body || {};
@@ -299,6 +310,10 @@ router.post("/api/proposals/:id/decide", requireManager, async (req, res) => {
       if (changed) await record("proposal_edited", { ...ids, actor: actor(req), before: was.body, after: editedBody || was.body, detail: { class_before: was.class, class_after: editedClass || was.class, target_before: was.target_file, target_after: editedTarget || was.target_file, model_before: was.model } });
     }
     if (decision === "approve") {
+      // the data check: a change that waits on ERP data is not built yet; one the ERP cannot feed is built only after the manager changed the ask
+      const ds = was.data_check && was.data_check.status;
+      if (ds === "waiting") return res.status(409).json({ error: "This change is waiting on data from your ERP connection. Anetix has been told; it comes back here when the data is there." });
+      if (ds === "unavailable" && !(editedBody && editedBody !== was.body)) return res.status(409).json({ error: "This change needs data your ERP connection cannot provide. Adjust it so it does not need that data, or decline it." });
       await q("UPDATE platform.proposals SET status='approved', manager_note=$2 WHERE id=$1", [req.params.id, note || null]);
       const run = await pipeline.startRun(Number(req.params.id), { model });
       await record("proposal_approved", { ...ids, actor: actor(req), run_id: run.id, after: note || null, detail: { model: model || null, edited: Boolean(editedBody || editedClass || editedTarget) } });
@@ -323,6 +338,7 @@ router.post("/api/runs/batch", requireManager, async (req, res) => {
     // this route names its proposals in the body, so the company guard cannot see them
     const owners = (await q("SELECT DISTINCT f.company FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id WHERE p.id = ANY($1::int[])", [ids])).rows.map((r) => r.company);
     if (owners.some((c) => !auth.ownsCompany(req, c))) return res.status(403).json({ error: "this login is for another company" });
+    if (await waitingOnData(ids)) return res.status(409).json({ error: "One of these changes is waiting on data from your ERP connection. Build the others, or wait until it is back." });
     await q("UPDATE platform.proposals SET status='approved' WHERE id = ANY($1::int[]) AND status='draft'", [ids]);
     const run = await pipeline.startRun(ids, { model: (req.body || {}).model });
     for (const p of (await q("SELECT p.id, p.feedback_id, f.company, f.module FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id WHERE p.id = ANY($1::int[])", [ids])).rows)
@@ -405,7 +421,8 @@ router.post("/api/c/:slug/diagrams/:module/regenerate", requireManager, async (r
 router.get("/api/c/:slug/agents", requireManager, async (req, res) => {
   const co = await company(req.params.slug);
   if (!co) return res.status(404).json({ error: "unknown company" });
-  const docs = (await q("SELECT id, module, name, content, source, updated_at FROM platform.agent_docs WHERE company=$1 ORDER BY module NULLS FIRST, name", [co.slug])).rows;
+  // docs the platform writes itself (ERP-FIELDS.md) are for the agents; only an admin sees them here
+  const docs = (await q("SELECT id, module, name, content, source, updated_at FROM platform.agent_docs WHERE company=$1 AND ($2 OR source <> 'platform') ORDER BY module NULLS FIRST, name", [co.slug, req.sosRole === "admin"])).rows;
   const modules = (await q("SELECT name, title FROM platform.modules WHERE company=$1 ORDER BY name", [co.slug])).rows;
   const { brand: b, ...coPublic } = co;
   res.json({
@@ -509,11 +526,58 @@ router.get("/api/admin/health", requireAdmin, async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- people: a name and a PIN (src/people.js). Two sets of routes, on purpose.
+// /who is the picker on the feedback button: any device of the company lists the
+// names, signs one in, signs out. A module page's browser policy opens /who and
+// nothing else here (registry.modulePagePolicy), so an agent-written screen in a
+// manager's browser can never reach the list-keeping routes below.
+// /people is the manager's list: add, new PIN, switch off. ----
+const whoAmI = (req) => (req.sosPersonId && req.sosPersonCompany === req.params.slug ? { id: req.sosPersonId, name: req.sosPerson, role: req.sosPersonRole } : null);
+router.get("/api/c/:slug/who", async (req, res) => {
+  try { res.set("Cache-Control", "no-store").json({ people: await people.list(req.params.slug), me: whoAmI(req) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.get("/api/c/:slug/people", requireManager, async (req, res) => {
+  try { res.set("Cache-Control", "no-store").json({ people: await people.list(req.params.slug, { manage: true }), me: whoAmI(req) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.post("/api/c/:slug/who/sign-in", async (req, res) => {
+  try { const me = await people.signIn(req, res, req.params.slug, (req.body || {}).id, (req.body || {}).pin); await record("person_signed_in", { company: req.params.slug, actor: { role: req.sosRole, name: me.name, person: me.id }, detail: {} }); res.json({ me }); }
+  catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+router.post("/api/c/:slug/who/sign-out", async (req, res) => { people.signOut(req, res); res.json({ ok: true }); });
+router.post("/api/c/:slug/people", requireManager, async (req, res) => {
+  try { const out = await people.add(req.params.slug, req.body || {}); await record("person_added", { company: req.params.slug, actor: actor(req), after: out.person.name, detail: { person_id: out.person.id, role: out.person.role } }); res.json(out); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post("/api/c/:slug/people/:id/pin", requireManager, async (req, res) => {
+  try { const out = await people.resetPin(req.params.slug, req.params.id, (req.body || {}).pin); await record("person_pin_reset", { company: req.params.slug, actor: actor(req), after: out.person.name, detail: { person_id: out.person.id } }); res.json(out); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post("/api/c/:slug/people/:id/active", requireManager, async (req, res) => {
+  try { const p = await people.setActive(req.params.slug, req.params.id, (req.body || {}).active); await record(p.active ? "person_switched_on" : "person_switched_off", { company: req.params.slug, actor: actor(req), after: p.name, detail: { person_id: p.id } }); res.json({ person: p }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ---- data requests: ERP data a reviewed change needs and the connection cannot give yet (src/datacheck.js). Admin side only. ----
+router.get("/api/admin/data-requests", requireAdmin, async (req, res) => {
+  try { res.json({ requests: await datacheck.list({ status: req.query.status || "open" }) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.post("/api/admin/data-requests/:id/resolve", requireAdmin, async (req, res) => {
+  try { res.json(await datacheck.resolve(Number(req.params.id), (req.body || {}).note, actor(req))); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post("/api/admin/data-requests/:id/dismiss", requireAdmin, async (req, res) => {
+  try { res.json(await datacheck.dismiss(Number(req.params.id), (req.body || {}).note, actor(req))); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // ---- connections: the outside world, owned by the platform (src/connections.js) ----
 // The company's connections page (manager): every declared connection of
 // every live module, its state, and what a person has to set up.
 router.get("/api/c/:slug/connections", requireManager, async (req, res) => {
-  try { res.json({ company: req.params.slug, role: req.sosRole, modules: await connections.companyView(req.params.slug) }); }
+  try { res.json({ company: req.params.slug, role: req.sosRole, modules: await connections.companyView(req.params.slug, { admin: req.sosRole === "admin" }) }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 router.post("/api/c/:slug/connections/:mod/:name/settings", requireManager, async (req, res) => {
@@ -534,7 +598,10 @@ router.post("/api/c/:slug/connections/:mod/:name/load", requireManager, async (r
 router.post("/api/c/:slug/connections/:mod/:name/test", requireManager, async (req, res) => {
   try {
     const c = await connections.row(req.params.slug, req.params.mod, req.params.name);
-    if (c && c.kind === "erp") return res.json(await connections.testErp(req.params.slug, req.params.mod, req.params.name, actor(req)));
+    if (c && c.kind === "erp") {
+      if (req.sosRole !== "admin") return res.status(403).json({ error: "the ERP connection is set up and tested by Anetix" });
+      return res.json(await connections.testErp(req.params.slug, req.params.mod, req.params.name, actor(req)));
+    }
     res.json(await connections.testLabel(req.params.slug, req.params.mod, req.params.name, req));
   }
   catch (e) { res.status(400).json({ error: e.message }); }
@@ -550,7 +617,7 @@ router.post("/api/admin/connections/:slug/:mod/:name/draft", requireAdmin, async
   try { res.json(await connections.draftLookups(req.params.slug, req.params.mod, req.params.name, actor(req))); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
-router.get("/api/c/:slug/connections/:mod/:name/it-note.txt", requireManager, async (req, res) => {
+router.get("/api/c/:slug/connections/:mod/:name/it-note.txt", requireAdmin, async (req, res) => {
   try { res.set("Content-Disposition", `attachment; filename="read-only-access-${req.params.slug}-${req.params.name}.txt"`).type("text/plain").send(await connections.itNote(req.params.slug, req.params.mod, req.params.name)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -704,6 +771,8 @@ router.post("/api/admin/companies/:slug/delete", requireAdmin, async (req, res) 
       counts[t] = (await q(`DELETE FROM platform.${t} WHERE company=$1`, [co.slug])).rowCount;
     }
     await connections.deleteCompany(co.slug);
+    await datacheck.deleteCompany(co.slug);
+    await people.deleteCompany(co.slug);
     counts.record = await require("./record").deleteCompany(co.slug);
     await q("DELETE FROM platform.companies WHERE slug=$1", [co.slug]);
     await logEvent("company_deleted", co.slug, { name: co.name, modules: mods, counts });

@@ -102,6 +102,9 @@ const demo = (out) => out.companies.find((c) => c.slug === "demo");
   const d = demo(go(bundle({ feedback: open, proposals: [waiting, notWaiting] })));
   t("open = new, reviewing, in progress (3); oldest 30h", d.feedback.open === 3 && d.feedback.oldest_open_hours === 30, j(d.feedback));
   t("waiting on the manager: one draft on open feedback, 29h", d.decisions.waiting === 1 && d.decisions.oldest_waiting_hours === 29, j(d.decisions));
+  const onUs = { ...prop(open[0], 4, "draft"), data_status: "waiting" };
+  const d2 = demo(go(bundle({ feedback: open, proposals: [waiting, notWaiting, onUs] })));
+  t("a draft that waits on ERP data waits on us, not on the manager", d2.decisions.waiting === 1 && d2.decisions.waiting_data === 1 && d2.decisions.oldest_waiting_data_hours === 4, j(d2.decisions));
 }
 
 // 9. a batch run: time to floor starts at the oldest feedback in the batch

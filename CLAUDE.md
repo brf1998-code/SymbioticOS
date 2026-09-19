@@ -1,4 +1,4 @@
-# Symbiotic OS — Workspace Guide (current as of 2026-09-19, evening)
+# Symbiotic OS: Workspace Guide (current as of 2026-09-19, evening)
 
 **This file is the single source of truth for how this repo and the live
 instance are worked on.** Repo: `brf1998-code/SymbioticOS` (private). Live:
@@ -292,8 +292,9 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   the manager and walk around the structural gate. Everything served under a
   module mount now carries a Content-Security-Policy: `connect-src` and
   `form-action` limited to the module's own live and staged paths plus
-  `/api/feedback` and `/api/c/<company>/modules/<module>/` (the widget's
-  endpoints); `frame-src`/`worker-src`/`object-src` none; no popups usable as a
+  `/api/feedback`, `/api/c/<company>/modules/<module>/` and
+  `/api/c/<company>/who` (the widget's endpoints: feedback, tours, the name
+  picker); `frame-src`/`worker-src`/`object-src` none; no popups usable as a
   scriptable same-origin window. It is set on BOTH the pages the platform
   serves and whatever the module's routes answer: `lockDown` wraps the
   response so module code cannot drop or widen `Content-Security-Policy` /
@@ -385,10 +386,48 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   brings it back. Data terms decided 2026-09-18: the plant owns its record,
   Anetix uses it to improve that plant, anonymized cross-plant use is an
   opt-in clause; the cross-plant copy does not exist yet, and defense tenants
-  stay out of it. Not recorded yet: which person acted (no operator identity
-  until item 2b), and a proposal's rationale edits. What it feeds next:
+  stay out of it. Which person acted is recorded since operator identity
+  (`actor_person`, next bullet). Not recorded yet: a proposal's rationale edits. What it feeds next:
   per-plant memory (lessons from adjusted and declined proposals), prompt and
   brief regression, a failure taxonomy, intake tuning, the pattern library.
+- **Operator identity: a name and a PIN** (2026-09-19, `src/people.js`,
+  `platform.people`, build order item 2b; Brendan: build it before "my
+  requests", so a request follows the person across devices from day one).
+  Two layers, on purpose. The DEVICE stays signed in with the company's floor
+  or manager password (`src/auth.js`) and that alone decides what the device
+  may do. The PERSON is who is standing at it: picked from the company's
+  names on the feedback button, proven with a PIN (4 to 8 digits, scrypt
+  hash, the platform makes a 4 digit one that is never 1111 or a run), kept in
+  a second signed cookie `sos_person` = `p.<id>.<company>.<generation>.<time>.
+  <mac>` (HttpOnly, 12 h, `SOS_PERSON_HOURS`). `people.attach` (after
+  `companyGuard`) sets `req.sosPerson`, `req.sosPersonId`,
+  `req.sosPersonRole`, only when the person is active, the generation
+  matches and the person's company is the session's company. Nothing requires
+  a person: a device with nobody signed in works as before. The role on a
+  person (floor / lead / manager) is a label for now; it grants nothing.
+  Five wrong tries lock a name for five minutes; a new PIN or a switch-off
+  bumps the generation and signs the person out everywhere within ten
+  seconds (a small in-memory cache). What it changes: feedback is filed with
+  `person_id` and the person's name whatever was typed; `record.actor(req)`
+  carries the person, so every manager and floor action in the interaction
+  record says who (`actor_name`, `actor_person`). Routes, split on purpose:
+  `/api/c/<slug>/who` (GET names + me, POST `/who/sign-in`, `/who/sign-out`)
+  is the picker, open to any device of the company; `/api/c/<slug>/people`
+  (GET the full list, POST add, `/:id/pin`, `/:id/active`) is the manager's
+  list (`requireManager`). A module page's browser policy opens `/who` only,
+  so agent-written code running in a manager's browser cannot add a person or
+  reset a PIN (proven in a headless browser). Pages: `/c/<slug>/people`
+  (manager; a PIN is shown once), the picker inside
+  `public/assets/feedback-widget.js` (`window.sosPerson = { me, people, open,
+  refresh, onChange }`, a digit pad that works on a tablet; its keyboard
+  listener exists only while the pad is open and never touches the page's own
+  handlers), the person chip in the board header. Record kinds: person_added,
+  person_pin_reset, person_switched_on, person_switched_off,
+  person_signed_in. `people` is in `backup.js PLATFORM_TABLES` and in company
+  delete. Unit: `node scripts/test-people.js`. Not yet: "my requests", asking
+  the reporter a question, fixed it / not quite (the next push, which this is
+  the ground for); handing the person to module code on `ctx` (the paperline
+  station still has its own operator box); per-person rights.
 - **Connections, first push: spreadsheets and label printers** (2026-09-19,
   `src/connections.js`, `public/connections.html` at `/c/<slug>/connections`
   (manager), `public/assets/print-helper.js`, build order item 5, designed in
@@ -475,6 +514,51 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   "below reorder point" and an as-of line. Backup carries `erp_cache`. Not
   yet: the bridge transport itself, a generated (not templated) walkthrough,
   SAP CSRF-protected writes (never).
+- **The ERP is admin side; the data check at review** (2026-09-19, Brendan:
+  the manager's view must not carry lookups, fields or BAQs, "otherwise it
+  gets much too complicated"; "there should just be a check the agent does
+  during reviewing to see if it has access to the data"). `src/datacheck.js`,
+  `platform.data_requests`, `proposals.data_check`. (1) Admin only: the ERP
+  card on the connections page (`connections.companyView(company, { admin })`
+  strips it server side to label + status + `managed: true` for anyone else:
+  no settings, address, lookups, columns, samples, audit, drafts or IT note),
+  the ERP Test (the shared `.../test` route answers 403 to a manager for an
+  erp connection), the IT note, setup, drafts, and platform-written agent docs
+  (`source='platform'`, i.e. `ERP-FIELDS.md`, are left out of
+  `GET /api/c/:slug/agents` unless the role is admin). Managers keep printers
+  and spreadsheets. (2) The check: for a module with an ERP connection,
+  `generateProposal` adds `erp_data` to the proposal schema (what, in the
+  manager's words; the lookup; the published field that covers it or empty)
+  and tells the model to write the proposal as it will work once the data is
+  there, never naming lookups or fields to the manager. `datacheck.verify`
+  checks each named field against `connections.fieldAudit` (catalog plus
+  declared fields that resolve); THE PLATFORM DECIDES, the model's opinion of
+  availability is never used. `data_check.status`: none (needs nothing), ok,
+  waiting (something missing: a row per missing need in
+  `platform.data_requests`), unavailable (the admin dismissed the last open
+  request with a reason). The board query sends the manager only
+  `proposal_data = { status, reason, missing: [plain words] }`. waiting: one
+  amber sentence, no Approve, Decline stays; the decide route, the batch
+  build and `/api/runs/batch` all answer 409 in plain words. unavailable: the
+  admin's sentence in red; approve only together with an edited proposal
+  (the manager changed the ask). (3) Admin: the "Data requests" card on
+  /admin (`GET /api/admin/data-requests`, `.../:id/resolve` = "it is there
+  now: propose again", `.../:id/dismiss` with a sentence the manager reads).
+  A catalog change in `setErp` (the set of published names differs) calls
+  `datacheck.catalogChanged`, which proposes the module's waiting items again
+  behind the response (old draft -> `superseded`, its requests closed by the
+  new proposal's `apply`). Record kinds: data_check, data_request_resolved,
+  data_request_dismissed; event data_request_opened. Loop health:
+  `decisions.waiting_data` and its oldest age ("waiting on us"), kept apart
+  from what waits on a manager. Fake mode: `ERPNEED:<field>` in the feedback
+  makes the fake proposer need that field (empty = nothing covers it).
+  Same push, from the cross-check: the ERP cache key now includes the
+  module's declared fields (a version that reads one more field never gets
+  rows cached without it); an answer under an hour stale is served at once
+  with `fresh: false, refreshing: true` and refreshed behind it
+  (`erpQuery(..., { refresh: true })`), so a floor page only ever waits on the
+  ERP for a lookup it has never made; the Test flags a lookup that hit the
+  5000-row cap; `erp_cache` and `data_requests` are in the backup.
 - **ERP field catalog, paging, lookup drafts** (2026-09-19, third connections
   push; the workflow is docs/ERP-ONBOARDING.md). Why: the ERP hookup is the
   most engineer-heavy thing we do, so a lookup must cost us time ONCE. The
@@ -862,7 +946,8 @@ and lives in `platform.companies.monthly_cap_usd`. `SOS_PAGE_LOCK` (default
 `on`) is the browser policy on module pages: `report` sends it report-only
 (violations show in the browser console, nothing breaks), `off` sends none;
 the escape hatch if module pages ever stop after a deploy. Optional: `SOS_AGENT_EFFORT` (build agent reasoning
-effort, default `high`), `SOS_SESSION_DAYS` (default 30; sessions
+effort, default `high`), `SOS_PERSON_HOURS` (default 12: how long a name and
+PIN sign-in lasts on a device), `SOS_SESSION_DAYS` (default 30; sessions
 expire server-side, not just via cookie Max-Age), `SOS_LOGIN_MAX_FAILS`
 (default 10) and `SOS_LOGIN_WINDOW_MIN` (default 15) for the per-IP login
 limiter (in-memory, uses `cf-connecting-ip`).
@@ -883,6 +968,12 @@ Passwords live only in Railway; never commit them.
   plus the feedback endpoint. When a module legitimately needs to reach
   something else, widen the policy there and add it to the gate's page rules;
   never let module code set its own security headers.
+  Anything the policy opens is reachable by agent-written code with the
+  session of whoever has the page open, a manager included. So a platform
+  feature the widget needs on module pages gets routes of its own that are
+  safe for any device of the company (`/who`), and its manager routes live on
+  a path the policy does not open (`/people`). Never widen the policy to a
+  prefix that also holds manager or admin routes.
 - Every request below `auth.companyGuard` belongs to one company. A new route
   under `/c/:slug/` is scoped for free; a new route addressed by an id must be
   added to the `OWNERS` table in `src/auth.js` (its owning-company lookup) or

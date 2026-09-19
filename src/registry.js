@@ -584,7 +584,9 @@ function modulePagePolicy(req, company, mod) {
   const safeHost = /^[a-z0-9.-]+(:\d+)?$/i.test(host) ? host : null;
   const at = (p) => (safeHost ? `${safeHost}${p}` : "'self'");
   const own = [`/c/${company}/m/${mod}/`, `/c/${company}/staging/m/${mod}/`];
-  const connect = [...own, "/api/feedback", `/api/c/${company}/modules/${mod}/`].map(at);
+  // the feedback button's person picker (a name and a PIN) lists the company's names and signs one in:
+  // /who only. The manager's list-keeping routes (/people) stay closed to module pages.
+  const connect = [...own, "/api/feedback", `/api/c/${company}/modules/${mod}/`, `/api/c/${company}/who`, `/api/c/${company}/who/`].map(at);
   // a module with a printer connection: the platform's print helper on the
   // page talks to Zebra Browser Print on the device (localhost only) and to
   // the platform's print queue for this company; nothing else widens

@@ -80,8 +80,12 @@ function metrics(g, now, windowDays) {
   const approved = decided.filter((d) => d.p.status === "approved" && inWin(d.at));
   const declined = decided.filter((d) => d.p.status === "declined" && inWin(d.at));
   const decisionWaits = decided.filter((d) => d.known && inWin(d.at)).map((d) => hours(d.p.created_at, d.at)).filter((h) => h >= 0);
-  const waitingDecision = g.proposals.filter((p) => p.status === "draft" && OPEN_FEEDBACK.has((feedbackById.get(p.feedback_id) || {}).status));
+  // a draft that waits on ERP data (src/datacheck.js) waits on Anetix, not on the manager
+  const openDrafts = g.proposals.filter((p) => p.status === "draft" && OPEN_FEEDBACK.has((feedbackById.get(p.feedback_id) || {}).status));
+  const waitingDecision = openDrafts.filter((p) => p.data_status !== "waiting");
+  const waitingData = openDrafts.filter((p) => p.data_status === "waiting");
   const oldestWaiting = waitingDecision.length ? Math.max(...waitingDecision.map((p) => hours(p.created_at, now))) : null;
+  const oldestWaitingData = waitingData.length ? Math.max(...waitingData.map((p) => hours(p.created_at, now))) : null;
 
   // runs
   const timed = g.runs.map((r) => ({ r, t: runTimes(r) }));
@@ -131,6 +135,7 @@ function metrics(g, now, windowDays) {
       approved: approved.length, declined: declined.length,
       edited: approved.filter((d) => editedIds.has(d.p.id)).length,
       waiting: waitingDecision.length, oldest_waiting_hours: round1(oldestWaiting),
+      waiting_data: waitingData.length, oldest_waiting_data_hours: round1(oldestWaitingData),
       wait_median_hours: round1(median(decisionWaits)), wait_n: decisionWaits.length,
     },
     builds: {
@@ -194,7 +199,7 @@ async function load(windowDays) {
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const companies = (await q("SELECT slug, name, monthly_cap_usd FROM platform.companies ORDER BY created_at")).rows;
   const feedback = (await q("SELECT id, company, status, created_at FROM platform.feedback")).rows;
-  const proposals = (await q("SELECT p.id, p.feedback_id, f.company, p.status, p.created_at FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id")).rows;
+  const proposals = (await q("SELECT p.id, p.feedback_id, f.company, p.status, p.created_at, p.data_check->>'status' AS data_status FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id")).rows;
   const runs = (await q("SELECT id, company, module, lane, status, step, model, proposal_id, proposal_ids, created_at, evidence, log FROM platform.build_runs ORDER BY id DESC LIMIT 5000")).rows;
   const record = (await q("SELECT company, kind, proposal_id, created_at FROM platform.record WHERE kind IN ('proposal_edited','proposal_approved','proposal_declined') ORDER BY id")).rows;
   const intakes = (await q("SELECT company, status, created_at FROM platform.module_intakes")).rows;
