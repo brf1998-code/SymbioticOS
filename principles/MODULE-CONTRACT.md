@@ -178,7 +178,14 @@ before a connection is set up (say "not connected yet" where it matters,
   `fresh: false`, so show them with "as of <time>". Until it is set up,
   `query()` throws with a plain reason: catch it and show "not connected
   yet". Nothing is ever written back; a module that needs to write to the
-  ERP is out of scope of a first version.
+  ERP is out of scope of a first version. When the module has an ERP
+  connection, the platform keeps a doc named `ERP-FIELDS.md` among the
+  module's docs: every field each lookup can give, under a plain name with
+  its type. To use one, add its plain name to that lookup's `fields` and
+  read it from the rows; nobody has to set anything up. A field that is not
+  listed there cannot be read yet: say so in the proposal or the summary
+  rather than inventing it, and the screen shows it empty until the lookup
+  in the ERP is widened.
 
 A barcode or QR scanner in keyboard mode needs nothing to connect: give the
 page a scan field that keeps focus, treats Enter as the end of a scan, and

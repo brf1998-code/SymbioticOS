@@ -42,6 +42,7 @@ async function main() {
   // A stand-in ERP for the showroom: SAP-shaped OData answers about the paper
   // line's stock, so a demo company's erp connection has something to talk
   // to (base URL <this host>/erp-demo/). Static rows, read only, no login.
+  app.get("/erp-demo/epicor/BaqSvc/:baq/Data", connections.demoEpicor);   // the same, Epicor Kinetic REST v2 shaped
   app.get("/erp-demo/:entity", connections.demoErp);
 
   app.use(auth.middleware);    // everything below needs a floor, manager, or admin session

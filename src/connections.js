@@ -40,6 +40,19 @@
 //            program carries the query, for an ERP the cloud cannot reach) is
 //            designed in but not built: settings.transport="bridge" answers
 //            "not available yet". Surface: query(name, params), status().
+//            The FIELD CATALOG is what keeps engineer time down: a lookup in
+//            the ERP (an Epicor BAQ, an SAP view) is built WIDE once, the
+//            Test records every column it returns, the admin publishes them
+//            under plain names, and from then on a module that declares a
+//            published field gets it with no admin step; the agents read the
+//            catalog as the module doc ERP-FIELDS.md, so "show the due date"
+//            is a normal change. A declared field resolves through: the
+//            admin's explicit map, then the catalog, then a loose match on
+//            the lookup's own column names, else null. Answers are paged
+//            ($top/$skip for Epicor and plain JSON, the next link for SAP).
+//            draftLookups() has the model write what IT needs to build each
+//            lookup (for Epicor: SQL to paste into BAQ Designer's SQL import,
+//            Kinetic 2024.2 and later), wide on purpose.
 //
 // Secrets: the ERP login lives in the secrets column, AES-256-GCM with a key
 // that lives only in the platform's env (SOS_CONNECTION_KEY, else derived
@@ -56,6 +69,7 @@ const KINDS = ["files", "printer", "erp"];
 const ERP_FLAVORS = ["sap_odata", "epicor_baq", "json"];
 const ERP_TRANSPORTS = ["direct", "bridge"];
 const ERP_MAX_ROWS = 5000;
+const ERP_PAGE = 500;
 const NAME = /^[a-z][a-z0-9_]{0,39}$/;
 const IDENT = /^[a-z_][a-z0-9_]{0,62}$/;
 const JOB_TTL_MS = 10 * 60e3;          // an unclaimed print job expires
@@ -198,6 +212,7 @@ async function ensureRows(company, mod, manifest) {
     await q(`INSERT INTO platform.connections (company, module, name, kind) VALUES ($1,$2,$3,$4)
              ON CONFLICT (company, module, name) DO UPDATE SET kind=EXCLUDED.kind, updated_at=now()`, [company, mod, name, d.kind]);
   }
+  if (Object.values(connections).some((d) => d.kind === "erp")) await writeFieldsDoc(company, mod, manifest).catch((e) => console.error("[connections] fields doc:", e.message));
   return connections;
 }
 async function row(company, mod, name) {
@@ -435,7 +450,12 @@ function erpSettings(c) {
     const q = qv && typeof qv === "object" ? qv : {};
     const fields = {};
     for (const [mf, ef] of Object.entries(q.fields || {})) if (IDENT.test(mf) && ef != null && String(ef).trim()) fields[mf] = String(ef).trim().slice(0, 120);
-    out.queries[qn] = { path: String(q.path || "").trim().slice(0, 1000), fields, test_params: q.test_params && typeof q.test_params === "object" ? q.test_params : {}, freshness_s: Number(q.freshness_s) > 0 ? Math.min(86400, Math.round(Number(q.freshness_s))) : null };
+    const catalog = {};
+    for (const [plain, cv] of Object.entries(q.catalog || {})) {
+      if (!IDENT.test(plain) || !cv || !String(cv.source || "").trim()) continue;
+      catalog[plain] = { source: String(cv.source).trim().slice(0, 120), type: String(cv.type || "text").slice(0, 20), about: String(cv.about || "").slice(0, 200) };
+    }
+    out.queries[qn] = { path: String(q.path || "").trim().slice(0, 1000), fields, catalog, test_params: q.test_params && typeof q.test_params === "object" ? q.test_params : {}, freshness_s: Number(q.freshness_s) > 0 ? Math.min(86400, Math.round(Number(q.freshness_s))) : null };
   }
   return out;
 }
@@ -458,6 +478,55 @@ function rowsOf(flavor, body) {
   for (const k of ["value", "rows", "data", "results", "items"]) if (j && Array.isArray(j[k])) return j[k];
   if (j && typeof j === "object" && !Array.isArray(j) && flavor === "json") return [j];
   throw new Error("the ERP answered, but not with a list of rows the platform recognizes");
+}
+// The link to the next page, when the ERP gives one (SAP OData v2 d.__next,
+// v4 @odata.nextLink).
+function nextLink(body) {
+  try { const j = JSON.parse(body); return (j && j.d && j.d.__next) || (j && j["@odata.nextLink"]) || null; } catch (e) { return null; }
+}
+// Plain names for a lookup's columns: JobHead_JobNum -> job_num,
+// Calculated_OnHand -> on_hand, MaterialDescription -> material_description.
+// The table prefix goes when what is left is still unique; a collision keeps it.
+const snake = (x) => String(x).replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase();
+function autoNames(sources) {
+  const short = sources.map((src) => { const i = String(src).indexOf("_"); return i > 0 ? String(src).slice(i + 1) : String(src); });
+  const counts = {}; for (const x of short) counts[snake(x)] = (counts[snake(x)] || 0) + 1;
+  const out = {}; const used = new Set();
+  sources.forEach((src, i) => {
+    let name = counts[snake(short[i])] === 1 && snake(short[i]) ? snake(short[i]) : snake(src);
+    if (!/^[a-z_]/.test(name)) name = `f_${name}`;
+    name = name.slice(0, 60); let n = name, k = 2; while (used.has(n)) n = `${name}_${k++}`;
+    used.add(n); out[src] = n;
+  });
+  return out;
+}
+const typeOf = (v) => (v == null ? "text" : typeof v === "number" ? (Number.isInteger(v) ? "whole number" : "number") : typeof v === "boolean" ? "yes/no" : /^\d{4}-\d{2}-\d{2}(T|$)/.test(String(v)) || /^\/Date\(/.test(String(v)) ? "date" : typeof v === "object" ? "group" : "text");
+// What a lookup returns, from its first rows: every column with a type and one sample value.
+function columnsOf(rawRows) {
+  const cols = new Map();
+  for (const r of rawRows.slice(0, 50)) for (const [k, v] of Object.entries(r || {})) {
+    if (k.startsWith("__") || k.startsWith("@odata") || k === "RowIdent" || k === "RowMod" || k === "SysRowID") continue;
+    const cur = cols.get(k);
+    if (!cur) cols.set(k, { source: k, type: typeOf(v), sample: v == null || typeof v === "object" ? null : String(v).slice(0, 60) });
+    else if (cur.sample == null && v != null && typeof v !== "object") { cur.type = typeOf(v); cur.sample = String(v).slice(0, 60); }
+  }
+  return [...cols.values()].slice(0, 400);
+}
+// Where each declared field comes from: the admin's explicit map, the
+// published catalog, a loose match on the lookup's own column names, or nowhere.
+function resolveFields(declaredFields, def, columns) {
+  const map = {}, how = {};
+  const cols = (columns || []).map((c) => c.source);
+  for (const f of declaredFields) {
+    const d = def || {};
+    if (d.fields && d.fields[f]) { map[f] = d.fields[f]; how[f] = "mapped"; continue; }
+    if (d.catalog && d.catalog[f]) { map[f] = d.catalog[f].source; how[f] = "catalog"; continue; }
+    const nf = norm(f);
+    const hit = cols.find((c) => norm(c) === nf) || cols.filter((c) => norm(c).endsWith(nf) && nf.length >= 4);
+    const one = Array.isArray(hit) ? (hit.length === 1 ? hit[0] : null) : hit;
+    if (one) { map[f] = one; how[f] = "matched"; } else { map[f] = null; how[f] = "missing"; }
+  }
+  return { map, how };
 }
 const pick = (row, pathStr) => String(pathStr).split(".").reduce((o, k) => (o == null ? undefined : o[k]), row);
 function mapRows(rows, declaredFields, fieldMap) {
@@ -486,12 +555,46 @@ async function erpFetch(company, mod, name, qname, params) {
   const url = s.base_url.replace(/\/+$/, "/") + fillPath(def.path, params).replace(/^\/+/, "");
   let secrets = null;
   if (c.secrets) { try { secrets = decrypt(c.secrets); } catch (e) { throw new Error("the stored login cannot be read (the platform's connection key changed); enter the login again"); } }
-  const r = await httpGet(url, { headers: authHeaders(s, secrets), verifyTls: s.verify_tls });
-  if (r.status === 401 || r.status === 403) throw new Error(`the ERP refused the login (${r.status})`);
-  if (r.status === 404) throw new Error("the ERP has no such service or query at that path (404)");
-  if (r.status >= 400) throw new Error(`the ERP answered ${r.status}`);
-  const raw = rowsOf(s.flavor, r.text);
-  return { rows: mapRows(raw, decl.fields, def.fields), raw_count: raw.length, url: url.replace(/\?.*/, "") };
+  const headers = authHeaders(s, secrets);
+  const getPage = async (u) => {
+    const r = await httpGet(u, { headers, verifyTls: s.verify_tls });
+    if (r.status === 401 || r.status === 403) throw new Error(`the ERP refused the login (${r.status})${/api.?key/i.test(r.text) ? ": it wants an API key as well" : ""}`);
+    if (r.status === 404) throw new Error("the ERP has no such service or query at that path (404)");
+    if (r.status >= 400) throw new Error(`the ERP answered ${r.status}`);
+    return r.text;
+  };
+  // Pages. SAP hands out a next link; Epicor and plain JSON are paged with
+  // $top and $skip unless the path sets its own $top (then the admin decides).
+  // A page that comes back full, or at a round hundred (a server-side cap),
+  // is followed by another request; an empty or partial page ends it.
+  let raw = [];
+  const ownTop = /[?&]\$top=/i.test(url);
+  const skipPaged = (s.flavor === "epicor_baq" || s.flavor === "json") && !ownTop && !/[?&]\$skip=/i.test(url);
+  if (skipPaged) {
+    let prevFirst = null;
+    for (let page = 0; page < 60 && raw.length < ERP_MAX_ROWS; page++) {
+      const u = `${url}${url.includes("?") ? "&" : "?"}$top=${ERP_PAGE}&$skip=${raw.length}`;
+      const got = rowsOf(s.flavor, await getPage(u));
+      const first = got.length ? JSON.stringify(got[0]) : null;
+      if (page > 0 && first && first === prevFirst) break;   // the endpoint ignores $skip and repeated itself
+      prevFirst = first;
+      raw = raw.concat(got);
+      if (!got.length || (got.length < ERP_PAGE && got.length % 100 !== 0)) break;
+      if (s.flavor === "json" && got.length < ERP_PAGE) break;   // a plain endpoint that ignores $skip would repeat itself
+    }
+  } else {
+    let u = url;
+    for (let page = 0; page < 60 && u && raw.length < ERP_MAX_ROWS; page++) {
+      const text = await getPage(u);
+      raw = raw.concat(rowsOf(s.flavor, text));
+      const next = ownTop ? null : nextLink(text);
+      u = next ? new URL(next, u).toString() : null;
+    }
+  }
+  const columns = columnsOf(raw);
+  const known = ((c.detail && c.detail.columns) || {})[qname] || columns;
+  const resolved = resolveFields(decl.fields, def, known.length ? known : columns);
+  return { rows: mapRows(raw, decl.fields, resolved.map), raw_count: raw.length, url: url.replace(/\?.*/, ""), columns, how: resolved.how };
 }
 const paramsHash = (params) => crypto.createHash("md5").update(JSON.stringify(params || {}, Object.keys(params || {}).sort())).digest("hex");
 // What a module calls: fresh rows from the cache, else the ERP, else stale
@@ -518,17 +621,33 @@ async function erpQuery(company, mod, name, qname, params) {
   }
 }
 // The admin sets where the ERP is, how each query is fulfilled, and the login.
-async function setErp(company, mod, name, { settings, secrets, clear_secrets }, actor) {
+async function setErp(company, mod, name, { settings, secrets, clear_secrets, publish }, actor) {
   const c = await row(company, mod, name);
   if (!c || c.kind !== "erp") throw new Error("no such ERP connection");
   const before = erpSettings(c);
-  const next = erpSettings({ settings: { ...c.settings, ...(settings || {}), queries: { ...(c.settings && c.settings.queries) || {}, ...((settings || {}).queries || {}) } } });
+  const curQ = (c.settings && c.settings.queries) || {};
+  const mergedQ = { ...curQ };
+  for (const [qn, qv] of Object.entries((settings || {}).queries || {})) mergedQ[qn] = { ...(curQ[qn] || {}), ...qv };   // a path or map edit keeps the catalog
+  // publish: { query, mode: "all" } takes every column the last test saw and
+  // gives it a plain name (names and notes already in the catalog are kept)
+  if (publish && publish.query && mergedQ[publish.query]) {
+    const cols = ((c.detail && c.detail.columns) || {})[publish.query] || [];
+    if (!cols.length) throw new Error("test the lookup first: the catalog is made from the columns the test sees");
+    const cur = mergedQ[publish.query].catalog || {};
+    const bySource = {}; for (const [plain, cv] of Object.entries(cur)) bySource[cv.source] = { plain, ...cv };
+    const names = autoNames(cols.map((x) => x.source));
+    const cat = {};
+    for (const col of cols) { const keep = bySource[col.source]; cat[keep ? keep.plain : names[col.source]] = { source: col.source, type: col.type, about: keep ? keep.about : "" }; }
+    mergedQ[publish.query] = { ...mergedQ[publish.query], catalog: cat };
+  }
+  const next = erpSettings({ settings: { ...c.settings, ...(settings || {}), queries: mergedQ } });
   let enc = c.secrets;
   if (clear_secrets) enc = null;
   else if (secrets && (secrets.user || secrets.api_key)) enc = encrypt({ user: String(secrets.user || "").slice(0, 200), password: String(secrets.password || "").slice(0, 500), api_key: String(secrets.api_key || "").slice(0, 1000) });
   await q("UPDATE platform.connections SET settings=$4, secrets=$5, updated_at=now() WHERE company=$1 AND module=$2 AND name=$3", [company, mod, name, JSON.stringify(next), enc]);
   await q("DELETE FROM platform.erp_cache WHERE company=$1 AND module=$2 AND connection=$3", [company, mod, name]);
   await record("connection_settings", { company, module: mod, actor: actor || "admin", before: JSON.stringify(before), after: JSON.stringify(next), detail: { connection: name, kind: "erp", login: clear_secrets ? "cleared" : secrets && (secrets.user || secrets.api_key) ? "set" : "kept" } });
+  await writeFieldsDoc(company, mod).catch((e) => console.error("[connections] fields doc:", e.message));
   return { settings: next, has_login: Boolean(enc) };
 }
 // The one-button test: every declared query with its test params.
@@ -546,15 +665,114 @@ async function testErp(company, mod, name, actor) {
     try {
       const out = await erpFetch(company, mod, name, qname, def.test_params || {});
       const empty = decl.fields.filter((f) => out.rows.length && out.rows.every((r) => r[f] == null));
-      results.push({ query: qname, ok: true, rows: out.rows.length, raw_count: out.raw_count, sample: out.rows[0] || null, empty_fields: empty, url: out.url });
+      results.push({ query: qname, ok: true, rows: out.rows.length, raw_count: out.raw_count, sample: out.rows[0] || null, empty_fields: empty, url: out.url, columns: out.columns, how: out.how });
     } catch (e) { results.push({ query: qname, ok: false, error: e.message }); }
   }
   const ok = results.every((r) => r.ok);
-  await setStatus(company, mod, name, ok ? "connected" : "error", { error: ok ? null : results.find((r) => !r.ok).error, detail: { last_test: results.map((r) => ({ query: r.query, ok: r.ok, rows: r.rows || 0, empty_fields: r.empty_fields || [], error: r.error || null })), last_tested_at: new Date().toISOString() } });
+  const columns = { ...((c.detail && c.detail.columns) || {}) };
+  for (const r of results) if (r.ok && r.columns && r.columns.length) columns[r.query] = r.columns;
+  await setStatus(company, mod, name, ok ? "connected" : "error", { error: ok ? null : results.find((r) => !r.ok).error, detail: { columns, last_test: results.map((r) => ({ query: r.query, ok: r.ok, rows: r.rows || 0, columns: (r.columns || []).length, how: r.how || {}, empty_fields: r.empty_fields || [], error: r.error || null })), last_tested_at: new Date().toISOString() } });
+  await writeFieldsDoc(company, mod).catch((e) => console.error("[connections] fields doc:", e.message));
   if (ok) await q("DELETE FROM platform.erp_cache WHERE company=$1 AND module=$2 AND connection=$3", [company, mod, name]);
   await record("connection_tested", { company, module: mod, actor: actor || "manager", after: ok ? `every query answered: ${results.map((r) => `${r.query} ${r.rows} rows`).join(", ")}` : results.filter((r) => !r.ok).map((r) => `${r.query}: ${r.error}`).join("; "), detail: { connection: name, kind: "erp", ok } });
   return { ok, results };
 }
+// Which declared fields the ERP can actually give, per lookup: for the card,
+// for the run log of a build that adds a field, for the agents' doc.
+async function fieldAudit(company, mod, manifest) {
+  const registry = require("./registry");
+  let man = manifest;
+  if (!man) { const m = await registry.getModule(company, mod); if (!m || !m.live_version) return []; man = registry.readManifest(company, mod, m.live_version); }
+  const out = [];
+  for (const [name, d] of Object.entries(declared(man).connections)) {
+    if (d.kind !== "erp") continue;
+    const c = await row(company, mod, name); const s = erpSettings(c);
+    for (const [qn, qd] of Object.entries(d.queries)) {
+      const cols = ((c && c.detail && c.detail.columns) || {})[qn] || [];
+      const r = resolveFields(qd.fields, s.queries[qn], cols);
+      out.push({ connection: name, query: qn, defined: Boolean(s.queries[qn] && s.queries[qn].path), how: r.how, missing: qd.fields.filter((f) => r.how[f] === "missing"), available: Object.keys((s.queries[qn] || {}).catalog || {}) });
+    }
+  }
+  return out;
+}
+const auditLine = (audit) => {
+  const miss = audit.filter((a) => a.defined && a.missing.length);
+  if (!audit.length) return null;
+  return miss.length ? `ERP fields not available yet: ${miss.map((a) => `${a.missing.join(", ")} (lookup ${a.query})`).join("; ")}. The screen shows them empty until the lookup in the ERP returns them.` : "ERP fields: every field the module reads is available from its lookups.";
+};
+// The module doc the agents read (guidanceFor picks up every agent doc of the
+// module): which lookups exist, what they are looked up by, and every field
+// the ERP can give under its plain name. Names, types and notes; never values.
+async function writeFieldsDoc(company, mod, manifest) {
+  const registry = require("./registry");
+  const { upsertDoc } = require("./db");
+  let man = manifest;
+  if (!man) { const m = await registry.getModule(company, mod); if (!m || !m.live_version) return null; man = registry.readManifest(company, mod, m.live_version); }
+  const conns = Object.entries(declared(man).connections).filter(([, d]) => d.kind === "erp");
+  if (!conns.length) return null;
+  const lines = ["# ERP fields this module can read", "", "Written by the platform from the company's ERP connection; it is rewritten whenever the connection is tested or changed, so do not edit it. A module reads the ERP only through `ctx.connections.<name>.query(lookup, params)` and gets back exactly the fields it declares in module.json. To use another field below, add its plain name to that lookup's `fields` in module.json and read it from the rows: no one has to set anything up. A field that is NOT listed below cannot be read yet; say so in the proposal instead of inventing it (the lookup in the ERP has to be widened first).", ""];
+  for (const [name, d] of conns) {
+    const c = await row(company, mod, name); const s = erpSettings(c);
+    lines.push(`## Connection \`${name}\` (${d.label})`, "");
+    for (const [qn, qd] of Object.entries(d.queries)) {
+      const def = s.queries[qn] || {};
+      lines.push(`### Lookup \`${qn}\`: ${qd.about || "a read-only lookup"}`, "", `Looked up by: ${qd.params.length ? qd.params.map((x) => "`" + x + "`").join(", ") : "nothing (returns the whole list)"}. The module reads today: ${qd.fields.map((x) => "`" + x + "`").join(", ")}.`, "");
+      const cat = Object.entries(def.catalog || {});
+      if (cat.length) { lines.push("Fields available:", ""); for (const [plain, cv] of cat) lines.push(`- \`${plain}\` (${cv.type})${cv.about ? `: ${cv.about}` : ""}`); lines.push(""); }
+      else lines.push("No field list published yet: only the fields above can be relied on.", "");
+    }
+  }
+  return upsertDoc(company, mod, "ERP-FIELDS.md", lines.join("\n"), "platform");
+}
+// What IT (or whoever can design queries in the ERP) needs to build each
+// lookup, written by the model from what the module declares, WIDE on purpose
+// so later changes find their fields already there. For Epicor the SQL is for
+// BAQ Designer's SQL import (Kinetic 2024.2 and later; no CROSS APPLY, no
+// OPENJSON); for SAP it is the view to expose or the standard API to use.
+// Nothing here touches the ERP: a person there builds it, the Test proves it.
+const DRAFT_SCHEMA = {
+  type: "object",
+  properties: {
+    lookups: { type: "array", items: { type: "object", properties: {
+      query: { type: "string" }, erp_object_name: { type: "string", description: "What to call it in the ERP, e.g. a BAQ id or a view name, prefixed SOS_" },
+      purpose: { type: "string", description: "One plain sentence for IT." },
+      definition: { type: "string", description: "Epicor: one read-only SELECT for BAQ Designer's SQL import. SAP: the CDS view source or the standard OData API and entity to use. Other: a description of the endpoint." },
+      parameters: { type: "array", items: { type: "string" } },
+      path: { type: "string", description: "The path after the base URL the platform should call, with {param} placeholders." },
+      field_map: { type: "object", description: "module field -> the column name the ERP will return", additionalProperties: { type: "string" } },
+      extra_fields: { type: "array", description: "Fields beyond what the module reads today that are worth including now so later changes need no ERP work.", items: { type: "object", properties: { column: { type: "string" }, why: { type: "string" } }, required: ["column", "why"] } },
+      unsure: { type: "array", description: "Anything you could not know without seeing this company's system: table or field names to confirm, customizations.", items: { type: "string" } },
+    }, required: ["query", "erp_object_name", "purpose", "definition", "path", "field_map", "extra_fields", "unsure"] } },
+  },
+  required: ["lookups"],
+};
+async function draftLookups(company, mod, name, actor) {
+  const agent = require("./agent");
+  const c = await row(company, mod, name);
+  const live = await liveDeclaration(company, mod, name);
+  if (!c || !live || live.kind !== "erp") throw new Error("no such ERP connection");
+  await agent.assertUnderCap(company);
+  const s = erpSettings(c);
+  const m = (await q("SELECT title FROM platform.modules WHERE company=$1 AND name=$2", [company, mod])).rows[0];
+  const model = await agent.modelFor(company, "propose");
+  const flavorText = { sap_odata: "SAP. If it is S/4HANA, prefer a released standard OData API where one covers the need and say which; otherwise a custom CDS view exposed as an OData service. The path is the entity set with $filter placeholders.", epicor_baq: "Epicor Kinetic, REST v2. Each lookup is a BAQ called at BaqSvc/<BAQ id>/Data with BAQ parameters as query string values. Write the definition as ONE read-only SELECT that BAQ Designer's SQL import accepts (Kinetic 2024.2 and later): plain joins on Erp and Ice tables, the Company join on every table, no CROSS APPLY, no OPENJSON, no temp tables, no writes. Columns come back named Table_Field, calculated ones Calculated_Name.", json: "a read-only JSON endpoint. Describe what the endpoint must return." }[s.flavor];
+  const prompt = `A floor tool ("${m ? m.title : mod}") needs read-only lookups from a company's ERP. Write what the person who designs queries in that ERP needs in order to build each one.
+
+System: ${flavorText}
+
+The lookups the tool declares (name, what it is looked up by, the fields it reads today, what it is for):
+${Object.entries(live.queries).map(([qn, qd]) => `- ${qn}: looked up by [${qd.params.join(", ") || "nothing"}]; reads [${qd.fields.join(", ")}]; ${qd.about || ""}`).join("\n")}
+
+Rules. Read only, always. Build each lookup WIDE: include the stable keys (company, the document numbers and line or sequence numbers, part number), descriptions, quantities, dates, statuses and last-changed stamps a floor tool is likely to want later, because adding a column later costs a person's time in the ERP and adding it now costs nothing. Leave out cost, price, margin, customer contact details and anything about employees beyond an id, unless a declared field needs it. Give every lookup a parameter for each thing it is looked up by, plus a sensible row limit or date window when the list could be long, and a sort so paging is stable. Name ERP objects SOS_<something>. You cannot see this company's system: list under "unsure" every table, field or customization you are assuming. Plain words in purpose and why; no dashes.`;
+  const { data, costUsd } = await agent.runStructured({ model, system: "You write precise, read-only ERP query specifications for an integration engineer. You never invent certainty: what you cannot know about a specific installation you list as unsure.", prompt, schema: DRAFT_SCHEMA, toolName: "erp_lookups", maxTokens: 6000 });
+  const lookups = (data && Array.isArray(data.lookups) && data.lookups.length ? data.lookups : Object.entries(live.queries).map(([qn, qd]) => ({ query: qn, erp_object_name: `SOS_${qn}`, purpose: qd.about || "a read-only lookup", definition: `(fake mode) SELECT ... one column for each of: ${qd.fields.join(", ")}`, parameters: qd.params, path: s.flavor === "epicor_baq" ? `BaqSvc/SOS_${qn}/Data${qd.params.length ? "?" + qd.params.map((x) => `${x}={${x}}`).join("&") : ""}` : qn, field_map: Object.fromEntries(qd.fields.map((f) => [f, f])), extra_fields: [], unsure: ["fake mode: nothing was asked of a model"] })))
+    .filter((l) => live.queries[l.query]);
+  await agent.recordUsage(company, mod, "erp_draft", model, costUsd || 0, { connection: name, lookups: lookups.length });
+  await q("UPDATE platform.connections SET detail = detail || $4::jsonb, updated_at=now() WHERE company=$1 AND module=$2 AND name=$3", [company, mod, name, JSON.stringify({ drafts: { at: new Date().toISOString(), model, flavor: s.flavor, lookups } })]);
+  await record("connection_drafted", { company, module: mod, actor: actor || "admin", after: lookups.map((l) => `${l.query}: ${l.erp_object_name}`).join("; "), detail: { connection: name, model, cost_usd: costUsd || 0, flavor: s.flavor } });
+  return { lookups, model, cost_usd: costUsd || 0 };
+}
+
 // The note to IT, in the words IT uses, for the manager to send. Templated
 // for now; a generated walkthrough is a later push.
 const FLAVOR_NAME = { sap_odata: "SAP (an OData service through SAP Gateway or S/4HANA)", epicor_baq: "Epicor Kinetic (a BAQ through the REST API)", json: "the system's read-only JSON API" };
@@ -608,6 +826,25 @@ function demoErp(req, res) {
   for (const [k, v] of Object.entries(req.query)) if (!k.startsWith("$") && rows[0] && k in rows[0]) out = out.filter((r) => String(r[k]) === String(v));
   const top = Number(req.query.$top); if (top > 0) out = out.slice(0, top);
   res.set("Cache-Control", "no-store").json({ d: { results: out } });
+}
+
+// The same stand-in, shaped like Epicor Kinetic REST v2: a BAQ at
+// /erp-demo/epicor/BaqSvc/<id>/Data answering { value: [...] } with
+// Table_Field column names, wanting BOTH an API key and a user (as v2 does),
+// honouring $top and $skip but never giving more than 100 rows a page (the
+// server-side cap a real instance may have), and one BAQ parameter, JobNum.
+const DEMO_JOBS = Array.from({ length: 1230 }, (_, i) => {
+  const n = i + 1; const part = ["paper_white", "paper_blue", "paper_yellow"][i % 3];
+  return { JobHead_Company: "DEMO", JobHead_JobNum: `J${String(n).padStart(5, "0")}`, JobHead_PartNum: part, Part_PartDescription: `Airplane, ${part.replace("paper_", "")}`, JobHead_ProdQty: 10 + (i % 7) * 5, Calculated_QtyLeft: (i % 7) * 5, JobHead_ReqDueDate: `2026-10-${String(1 + (i % 28)).padStart(2, "0")}T00:00:00`, JobHead_JobReleased: i % 5 !== 0, JobOper_OprSeq: 10 * (1 + (i % 5)), JobOper_OpCode: ["KIT", "NOSE", "BODY", "WING", "TEST"][i % 5], JobHead_ChangeDate: "2026-09-18T00:00:00", RowIdent: `r${n}` };
+});
+function demoEpicor(req, res) {
+  if (!req.headers["x-api-key"]) return res.status(401).json({ ErrorMessage: "Access denied: Rest calls must pass a valid API Key" });
+  if (!/^Basic /.test(req.headers.authorization || "")) return res.status(401).json({ ErrorMessage: "Unauthorized" });
+  if (!/^SOS_/i.test(req.params.baq)) return res.status(404).json({ ErrorMessage: "BAQ not found" });
+  let out = DEMO_JOBS;
+  if (req.query.JobNum) out = out.filter((r) => r.JobHead_JobNum === String(req.query.JobNum).replace(/^'|'$/g, ""));
+  const skip = Math.max(0, Number(req.query.$skip) || 0); const top = Math.min(100, Number(req.query.$top) > 0 ? Number(req.query.$top) : 100);
+  res.set("Cache-Control", "no-store").json({ "@odata.context": "demo", value: out.slice(skip, skip + top) });
 }
 
 // ---- the device cookie ------------------------------------------------------------------
@@ -719,6 +956,9 @@ async function companyView(company) {
         const s = erpSettings(c);
         item.queries = Object.entries(d.queries).map(([qn, qd]) => ({ name: qn, ...qd, defined: Boolean(s.queries[qn] && s.queries[qn].path), definition: s.queries[qn] || null }));
         item.settings = s; item.has_login = Boolean(c && c.secrets);
+        item.columns = (c && c.detail && c.detail.columns) || {};
+        item.audit = (await fieldAudit(company, m.name, manifest)).filter((a) => a.connection === name);
+        item.drafts = (c && c.detail && c.detail.drafts) || null;
         item.it_note = await itNote(company, m.name, name);
       }
       list.push(item);
@@ -758,4 +998,5 @@ module.exports = {
   renderZpl, zplEscape, previewPng, printerSettings, TEST_LABEL, queueJob, nextJob, finishJob, jobs, testLabel,
   deviceCookie, deviceOf, cookies, encrypt, decrypt, deleteCompany, KIND_TEXT,
   erpSettings, fillPath, rowsOf, mapRows, authHeaders, erpFetch, erpQuery, setErp, testErp, itNote, httpGet, ERP_FLAVORS, ERP_TRANSPORTS, demoErp, DEMO_ROWS,
+  nextLink, autoNames, columnsOf, resolveFields, fieldAudit, auditLine, writeFieldsDoc, draftLookups, ERP_PAGE, demoEpicor, DEMO_JOBS,
 };

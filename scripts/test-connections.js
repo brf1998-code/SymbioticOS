@@ -88,6 +88,22 @@ const j = (x) => JSON.stringify(x);
   t("unknown flavor and transport fall back; verify_tls can be turned off", bad.flavor === "sap_odata" && bad.transport === "direct" && bad.verify_tls === false);
 }
 
+// the field catalog: plain names, what a lookup returns, how a declared field resolves, next pages
+{
+  t("autoNames: the table prefix goes when what is left is unique, humps become underscores", j(c.autoNames(["JobHead_JobNum", "Part_PartDescription", "Calculated_QtyLeft", "MaterialDescription", "OrderHed_PONum"])) === j({ JobHead_JobNum: "job_num", Part_PartDescription: "part_description", Calculated_QtyLeft: "qty_left", MaterialDescription: "material_description", OrderHed_PONum: "po_num" }), j(c.autoNames(["JobHead_JobNum", "Part_PartDescription", "Calculated_QtyLeft", "MaterialDescription", "OrderHed_PONum"])));
+  t("autoNames: a collision keeps the prefix, a leading digit gets a letter, names stay unique", j(c.autoNames(["JobHead_PartNum", "JobMtl_PartNum", "Calculated_2ndQty"])) === j({ JobHead_PartNum: "job_head_part_num", JobMtl_PartNum: "job_mtl_part_num", Calculated_2ndQty: "f_2nd_qty" }) && new Set(Object.values(c.autoNames(["A_x", "B_x", "x"]))).size === 3);
+  const cols = c.columnsOf([{ JobHead_JobNum: "J1", JobHead_ProdQty: 10, Calculated_Pct: 0.5, JobHead_ReqDueDate: "2026-10-01T00:00:00", JobHead_JobReleased: true, Notes: null, RowIdent: "r", __metadata: {}, "@odata.etag": "x", SysRowID: "g", Nested: { a: 1 } }, { Notes: "late" }]);
+  t("columnsOf: types from the first value seen, a later row fills an empty sample, bookkeeping columns are left out", cols.length === 7 && cols.find((x) => x.source === "JobHead_ProdQty").type === "whole number" && cols.find((x) => x.source === "Calculated_Pct").type === "number" && cols.find((x) => x.source === "JobHead_ReqDueDate").type === "date" && cols.find((x) => x.source === "JobHead_JobReleased").type === "yes/no" && cols.find((x) => x.source === "Notes").sample === "late" && cols.find((x) => x.source === "Nested").type === "group" && !cols.some((x) => /RowIdent|__metadata|odata|SysRowID/.test(x.source)), j(cols));
+  t("columnsOf: SAP v2 dates read as dates", c.columnsOf([{ D: "/Date(1790000000000)/" }])[0].type === "date");
+  const r = c.resolveFields(["a", "b", "job_num", "part_num", "due", "zz"], { fields: { a: "X_A" }, catalog: { b: { source: "Y_B" } } }, [{ source: "JobHead_JobNum" }, { source: "JobHead_PartNum" }, { source: "JobMtl_PartNum" }, { source: "JobHead_ReqDueDate" }]);
+  t("resolveFields: hand map, catalog, a unique loose match; an ambiguous or too-short match is missing", j(r.how) === j({ a: "mapped", b: "catalog", job_num: "matched", part_num: "missing", due: "missing", zz: "missing" }) && r.map.job_num === "JobHead_JobNum" && r.map.zz === null, j(r));
+  t("resolveFields: an exact name wins even when short", c.resolveFields(["qty"], {}, [{ source: "Qty" }, { source: "OrderQty" }]).map.qty === "Qty");
+  t("nextLink: v2 and v4, and nothing when there is none or the body is not JSON", c.nextLink('{"d":{"results":[],"__next":"https://x/n?$skiptoken=2"}}') === "https://x/n?$skiptoken=2" && c.nextLink('{"value":[],"@odata.nextLink":"Parts?$skip=100"}') === "Parts?$skip=100" && c.nextLink('{"value":[]}') === null && c.nextLink("<html>") === null);
+  const st = c.erpSettings({ settings: { queries: { q: { path: "p", catalog: { good_name: { source: " Src ", type: "text", about: "x" }, "Bad Name": { source: "y" }, empty: { source: "" } } } } } });
+  t("erpSettings keeps a clean catalog: plain identifiers with a source", j(Object.keys(st.queries.q.catalog)) === j(["good_name"]) && st.queries.q.catalog.good_name.source === "Src");
+  t("auditLine: nothing to say without an erp connection, a plain sentence either way otherwise", c.auditLine([]) === null && /every field/.test(c.auditLine([{ defined: true, missing: [], query: "jobs" }])) && /not available yet: due_date \(lookup jobs\)/.test(c.auditLine([{ defined: true, missing: ["due_date"], query: "jobs" }])) && /every field/.test(c.auditLine([{ defined: false, missing: ["x"], query: "jobs" }])));
+}
+
 // secrets (ready for the erp kind)
 {
   process.env.SOS_CONNECTION_KEY = "test-key";

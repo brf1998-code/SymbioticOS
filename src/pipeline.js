@@ -293,6 +293,8 @@ ${isBatch ? "- Implement every change in the batch. Keep them independent where 
         }
         await setRun(runId, { evidence: { ...c2.evidence, gate: gate.record(verdict) } });
         await log(runId, { step: "build", note: `platform checks passed: module code and lane rules${verdict.inherited.length ? ` (${verdict.inherited.length} older finding(s) already on the floor, not from this change)` : ""}` });
+        // a change that reads a new ERP field: say in the run log whether the company's lookups can give it
+        try { const cx = require("./connections"); const line = cx.auditLine(await cx.fieldAudit(company, mod, registry.readManifest(company, mod, draft.version))); if (line) await log(runId, { step: "build", note: line }); } catch (e) { /* the audit never stops a build */ }
       }
       // Plain-language title and summary for the version list, the Done card
       // and the feedback outcome. Cheap model; the agent's own final text is

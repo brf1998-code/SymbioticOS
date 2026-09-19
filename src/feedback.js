@@ -545,6 +545,11 @@ router.post("/api/admin/connections/:slug/:mod/:name/erp", requireAdmin, async (
   try { res.json(await connections.setErp(req.params.slug, req.params.mod, req.params.name, req.body || {}, actor(req))); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
+// erp: have the model write what IT needs to build each lookup, wide on purpose
+router.post("/api/admin/connections/:slug/:mod/:name/draft", requireAdmin, async (req, res) => {
+  try { res.json(await connections.draftLookups(req.params.slug, req.params.mod, req.params.name, actor(req))); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
 router.get("/api/c/:slug/connections/:mod/:name/it-note.txt", requireManager, async (req, res) => {
   try { res.set("Content-Disposition", `attachment; filename="read-only-access-${req.params.slug}-${req.params.name}.txt"`).type("text/plain").send(await connections.itNote(req.params.slug, req.params.mod, req.params.name)); }
   catch (e) { res.status(400).json({ error: e.message }); }

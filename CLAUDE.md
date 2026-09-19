@@ -474,8 +474,46 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   on_hand, reorder_at) and the stockroom page shows an "ERP says" column with
   "below reorder point" and an as-of line. Backup carries `erp_cache`. Not
   yet: the bridge transport itself, a generated (not templated) walkthrough,
-  SAP CSRF-protected writes (never), OData paging past the first page (rows
-  are capped at 5000; use `$top` and a filter in the path).
+  SAP CSRF-protected writes (never).
+- **ERP field catalog, paging, lookup drafts** (2026-09-19, third connections
+  push; the workflow is docs/ERP-ONBOARDING.md). Why: the ERP hookup is the
+  most engineer-heavy thing we do, so a lookup must cost us time ONCE. The
+  lookup is built WIDE in the ERP; Test records every column it returns
+  (`columnsOf`: name, type, one sample, kept in `connections.detail.columns`,
+  bookkeeping columns dropped); "Publish every column" (`setErp` with
+  `publish`) gives each a plain name (`autoNames`: `JobHead_JobNum` ->
+  `job_num`, the prefix kept on a collision) into
+  `settings.queries.<q>.catalog`, where the admin may rename and annotate. A
+  declared field resolves through `resolveFields`: the hand map, then the
+  catalog, then a unique loose match on the column's own name, else null; the
+  Test says how each resolved. `writeFieldsDoc` keeps the module agent doc
+  `ERP-FIELDS.md` current (names, types, notes, never values; written at
+  mount, on setup and on test), and `agent.guidanceFor` already hands every
+  module doc to the proposer, the builder and the reviewer, so a request for
+  one more ERP field is an ordinary functionality change that needs nobody
+  from Anetix or IT. `fieldAudit` and `auditLine` put one line in the run log
+  of every build of a module with an ERP connection ("ERP fields: every field
+  the module reads is available" or which are not yet) and the same on the
+  card. Paging: Epicor and plain JSON are paged with `$top=500&$skip=n` until
+  a page is empty or partial (a page at a round hundred is followed by
+  another request, because a server may cap pages at 100; a repeated first
+  row stops an endpoint that ignores `$skip`; a path with its own `$top` is
+  left alone); SAP follows `d.__next` or `@odata.nextLink`; 5000 rows at most.
+  A 401 that mentions an API key says "it wants an API key as well" (Epicor
+  REST v2 wants the user, its password AND a key; the form says so now).
+  `draftLookups` (`POST /api/admin/connections/:slug/:mod/:name/draft`, admin,
+  the company's propose model, spend recorded as `erp_draft`, record kind
+  `connection_drafted`) has the model write what IT needs to build each
+  lookup, wide on purpose, with a suggested ERP object name (`SOS_...`), the
+  path, a field map, the extra fields it included and why, and what it could
+  not know about this installation; for Epicor the definition is one
+  read-only SELECT for BAQ Designer's SQL import (Kinetic 2024.2 and later; no
+  CROSS APPLY, no OPENJSON). Nothing touches the ERP: a person there builds
+  it and the Test proves it. "Use its path and field map" fills the form.
+  A second stand-in ERP, Epicor shaped, answers at
+  `/erp-demo/epicor/BaqSvc/SOS_<anything>/Data` (1230 jobs, `Table_Field`
+  columns, 100 rows a page at most, wants `x-api-key` and Basic auth, BAQ
+  parameter `JobNum`). Units in `scripts/test-connections.js`.
 - **Loop health** (2026-09-19, `src/health.js`, `GET /api/admin/health?days=`,
   the top card on /admin, build order item 4). The platform's own numbers,
   per company and across the fleet, for Brendan (the manager's board shows

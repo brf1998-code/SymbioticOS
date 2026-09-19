@@ -110,6 +110,8 @@ function card(m, c) {
         <br>${s.base_url ? `System: ${esc({ sap_odata: "SAP (OData)", epicor_baq: "Epicor (BAQ)", json: "JSON API" }[s.flavor])} at <code>${esc(s.base_url)}</code>, login ${c.has_login ? "entered" : "<span class='warn'>not entered</span>"}, answers kept ${s.freshness_s >= 60 ? Math.round(s.freshness_s / 60) + " min" : s.freshness_s + " s"}.` : "<span class='warn'>Where the system is has not been entered yet.</span>"}
         ${c.detail.last_fetched_at ? ` Last read ${when(c.detail.last_fetched_at)}.` : ""}
         ${c.last_error ? `<br><span class="bad">Last trouble: ${esc(c.last_error)}</span>` : ""}</div>
+      ${c.audit.some(a => a.available.length) ? `<div class="sub" style="margin-top:6px"><b>Fields the ERP can give</b> (a change that needs one of these needs no setup): ${c.audit.map(a => a.available.length ? `<code>${esc(a.query)}</code>: ${a.available.map(esc).join(", ")}` : "").filter(Boolean).join("<br>")}</div>` : ""}
+      ${c.audit.some(a => a.defined && a.missing.length) ? `<div class="sub" style="margin-top:6px"><span class="warn">The module reads fields the lookups do not return yet:</span> ${c.audit.filter(a => a.defined && a.missing.length).map(a => `${a.missing.map(esc).join(", ")} (lookup ${esc(a.query)})`).join("; ")}. Those show empty until the lookup in the ERP is widened.</div>` : ""}
       ${lt.length ? `<div class="sub" style="margin-top:6px"><b>Last test</b> (${when(c.detail.last_tested_at)}): ${lt.map(r => `${esc(r.query)}: ${r.ok ? `<span class="ok">${r.rows} rows</span>${r.empty_fields.length ? ` <span class="warn">(${r.empty_fields.join(", ")} came back empty: check the field names)</span>` : ""}` : `<span class="bad">${esc(r.error)}</span>`}`).join("; ")}</div>` : ""}
       <div style="margin-top:6px"><button class="go" onclick="testErp('${m.module}','${c.name}')">Test the lookups</button> <a href="/api/c/${SLUG}/connections/${m.module}/${c.name}/it-note.txt" download><button class="quiet">Download the note for IT</button></a></div>
       <div id="t-${id}"></div>
@@ -126,22 +128,67 @@ function card(m, c) {
 function adminErp(m, c) {
   const id = `${m.module}-${c.name}`; const s = c.settings;
   return `<div class="admin"><b>Admin setup</b> <span class="sub">(only an admin sees this; the login never comes back out)</span>
-    <label>System</label><select id="e-flavor-${id}"><option value="sap_odata" ${s.flavor === "sap_odata" ? "selected" : ""}>SAP (OData through Gateway or S/4HANA)</option><option value="epicor_baq" ${s.flavor === "epicor_baq" ? "selected" : ""}>Epicor Kinetic (BAQ REST)</option><option value="json" ${s.flavor === "json" ? "selected" : ""}>Any read-only JSON endpoint</option></select>
-    <label>Base URL (the service root; each lookup's path is added to it)</label><input id="e-url-${id}" value="${esc(s.base_url)}" placeholder="https://sap.example.com/sap/opu/odata/sap/ZSTOCK_SRV/">
+    <label>System</label><select id="e-flavor-${id}"><option value="sap_odata" ${s.flavor === "sap_odata" ? "selected" : ""}>SAP (OData through Gateway or S/4HANA)</option><option value="epicor_baq" ${s.flavor === "epicor_baq" ? "selected" : ""}>Epicor Kinetic (REST v2: a BAQ, or a business object service)</option><option value="json" ${s.flavor === "json" ? "selected" : ""}>Any read-only JSON endpoint</option></select>
+    <label>Base URL (the service root; each lookup's path is added to it)</label><input id="e-url-${id}" value="${esc(s.base_url)}" placeholder="${s.flavor === "epicor_baq" ? "https://server/instance/api/v2/odata/COMPANY/" : "https://sap.example.com/sap/opu/odata/sap/ZSTOCK_SRV/"}">
     <label>Transport</label><select id="e-tr-${id}"><option value="direct" ${s.transport === "direct" ? "selected" : ""}>direct: the platform calls the system over HTTPS</option><option value="bridge" ${s.transport === "bridge" ? "selected" : ""}>bridge: a plant-side program carries the calls (not available yet)</option></select>
     <label>Answers are kept for (seconds)</label><input id="e-fresh-${id}" type="number" min="5" value="${s.freshness_s}">
     <label>SAP client (SAP only, optional)</label><input id="e-client-${id}" value="${esc(s.sap_client)}" placeholder="100">
     <label><input type="checkbox" id="e-tls-${id}" ${s.verify_tls ? "checked" : ""} style="width:auto"> Check the system's certificate (untick only for a self-signed on-prem certificate)</label>
-    <label>Login: user and password, or an API key (leave blank to keep what is entered)</label>
-    <input id="e-user-${id}" placeholder="technical user" autocomplete="off" style="max-width:300px"> <input id="e-pw-${id}" type="password" placeholder="password" autocomplete="new-password" style="max-width:300px"> <input id="e-key-${id}" placeholder="API key (instead of a password)" autocomplete="off" style="max-width:300px">
+    <label>Login (leave blank to keep what is entered). Epicor REST v2 wants all three: the user, its password AND an API key. SAP wants the user and password. A plain JSON endpoint usually wants only a key.</label>
+    <input id="e-user-${id}" placeholder="technical user" autocomplete="off" style="max-width:300px"> <input id="e-pw-${id}" type="password" placeholder="password" autocomplete="new-password" style="max-width:300px"> <input id="e-key-${id}" placeholder="API key" autocomplete="off" style="max-width:300px">
     ${c.queries.map(qq => { const d = qq.definition || { path: "", fields: {}, test_params: {} }; return `<div class="q"><b>${esc(qq.name)}</b> <span class="sub">${esc(qq.about || "")}</span>
-      <label>Path after the base URL, with {param} for each of: ${qq.params.length ? qq.params.map(p => "{" + p + "}").join(", ") : "none"}</label><input id="e-path-${id}-${qq.name}" value="${esc(d.path)}" placeholder="${s.flavor === "epicor_baq" ? "BaqSvc/StockByPart/?PartNum={part_no}" : "StockSet?$filter=Plant eq '1000'"}">
-      <label>The system's field behind each of the module's fields (dotted paths allowed)</label>
-      ${qq.fields.map(f => `<div style="margin-top:3px"><code style="display:inline-block;min-width:120px">${esc(f)}</code> <input id="e-f-${id}-${qq.name}-${f}" value="${esc(d.fields[f] || "")}" placeholder="e.g. ${s.flavor === "sap_odata" ? "Material" : "PartNum"}" style="max-width:300px"></div>`).join("")}
+      <label>Path after the base URL, with {param} for each of: ${qq.params.length ? qq.params.map(p => "{" + p + "}").join(", ") : "none"}</label><input id="e-path-${id}-${qq.name}" value="${esc(d.path)}" placeholder="${s.flavor === "epicor_baq" ? "BaqSvc/SOS_Jobs/Data?JobNum={job_num}" : "StockSet?$filter=Plant eq '1000'"}">
+      <label>The system's field behind each of the module's fields. Leave blank when the catalog below or the column's own name already matches (the last test says how each one resolved).</label>
+      ${qq.fields.map(f => { const how = ((c.audit.find(a => a.query === qq.name) || {}).how || {})[f]; return `<div style="margin-top:3px"><code style="display:inline-block;min-width:120px">${esc(f)}</code> <input id="e-f-${id}-${qq.name}-${f}" value="${esc(d.fields[f] || "")}" placeholder="e.g. ${s.flavor === "sap_odata" ? "Material" : "JobHead_JobNum"}" style="max-width:300px"> <span class="${how === "missing" ? "warn" : "sub"}">${how === "mapped" ? "mapped by hand" : how === "catalog" ? "from the catalog" : how === "matched" ? "matched by name" : how === "missing" ? "not found" : ""}</span></div>`; }).join("")}
+      ${catalogHtml(m, c, qq, (c.columns || {})[qq.name] || [], d.catalog || {})}
       ${qq.params.length ? `<label>Values to test with (${qq.params.join(", ")})</label>${qq.params.map(p => `<input id="e-tp-${id}-${qq.name}-${p}" value="${esc(d.test_params[p] || "")}" placeholder="${p}" style="max-width:300px;margin-right:6px">`).join("")}` : ""}
     </div>`; }).join("")}
     <button class="primary" onclick="saveErp('${m.module}','${c.name}')">Save setup</button> <button class="quiet" onclick="saveErp('${m.module}','${c.name}',true)">Clear the login</button>
-    <div id="e-note-${id}" class="sub"></div></div>`;
+    <button class="quiet" onclick="draftErp('${m.module}','${c.name}')" title="The model writes what the person who designs queries in the ERP needs to build each lookup, wide on purpose. Nothing touches the ERP.">Draft what IT needs to build</button>
+    <div id="e-note-${id}" class="sub"></div>
+    <div id="e-draft-${id}">${draftsHtml(m, c)}</div></div>`;
+}
+// The catalog: every column the last test saw, under a plain name the agents
+// and the module use. Publish once; after that a new field needs no setup.
+function catalogHtml(m, c, qq, columns, catalog) {
+  const id = `${m.module}-${c.name}`;
+  if (!columns.length) return `<div class="sub" style="margin-top:6px">Test the lookup to see every column it returns; then publish them so a later change can use any of them without setup.</div>`;
+  const bySource = {}; for (const [plain, cv] of Object.entries(catalog)) bySource[cv.source] = { plain, ...cv };
+  return `<details style="margin-top:8px" ${Object.keys(catalog).length ? "" : "open"}><summary class="sub" style="cursor:pointer"><b>Catalog</b>: the lookup returns ${columns.length} columns, ${Object.keys(catalog).length} published</summary>
+    <div class="tw"><table><tr><th>Column in the ERP</th><th>Type</th><th>Sample</th><th>Plain name</th><th>What it is (for the agents)</th></tr>
+    ${columns.map((col, i) => { const p = bySource[col.source]; return `<tr><td><code>${esc(col.source)}</code></td><td>${esc(col.type)}</td><td class="sub">${esc(col.sample == null ? "" : col.sample)}</td><td><input id="e-cn-${id}-${qq.name}-${i}" data-source="${esc(col.source)}" data-type="${esc(col.type)}" value="${esc(p ? p.plain : "")}" placeholder="not published" style="width:170px"></td><td><input id="e-ca-${id}-${qq.name}-${i}" value="${esc(p ? p.about : "")}" style="width:260px"></td></tr>`; }).join("")}</table></div>
+    <button class="quiet" onclick="publishAll('${m.module}','${c.name}','${qq.name}')">Publish every column under a plain name</button> <span class="sub">Then edit names and notes here and press Save setup. Leave out cost, price and people's details.</span></details>`;
+}
+function draftsHtml(m, c) {
+  const d = c.drafts; if (!d || !d.lookups || !d.lookups.length) return "";
+  return `<div class="q"><b>What IT needs to build</b> <span class="sub">drafted ${when(d.at)} by ${esc(d.model)}; nothing here touched the ERP. For Epicor, paste the SQL into BAQ Designer's SQL import (Kinetic 2024.2 and later) or build the BAQ from it by hand.</span>
+    ${d.lookups.map((l, i) => `<div style="margin-top:8px"><b>${esc(l.query)}</b>: call it <code>${esc(l.erp_object_name)}</code>. ${esc(l.purpose)}
+      <pre class="note" id="dr-${m.module}-${c.name}-${i}">${esc(l.definition)}</pre>
+      <button class="quiet" style="margin-top:4px" onclick="copyText('dr-${m.module}-${c.name}-${i}')">Copy</button> <button class="quiet" style="margin-top:4px" onclick="useDraft('${m.module}','${c.name}',${i})">Use its path and field map</button>
+      <div class="sub">Path: <code>${esc(l.path)}</code>${(l.parameters || []).length ? ` · parameters: ${l.parameters.map(esc).join(", ")}` : ""}</div>
+      ${(l.extra_fields || []).length ? `<div class="sub">Included for later: ${l.extra_fields.map(x => `<code>${esc(x.column)}</code> (${esc(x.why)})`).join(", ")}</div>` : ""}
+      ${(l.unsure || []).length ? `<div class="sub"><span class="warn">To confirm on their system:</span> ${l.unsure.map(esc).join("; ")}</div>` : ""}</div>`).join("")}</div>`;
+}
+function copyText(elId) { const t = document.getElementById(elId).textContent; (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).catch(() => { const r = document.createRange(); r.selectNodeContents(document.getElementById(elId)); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }); }
+async function adminPost(mod, name, what, body) {
+  const r = await fetch(`/api/admin/connections/${SLUG}/${mod}/${name}/${what}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || `failed (${r.status})`); return j;
+}
+async function publishAll(mod, name, query) {
+  const note = document.getElementById(`e-note-${mod}-${name}`);
+  try { await adminPost(mod, name, "erp", { publish: { query, mode: "all" } }); note.textContent = "Published. Edit the names and notes, then Save setup."; load(); }
+  catch (e) { note.textContent = e.message; }
+}
+async function draftErp(mod, name) {
+  const note = document.getElementById(`e-note-${mod}-${name}`); note.textContent = "Drafting (a model call, usually under a minute)...";
+  try { const r = await adminPost(mod, name, "draft", {}); note.textContent = `Drafted ${r.lookups.length} lookup(s)${r.cost_usd ? ` for $${r.cost_usd.toFixed(2)}` : ""}.`; load(); }
+  catch (e) { note.textContent = e.message; }
+}
+function useDraft(mod, name, i) {
+  const c = D.modules.find(x => x.module === mod).connections.find(x => x.name === name); const l = c.drafts.lookups[i]; const id = `${mod}-${name}`;
+  const p = document.getElementById(`e-path-${id}-${l.query}`); if (p) p.value = l.path || "";
+  for (const [f, src] of Object.entries(l.field_map || {})) { const el = document.getElementById(`e-f-${id}-${l.query}-${f}`); if (el) el.value = src; }
+  document.getElementById(`e-note-${id}`).textContent = "Filled in from the draft. Check it against what IT actually built, then Save setup and Test.";
 }
 async function saveErp(mod, name, clear) {
   const id = `${mod}-${name}`; const c = D.modules.find(x => x.module === mod).connections.find(x => x.name === name);
@@ -151,6 +198,8 @@ async function saveErp(mod, name, clear) {
     const fields = {}; for (const f of qq.fields) fields[f] = g(`e-f-${id}-${qq.name}-${f}`);
     const test_params = {}; for (const p of qq.params) test_params[p] = g(`e-tp-${id}-${qq.name}-${p}`);
     queries[qq.name] = { path: g(`e-path-${id}-${qq.name}`), fields, test_params };
+    const names = [...document.querySelectorAll(`[id^="e-cn-${id}-${qq.name}-"]`)];
+    if (names.length) { const catalog = {}; names.forEach((el, i) => { const plain = el.value.trim(); if (plain) catalog[plain] = { source: el.dataset.source, type: el.dataset.type, about: g(`e-ca-${id}-${qq.name}-${i}`) }; }); queries[qq.name].catalog = catalog; }
   }
   const body = { settings: { flavor: g(`e-flavor-${id}`), base_url: g(`e-url-${id}`), transport: g(`e-tr-${id}`), freshness_s: Number(g(`e-fresh-${id}`)), sap_client: g(`e-client-${id}`), verify_tls: document.getElementById(`e-tls-${id}`).checked, queries } };
   if (clear) body.clear_secrets = true;

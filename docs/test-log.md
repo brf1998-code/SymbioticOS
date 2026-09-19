@@ -48,6 +48,10 @@ S0-98 | 2026-09-19 | PASS | sandbox: dead address with cache cleared gave a plai
 S0-99 | 2026-09-19 | PASS | sandbox: OnHandQty came back as an empty field with the other three fine; a path with {item} on a query with no params was refused with the param named; an OData filter written into the path reached the ERP (1 row for clip) | pilot | n/a
 S0-100 | 2026-09-19 | PASS | sandbox: the note names the access, the lookup and its four fields, the source, the cache time, how the login is kept; no dashes | pilot | n/a
 S3-12 | 2026-09-19 | PASS | gate unit: base_url and user in a module declaration refused with the key named; no fields refused; no queries refused; a proper declaration passes (also in the connections unit cases, 38 of 38) | pilot | n/a
+S0-101 | 2026-09-19 | PASS | sandbox against the Epicor-shaped stand-in: user without key refused with "it wants an API key as well"; with both, 1230 of 1230 rows through a 100-row page cap; own $top left alone (25); BAQ parameter reached the ERP (1 row) | pilot | n/a
+S0-102 | 2026-09-19 | PASS | sandbox: 11 columns published under plain names (job_num, part_description, qty_left, req_due_date as a date); renamed entries resolved "catalog" and the module's 1230 rows carried them; a path edit kept the catalog; publish before a test refused (24 of 24 checks in the catalog suite; connections unit 47 of 47) | pilot | n/a
+S0-103 | 2026-09-19 | PASS | sandbox: ERP-FIELDS.md present from first mount, listed the published fields with types and the how-to, no plant values, no dashes; a fake-agent build's run log carried the ERP fields line | pilot | n/a
+S0-104 | 2026-09-19 | OPEN | fake mode only so far: the canned draft named SOS_parts and the BaqSvc path, stored on the card, on the record, counted as erp_draft; the live Fable draft is unread until the first real run | pilot | live check open |
 
 ## Stage 1
 
