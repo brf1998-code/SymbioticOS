@@ -26,6 +26,7 @@ const crypto = require("crypto");
 const express = require("express");
 const { q, scopedDb, logEvent, upsertDoc } = require("./db");
 const migrate = require("./migrate");
+const gate = require("./modulegate");
 const { liveSchema, stagingSchema, applyMigrations, rebuildStagingClone } = migrate;
 
 const REPO_MODULES_DIR = process.env.REPO_MODULES_DIR || path.join(__dirname, "..", "modules");
@@ -358,6 +359,12 @@ async function loadAll() {
   }
   for (const row of (await q("SELECT * FROM platform.modules ORDER BY company, name")).rows) {
     if (row.live_version) {
+      // Never refuse what is already on the floor (that would take a module
+      // down on a platform deploy); say so loudly instead.
+      try {
+        const verdict = gate.check({ files: (await versionFiles(row.company, row.name, row.live_version)) || {}, lane: null });
+        if (!verdict.ok) console.warn(`[gate] ${row.company}/${row.name} v${row.live_version} is on the floor with code a new build would be refused for: ${gate.oneLine(verdict)}`);
+      } catch (e) { console.error(`[gate] could not check ${row.company}/${row.name}:`, e.message); }
       try { await mountLive(row.company, row.name, row.live_version); }
       catch (e) { console.error(`live mount failed for ${row.company}/${row.name} v${row.live_version}:`, e.message); }
     }
@@ -396,8 +403,42 @@ function unmountCompany(company) {
   fs.rmSync(path.join(MODULES_DIR, company), { recursive: true, force: true });
 }
 
+// ---- the gate at the door ---------------------------------------------------
+// Every path that puts a version's code into this process for the first time
+// (stage, deploy, switch) asks the module gate first (src/modulegate.js). The
+// pipeline runs the gate itself, with the lane rules, right after a build; this
+// is the backstop for every other way in: the Versions panel can switch to
+// any stored version, including a draft the gate refused and a retry left
+// behind. A version that has been on the floor before is let through, so a
+// rollback is never refused: whatever it carries was already running.
+// Anything else is checked against the version on the floor, which
+// grandfathers the findings it inherited.
+async function wasEverLive(company, mod, version) {
+  const row = await getModule(company, mod);
+  if (row && Number(row.live_version) === Number(version)) return true;
+  const r = await q(
+    `SELECT 1 FROM platform.events WHERE ref=$1 AND (
+        (kind IN ('version_deployed','version_switched') AND detail->>'to' = $2)
+     OR (kind = 'module_imported' AND detail->>'version' = $2)) LIMIT 1`, [`${company}/${mod}`, String(version)]);
+  return r.rows.length > 0;
+}
+async function assertGate(company, mod, version) {
+  const files = await versionFiles(company, mod, version);
+  if (!files) return;
+  if (await wasEverLive(company, mod, version)) return;
+  const row = await getModule(company, mod);
+  const fromFiles = row && row.live_version && Number(row.live_version) !== Number(version) ? await versionFiles(company, mod, row.live_version) : null;
+  const verdict = gate.check({ files, fromFiles, lane: null });
+  if (verdict.ok) return;
+  await logEvent("gate_refused", `${company}/${mod}`, { version: Number(version), at: "registry", rules: verdict.violations.map((f) => f.rule) });
+  const e = new Error(`the platform's own checks refuse version ${version}: ${gate.oneLine(verdict)}`);
+  e.gate = verdict;
+  throw e;
+}
+
 async function stageVersion(company, mod, version) {
   await persistVersion(company, mod, version);
+  await assertGate(company, mod, version);
   await rebuildStagingClone(company, mod);
   await mountStaged(company, mod, version);
   await q("UPDATE platform.modules SET staged_version=$3 WHERE company=$1 AND name=$2", [company, mod, version]);
@@ -412,6 +453,7 @@ async function unstage(company, mod) {
 }
 
 async function deployVersion(company, mod, version) {
+  await assertGate(company, mod, version);
   const row = await getModule(company, mod);
   const snap = await migrate.snapshotSchema(company, mod, row.live_version);
   await migrate.recordSnapshot(company, mod, row.live_version, snap);
@@ -461,6 +503,7 @@ async function goToVersion(company, mod, version, { restoreData = false } = {}) 
   version = Number(version);
   if (!(await versionFiles(company, mod, version))) throw new Error(`version ${version} does not exist`);
   if (version === row.live_version) throw new Error(`version ${version} is already live`);
+  await assertGate(company, mod, version);
   let target = null;
   if (restoreData) {
     target = (await q(

@@ -113,8 +113,25 @@ async function guidanceFor(company, moduleName) {
 function fakeMode() { return process.env.SOS_FAKE_AGENT === "1"; }
 function haveKey() { return Boolean(process.env.ANTHROPIC_API_KEY) || fakeMode(); }
 
+// GATECHECK in the feedback (or in a new module's name) makes the fake agent's
+// first attempt trip the module gate (src/modulegate.js): a line that reads the
+// server's settings in a functionality or module build, a harmless line in
+// routes.js in a UI build (which may not touch that file at all). The fix
+// round takes the line out again, so the whole branch walks at zero spend.
+function fakeGateLine(dir, prompt, leak) {
+  const routesPath = path.join(dir, "routes.js");
+  if (!fs.existsSync(routesPath)) return;
+  const before = fs.readFileSync(routesPath, "utf8");
+  let routes = before.replace(/\n\/\/ FAKE-GATE\n[^\n]*\n/g, "");   // back to the file exactly as it was
+  if (/GATECHECK/.test(prompt) && !/independent reviewer looked at your previous attempt|own checks refused the previous attempt/.test(prompt)) {
+    routes += leak ? "\n// FAKE-GATE\nconst fakeGateLeak = process.env.DATABASE_URL;\n" : "\n// FAKE-GATE\nconst fakeGateTouched = true;\n";
+  }
+  if (routes !== before) fs.writeFileSync(routesPath, routes);
+}
+
 function fakeRunAgent({ dir, prompt }) {
   if (/^NEW MODULE BUILD/m.test(prompt)) {
+    fakeGateLine(dir, prompt, true);
     // the skeleton the platform wrote is already a working module; the fake
     // agent only proves the loop by stamping the first page
     const pages = path.join(dir, "pages");
@@ -129,7 +146,8 @@ function fakeRunAgent({ dir, prompt }) {
   const files = target && fs.existsSync(path.join(dir, target)) ? [path.join(dir, target)]
     : fs.existsSync(pages) ? fs.readdirSync(pages).map((f) => path.join(pages, f)) : [];
   // FAILCHECK in the feedback makes the first attempt fail the fake cross-check; a fix round clears it
-  const bad = /FAILCHECK/.test(prompt) && !/independent reviewer looked at your previous attempt/.test(prompt);
+  const bad = /FAILCHECK/.test(prompt) && !/independent reviewer looked at your previous attempt|own checks refused the previous attempt/.test(prompt);
+  fakeGateLine(dir, prompt, /functionality-class/i.test(prompt));
   const ver = (/data-changed="(v\d+)"/.exec(prompt) || [])[1] || "v0";
   for (const p of files) {
     let html = fs.readFileSync(p, "utf8").replace(/\n<!-- FAKE-BAD -->\n/g, "");

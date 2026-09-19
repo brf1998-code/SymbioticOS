@@ -13,6 +13,7 @@
 const { q, logEvent } = require("./db");
 const { runAgent, runStructured, haveKey, assertUnderCap, modelFor, buildModelFor, guidanceFor, runCapUsd, MODELS, AGENT_EFFORT } = require("./agent");
 const registry = require("./registry");
+const gate = require("./modulegate");
 
 const CROSS_CHECK_SCHEMA = {
   type: "object",
@@ -209,6 +210,15 @@ async function advance(runId) {
         // fix round: keep working in the same draft version
         draft = { version: run.to_version, dir: await registry.materialize(company, mod, run.to_version) };
         await log(runId, { step: "build", note: `fix round ${ev0.fix_round}: agent revises v${draft.version} against the reviewer's findings` });
+        // After a stop by the module gate, the platform puts back the files a
+        // lane rule says must not change (a new agent session cannot know what
+        // they looked like), and the agent gets the gate's own wording.
+        if (ev0.gate && ev0.gate.ok === false) {
+          const fromFiles0 = run.from_version ? await registry.versionFiles(company, mod, run.from_version) : null;
+          const restored = gate.restoreLaneFiles(draft.dir, fromFiles0, ev0.gate);
+          if (restored.length) await log(runId, { step: "build", note: `the platform put back: ${restored.join(", ")}` });
+          ev0.findings = gate.forAgent(ev0.gate, restored);
+        }
       } else {
         draft = await registry.createDraftVersion(company, mod);
         await setRun(runId, { to_version: draft.version });
@@ -217,7 +227,9 @@ async function advance(runId) {
       const nChanges = (run.proposal_ids || [run.proposal_id]).length;
       const capUsd = runCapUsd(nChanges);
       const req = (run.requirement ? `\n\nConfirmed requirement:\n${run.requirement}` : "")
-        + (ev0.fix_round && ev0.findings ? `\n\nAn independent reviewer looked at your previous attempt in this directory and found these problems. Fix exactly these, keep everything else as it is:\n${ev0.findings}` : "");
+        + (ev0.fix_round && ev0.findings
+          ? (ev0.gate && ev0.gate.ok === false ? `\n\n${ev0.findings}` : `\n\nAn independent reviewer looked at your previous attempt in this directory and found these problems. Fix exactly these, keep everything else as it is:\n${ev0.findings}`)
+          : "");
       const guidance = await guidanceFor(company, mod);
       const { model, substituted } = await buildModelFor(company, run.model);
       if (substituted) await log(runId, { step: "build", note: `${substituted} cannot run as the build agent; building with ${model} instead` });
@@ -239,7 +251,7 @@ ${req}
 
 Rules:
 - Each change names a Target file, which is the screen the feedback came from. Make the change in that file. Touch another file only if the change cannot work otherwise, and say so in your summary.
-- ${run.lane === "ui" ? "This is a UI-class change. Do NOT modify routes.js logic, module.json smoke list, or migrations. Touch pages/ and presentation only." : "This is a functionality-class change. If the data model must change, add a NEW migrations/NNN.sql file (additive only: CREATE TABLE / ALTER TABLE ADD COLUMN / CREATE INDEX / INSERT seed rows; bare table names, no schema prefixes). Never edit an existing migration file."}
+- ${run.lane === "ui" ? "This is a UI-class change. Do NOT modify routes.js, the module.json smoke list or entry, or migrations. Touch pages/ and presentation only. The platform compares the files after you finish and stops a UI-class build that changed anything else; if the change cannot work without server logic, leave the server files alone and say so in your summary." : "This is a functionality-class change. If the data model must change, add a NEW migrations/NNN.sql file (additive only: CREATE TABLE / ALTER TABLE ADD COLUMN / CREATE INDEX / INSERT seed rows; bare table names, no schema prefixes). Never edit an existing migration file."}
 ${isBatch ? "- Implement every change in the batch. Keep them independent where you can so one can be understood without the others.\n" : ""}- Keep the module's existing style and structure. Plain HTML/JS, no frameworks.
 - Make the smallest change that removes the reported friction.
 - Mark what you touched so the preview can highlight it: put data-changed="v${draft.version}" on every HTML element you add or visibly change (the element itself, not its parent). One attribute per element, nothing else; it costs nothing at runtime and the preview outlines those elements.
@@ -259,6 +271,25 @@ ${isBatch ? "- Implement every change in the batch. Keep them independent where 
       await log(runId, { step: "build", note: swapped
         ? `agent build complete, but the agent reported running on ${seen.join(", ")} instead of ${model}`
         : `agent build complete (${model}, effort ${AGENT_EFFORT}${seen.length ? ", confirmed by the agent" : ""})` });
+      // The module gate (src/modulegate.js): no tokens, and BEFORE staging,
+      // because staging loads the draft's routes.js into this process. A UI
+      // build that touched anything but the screens, server code that reaches
+      // past its own tables, an edited migration: all stop here, filed as a
+      // failed check by "platform checks" so fix, retry and cancel apply
+      // (override does not). The draft's text is kept for the fix round.
+      {
+        const fromFiles = run.from_version ? await registry.versionFiles(company, mod, run.from_version) : null;
+        const verdict = gate.checkDir(draft.dir, { fromFiles, lane: run.lane });
+        const c2 = await getRun(runId);
+        if (!verdict.ok) {
+          await registry.persistVersion(company, mod, draft.version);
+          await setRun(runId, { step: "cross_check", evidence: { ...c2.evidence, gate: gate.record(verdict), cross_check: { verdict: "fail", model: "platform checks", summary: gate.summarize(verdict), findings: gate.asFindings(verdict) } } });
+          await logEvent("gate_refused", runId, { company, module: mod, version: draft.version, lane: run.lane, rules: verdict.violations.map((f) => f.rule) });
+          throw new Error(`platform checks failed: ${gate.oneLine(verdict)}`);
+        }
+        await setRun(runId, { evidence: { ...c2.evidence, gate: gate.record(verdict) } });
+        await log(runId, { step: "build", note: `platform checks passed: module code and lane rules${verdict.inherited.length ? ` (${verdict.inherited.length} older finding(s) already on the floor, not from this change)` : ""}` });
+      }
       // Plain-language title and summary for the version list, the Done card
       // and the feedback outcome. Cheap model; the agent's own final text is
       // often chatty despite the instruction.
@@ -522,6 +553,10 @@ async function override(runId) {
   const run = await getRun(runId);
   if (run.status !== "failed" || run.step !== "cross_check" || !run.to_version) throw new Error("only a build that failed the cross-check can be overridden");
   const ev = run.evidence || {};
+  // An override is a manager disagreeing with a reviewer's judgment. The
+  // platform's own checks are not a judgment: the draft was never staged, and
+  // its code has not been allowed into this process. Fix, retry or cancel.
+  if (ev.cross_check && ev.cross_check.model === "platform checks") throw new Error("the platform's own checks cannot be overridden; send the findings back to the agent, retry, or cancel");
   await setRun(runId, { step: "test_run", status: "running", evidence: { ...ev, cross_check: { ...(ev.cross_check || {}), overridden: true } } });
   await log(runId, { step: "cross_check", note: "manager overrode the failed cross-check; findings stay on the record" });
   advance(runId).catch((e) => failRun(runId, e));

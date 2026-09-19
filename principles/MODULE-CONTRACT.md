@@ -66,6 +66,15 @@ module.exports = function makeRouter(ctx) {
   No network calls of any kind from routes.js: outside systems are reached
   only through services the platform lends on `ctx` (a first version usually
   has none; the design's Connections section says what a person has to set up).
+- The platform reads every `.js` file before any of it runs and stops the
+  build on: a `require` of anything but your own files (`require("./name.js")`);
+  `process`, `global`, `globalThis`, `eval`, `new Function`, `import`, `fetch`;
+  `res.sendFile`, `res.download`, `res.render`, `express.static`;
+  `.constructor` or `__proto__`; a query that names `platform.`, another
+  module's schema, `information_schema`, a `pg_` server function,
+  `search_path`, `SET ROLE`, `COPY` or `GRANT`; and `CREATE`, `ALTER`, `DROP`
+  or `TRUNCATE` at run time (tables are made in migrations, never in
+  routes.js). A module is plain files: no `package.json`, no `node_modules`.
 
 ## migrations
 

@@ -1,4 +1,4 @@
-# Symbiotic OS — Workspace Guide (current as of 2026-09-17, evening)
+# Symbiotic OS — Workspace Guide (current as of 2026-09-18)
 
 **This file is the single source of truth for how this repo and the live
 instance are worked on.** Repo: `brf1998-code/SymbioticOS` (private). Live:
@@ -227,6 +227,62 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   the model's mood. The reviewer sees the lane, the target files and the
   files touched; the diff limit is `SOS_CROSS_CHECK_DIFF_CHARS` (90000) and
   a cut diff is declared as such. PRINCIPLES.md and GUARDRAILS.md ride along.
+- **Module gate** (2026-09-18, `src/modulegate.js`, item 1 of the product
+  review's build order). Found in the review: `registry.buildRouter` and
+  `modulebuild.validateModule` load a module's routes.js into the platform's
+  own process, so agent-written code ran with `process.env`, the disk, the
+  network and every schema in reach (a probe module passed the platform
+  checks while writing DATABASE_URL, SESSION_SECRET and the API key to a
+  file), and the UI lane's "do not touch routes.js" was a line in a prompt
+  with no reviewer behind it. The gate is a no-token check of a version's
+  FILES that runs before anything loads them. Server files (every `.js` in
+  the module, read by a small scanner that blanks comments, strings,
+  templates and regex literals): only `require("./own-file.js")`; no
+  `process`, `global`, `globalThis`, `eval`, `Function`, `import`, `fetch`
+  and friends; no `sendFile` / `static` / `download` / `render`; no
+  `.constructor` / `__proto__`; no SQL naming `platform.`, another module's
+  schema, `information_schema`, `pg_` server functions, `search_path`,
+  `SET ROLE`, `COPY`, `GRANT`, or CREATE / ALTER / DROP / TRUNCATE at run
+  time. Layout: no package.json, node_modules, native or wasm files, links;
+  `entry` stays a .js file inside the module. Lane: in a UI build only
+  `pages/`, `tour.json`, `reference.md` and the labels, title and description
+  of module.json may differ from the version the build started from; in any
+  lane an existing migration is never edited or removed. A finding already
+  present word for word in the from-version is "inherited" and does not stop
+  the build (`evidence.gate.inherited`). Where it runs: `pipeline.advance`
+  right after the agent finishes and BEFORE `stageVersion` (staging executes
+  the code); `modulebuild.advance` before `validateModule`, and inside
+  `validateModule` itself; and as a backstop in `registry.stageVersion`,
+  `deployVersion` and `goToVersion` (`assertGate`), because the Versions
+  panel can switch to any stored version, including a refused draft that a
+  retry left behind. A version that was ever live (events
+  `version_deployed` / `version_switched` / `module_imported`) is let
+  through, so a rollback is never refused, and boot never refuses what is on
+  the floor: it logs `[gate] ... is on the floor with code a new build would
+  be refused for` instead. A stop is filed like the other platform checks
+  (`step cross_check`, `cross_check.model = "platform checks"`, plus
+  `evidence.gate`), the draft's text is persisted but never staged, the
+  board says "The platform's own checks stopped it" with fix, retry and
+  cancel and NO override or preview link (`pipeline.override` refuses
+  platform checks), and the checks log counts it as "module gate". Fix
+  round: the platform itself puts back the files a lane rule protects
+  (`gate.restoreLaneFiles`, logged as "the platform put back: ..."), since a
+  new agent session cannot know what they looked like, and the agent gets
+  `gate.forAgent` wording instead of the reviewer wrapper. GUARDRAILS.md,
+  MODULE-CONTRACT.md and the UI build prompt state the rules so builders do
+  not trip them. Fake mode: GATECHECK in the feedback (or in a new module's
+  name) makes the first attempt trip the gate and the fix round clear it.
+  Tests: `node scripts/test-modulegate.js` (no database; also proves the
+  library modules and the skeleton pass) and TEST-CAMPAIGN S0-74 to S0-80,
+  S3-03a. **It is not a security boundary**: any text check can be got
+  around. It stops the careless build and the lazily steered one until
+  module code runs in a child process per company with its own database
+  role (tenancy trade study of 2026-09-17, option C). Still open from the
+  same review, NOT covered by the gate: agent-written PAGES run in the
+  manager's browser with the manager's session, so a staged preview could
+  call the platform's own APIs (approve, deploy) as the manager; the fix is
+  a Content-Security-Policy on module pages (`connect-src` and `form-action`
+  limited to the module's own base path and the widget's endpoints).
 - **Board tiles fold** (2026-09-17): each of the four columns shows
   `TILES_PER_COLUMN` (3) tiles and a "Show the other N" button; `EXPANDED`
   keeps opened columns across the 4s reload. The header count is the total.
@@ -549,3 +605,9 @@ Passwords live only in Railway; never commit them.
   `/m/paperline`, the same files serve at `/staging/m/paperline`.
 - The manager gate is structural: nothing reaches a live module without a
   human approval. Do not add auto-deploy paths.
+- Module code reaches nothing but `ctx`. The module gate holds agent builds
+  and repo imports to the same rule. If a library module needs something new
+  (hashing, a clock, an outside system), lend it on `ctx` in
+  `registry.moduleServices`; never `require` it inside the module. Run
+  `node scripts/test-modulegate.js` before pushing a change to `modules/` or
+  to the gate.

@@ -26,6 +26,7 @@ function reasonFor(run) {
   if (run.status === "cancelled") return reviewerFailed ? "cancelled after a reviewer stop" : /aborted/.test(JSON.stringify(run.log || [])) ? "aborted" : "cancelled";
   if (run.status === "running" || run.status === "queued") return "in flight";
   if (run.status === "waiting") return "waiting on the manager";
+  if (cc.verdict === "fail" && cc.model === "platform checks" && ev.gate && ev.gate.ok === false) return "module gate";   // src/modulegate.js: server code or lane rules, before anything ran
   if (cc.verdict === "fail" && cc.model === "platform checks") return "platform checks";
   if (cc.verdict === "fail") return "reviewer failed it";
   if (/migration .* (rejected|failed)/i.test(last) || /migration/i.test(last) && /reject/i.test(last)) return "migration rejected";

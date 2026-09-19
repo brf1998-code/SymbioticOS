@@ -525,15 +525,20 @@ function failedHtml(run, cancelNote) {
   const ev = run.evidence || {};
   const failedCheck = ["cross_check", "test_run", "visual_check"].includes(run.step) && run.to_version;
   const cc = ev.cross_check && ev.cross_check.verdict === "fail" ? ev.cross_check : null;
+  // A stop by the platform's own checks (the module gate, a manifest or
+  // migration problem) is not a reviewer's opinion: nothing was staged, so
+  // there is no preview to open and nothing to override.
+  const platformStop = cc && cc.model === "platform checks";
   let html = "";
-  if (cc) html += `<div class="findings"><b>Independent review (${esc(modelLabel(cc.model))}) failed it. Findings:</b>${esc(cc.summary || "")}</div>`;
+  if (platformStop) html += `<div class="findings"><b>The platform's own checks stopped it. Nothing from this build ran or reached the floor.</b>${esc(cc.summary || "")}</div>`;
+  else if (cc) html += `<div class="findings"><b>Independent review (${esc(modelLabel(cc.model))}) failed it. Findings:</b>${esc(cc.summary || "")}</div>`;
   else html += `<div class="fail-note">Stopped: ${esc(last ? last.note : "see log")}</div>`;
-  if (failedCheck) html += `<a class="demo" href="/c/${SLUG}/staging/m/${esc(run.module)}/" target="_blank">Open preview of v${run.to_version} (not live)</a><br>`;
+  if (failedCheck && !platformStop) html += `<a class="demo" href="/c/${SLUG}/staging/m/${esc(run.module)}/" target="_blank">Open preview of v${run.to_version} (not live)</a><br>`;
   if (!MGR()) return html;
   const round = ev.fix_round || 0;
   if (failedCheck) {
     if (round < (DATA.maxFixRounds || 2)) html += `<button class="go" onclick="act('/api/runs/${run.id}/fix')">Send findings back to the agent (fix round ${round + 1} of ${DATA.maxFixRounds || 2})</button>`;
-    if (cc) html += `<button class="quiet" onclick="if(confirm('Override the failed review? The change still runs the internal tests, then waits at the deploy gate. The findings stay on the record.'))act('/api/runs/${run.id}/override')">Override the review, go to the gate</button>`;
+    if (cc && !platformStop) html += `<button class="quiet" onclick="if(confirm('Override the failed review? The change still runs the internal tests, then waits at the deploy gate. The findings stay on the record.'))act('/api/runs/${run.id}/override')">Override the review, go to the gate</button>`;
   }
   html += `<button class="quiet" onclick="act('/api/runs/${run.id}/retry')">Retry from scratch</button><button class="no" onclick="if(confirm('Cancel this build? ${esc(cancelNote)}'))act('/api/runs/${run.id}/cancel')">Cancel</button>`;
   return html;

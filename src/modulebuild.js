@@ -15,6 +15,7 @@ const { q, logEvent, upsertDoc } = require("./db");
 const agent = require("./agent");
 const registry = require("./registry");
 const migrate = require("./migrate");
+const gate = require("./modulegate");
 const attachments = require("./attachments");
 const plain = require("./plainwords");
 const Q = require("./intake-questions");
@@ -237,7 +238,11 @@ function validateModule(dir, slug) {
     if (!v.ok) errors.push(`migrations/${f}: ${v.errors.join("; ")}`);
   }
   const entry = path.join(dir, (manifest && manifest.entry) || "routes.js");
-  if (fs.existsSync(entry)) {
+  // Loading routes.js runs it inside this process, so its text has to pass
+  // the module gate first, whoever calls this function.
+  const gated = gate.checkDir(dir, { lane: "module" });
+  if (!gated.ok) errors.push(`the module gate refuses it: ${gate.oneLine(gated)}`);
+  if (gated.ok && fs.existsSync(entry)) {
     try {
       delete require.cache[require.resolve(entry)];
       const make = require(entry);
@@ -307,7 +312,10 @@ async function advance(runId) {
       const files = await attachments.list(ev.intake_id || 0);
       const sheet = (await Promise.all(files.filter((a) => a.kind === "sheet").map((a) => attachments.get(a.id)))).find((a) => a && a.parsed && a.parsed.rows && a.parsed.rows.length);
       const rowsText = sheet ? `Starting data from "${sheet.filename}" (${sheet.parsed.row_count} rows; columns: ${sheet.parsed.headers.join(" | ")}):\n${sheet.parsed.rows.slice(0, 200).map((r) => r.join(" | ")).join("\n")}` : "No starting data was attached.";
-      const findings = ev.fix_round && ev.findings ? `\n\nAn independent reviewer looked at your previous attempt in this directory and found these problems. Fix exactly these, keep everything else as it is:\n${ev.findings}` : "";
+      if (ev.fix_round && ev.gate && ev.gate.ok === false) ev.findings = gate.forAgent(ev.gate, []);
+      const findings = ev.fix_round && ev.findings
+        ? (ev.gate && ev.gate.ok === false ? `\n\n${ev.findings}` : `\n\nAn independent reviewer looked at your previous attempt in this directory and found these problems. Fix exactly these, keep everything else as it is:\n${ev.findings}`)
+        : "";
       const ctl = new AbortController();
       P.ACTIVE.set(runId, ctl);
       let out;
@@ -353,6 +361,18 @@ Rules for this build:
       const cur = await P.getRun(runId);
       await P.setRun(runId, { evidence: { ...cur.evidence, build_summary: out.text, docs: guidance.names.concat(["platform: MODULE-CONTRACT.md", "platform: PLAIN-WORDS.md"]), model: run.model, models_seen: seen, effort: agent.AGENT_EFFORT, cap_usd: 0 } });
       await P.log(runId, { step: "build", note: swapped ? `agent build complete, but the agent reported running on ${seen.join(", ")} instead of ${run.model}` : `agent build complete (${run.model}, effort ${agent.AGENT_EFFORT}${seen.length ? ", confirmed by the agent" : ""})` });
+      // The module gate first (src/modulegate.js): validateModule below loads
+      // routes.js into this process to see that it returns a router, so the
+      // text has to pass the gate before that happens.
+      const verdict = gate.checkDir(dir, { lane: "module" });
+      if (!verdict.ok) {
+        await registry.persistVersion(company, slug, 1).catch(() => {});
+        const c1 = await P.getRun(runId);
+        await P.setRun(runId, { step: "cross_check", evidence: { ...c1.evidence, gate: gate.record(verdict), cross_check: { verdict: "fail", model: "platform checks", summary: gate.summarize(verdict), findings: gate.asFindings(verdict) } } });
+        await logEvent("gate_refused", runId, { company, module: slug, version: 1, lane: "module", rules: verdict.violations.map((f) => f.rule) });
+        throw new Error(`platform checks failed: ${gate.oneLine(verdict)}`);
+      }
+      { const c1 = await P.getRun(runId); await P.setRun(runId, { evidence: { ...c1.evidence, gate: gate.record(verdict) } }); }
       // platform checks, no tokens
       const v = validateModule(dir, slug);
       if (!v.ok) {
