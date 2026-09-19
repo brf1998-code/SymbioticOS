@@ -130,7 +130,14 @@ function metrics(g, now, windowDays) {
   const answered = g.feedback.filter((f) => f.floor_answer && inWin(f.floor_answer_at));
   const fixedN = answered.filter((f) => f.floor_answer === "fixed").length, notQuiteN = answered.filter((f) => f.floor_answer === "not_quite").length;
   const wentLive = g.feedback.filter((f) => f.status === "done" && f.shipped_at && inWin(f.shipped_at));
-  const unanswered = wentLive.filter((f) => !f.floor_answer);
+  // the manager's own close-out on the shipped tile (Done / a little left). "Unanswered" means nobody has said
+  // anything, floor or manager. A change counts as met or missed once per request: a miss is the floor's not
+  // quite or the manager's a little left; met is fixed or done with no miss on it.
+  const mgr = g.feedback.filter((f) => f.manager_answer && inWin(f.manager_answer_at));
+  const mgrDone = mgr.filter((f) => f.manager_answer === "done").length, mgrLeft = mgr.filter((f) => f.manager_answer === "little_left").length;
+  const unanswered = wentLive.filter((f) => !f.floor_answer && !f.manager_answer);
+  const spoken = g.feedback.filter((f) => (f.floor_answer && inWin(f.floor_answer_at)) || (f.manager_answer && inWin(f.manager_answer_at)));
+  const missed = spoken.filter((f) => f.floor_answer === "not_quite" || f.manager_answer === "little_left").length;
   const followUpsOpen = g.feedback.filter((f) => f.follow_up_of && OPEN_FEEDBACK.has(f.status)).length;
 
   // intakes (new modules)
@@ -163,6 +170,8 @@ function metrics(g, now, windowDays) {
       unanswered_named: unanswered.filter((f) => f.person_id).length,
       fixed_share: fixedN + notQuiteN ? Math.round((fixedN / (fixedN + notQuiteN)) * 100) / 100 : null,
       follow_ups_open: followUpsOpen,
+      manager_done: mgrDone, manager_little_left: mgrLeft,
+      met: spoken.length - missed, missed, met_share: spoken.length ? Math.round(((spoken.length - missed) / spoken.length) * 100) / 100 : null,
     },
     intakes: {
       started: intakes.length,
@@ -212,7 +221,7 @@ async function load(windowDays) {
   const since = windowDays === 0 ? new Date(0) : new Date(now.getTime() - windowDays * DAY);
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const companies = (await q("SELECT slug, name, monthly_cap_usd FROM platform.companies ORDER BY created_at")).rows;
-  const feedback = (await q("SELECT id, company, status, created_at, outcome, person_id, follow_up_of, shipped_at, floor_answer, floor_answer_at FROM platform.feedback")).rows;
+  const feedback = (await q("SELECT id, company, status, created_at, outcome, person_id, follow_up_of, shipped_at, floor_answer, floor_answer_at, manager_answer, manager_answer_at FROM platform.feedback")).rows;
   const proposals = (await q("SELECT p.id, p.feedback_id, f.company, p.status, p.created_at, p.data_check->>'status' AS data_status FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id")).rows;
   const runs = (await q("SELECT id, company, module, lane, status, step, model, proposal_id, proposal_ids, created_at, evidence, log FROM platform.build_runs ORDER BY id DESC LIMIT 5000")).rows;
   const record = (await q("SELECT company, kind, proposal_id, created_at FROM platform.record WHERE kind IN ('proposal_edited','proposal_approved','proposal_declined') ORDER BY id")).rows;

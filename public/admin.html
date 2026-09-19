@@ -117,8 +117,11 @@ function modelsCell(m) {
 }
 // what the floor said once a change was live (src/closeloop.js): fixed it, or not quite (a miss)
 function answersCell(a) {
-  if (!a || !(a.fixed + a.not_quite + a.unanswered_named)) return "";
-  return `<br><small>floor: ${a.fixed} fixed${a.not_quite ? ` · <span class="warn">${a.not_quite} not quite</span>` : ""}${a.unanswered_named ? ` · ${a.unanswered_named} not said yet` : ""}</small>`;
+  if (!a) return "";
+  const floor = a.fixed + a.not_quite + a.unanswered_named ? `<br><small>floor: ${a.fixed} fixed${a.not_quite ? ` · <span class="warn">${a.not_quite} not quite</span>` : ""}${a.unanswered_named ? ` · ${a.unanswered_named} not said yet` : ""}</small>` : "";
+  // the manager's close-out on the shipped tile: Done, or a little left (a miss, like the floor's not quite)
+  const mgr = (a.manager_done || 0) + (a.manager_little_left || 0) ? `<br><small>manager: ${a.manager_done || 0} done${a.manager_little_left ? ` · <span class="warn">${a.manager_little_left} a little left</span>` : ""}</small>` : "";
+  return floor + mgr;
 }
 function healthRow(c) {
   const stops = c.builds.stops, nstops = stops.gate + stops.reviewer + stops.tests + stops.other;
@@ -153,7 +156,7 @@ async function loadHealth() {
     [hrs(f.decisions.wait_median_hours), "manager wait", f.floor.deploy_wait_n ? `to decide · then ${hrs(f.floor.deploy_wait_median_hours)} to deploy` : "proposal to decision"],
     [waiting, "waiting on a manager", `${f.decisions.waiting} to decide, ${f.builds.waiting_confirm} to confirm, ${f.builds.waiting_deploy} to deploy`],
     [f.decisions.waiting_data, "waiting on us", f.decisions.waiting_data ? `ERP data to add · oldest ${hrs(f.decisions.oldest_waiting_data_hours)}` : "no data requests open"],
-    [f.answers.fixed_share == null ? "n/a" : Math.round(f.answers.fixed_share * 100) + "%", "fixed it, says the floor", f.answers.fixed + f.answers.not_quite ? `${f.answers.fixed} fixed · ${f.answers.not_quite} not quite · ${f.answers.unanswered_named} not said yet` : (f.answers.unanswered_named ? `${f.answers.unanswered_named} asked, none answered yet` : "nobody has been asked yet")],
+    [f.answers.fixed_share == null ? "n/a" : Math.round(f.answers.fixed_share * 100) + "%", "fixed it, says the floor", (f.answers.fixed + f.answers.not_quite ? `${f.answers.fixed} fixed · ${f.answers.not_quite} not quite · ${f.answers.unanswered_named} not said yet` : (f.answers.unanswered_named ? `${f.answers.unanswered_named} asked, none answered yet` : "nobody has been asked yet")) + ((f.answers.manager_done || 0) + (f.answers.manager_little_left || 0) ? ` · manager: ${f.answers.manager_done || 0} done, ${f.answers.manager_little_left || 0} a little left` : "")],
     [nstops, "stops", `gate ${st.gate} · reviewer ${st.reviewer} · tests ${st.tests} · other ${st.other}`],
     [usd(f.spend.window_usd), "AI spend", f.spend.per_shipped_usd != null ? `${usd(f.spend.per_shipped_usd)} a shipped change` : "in the window"],
     [dys(f.quiet.check_stop_days), "since a check stop", `rollback ${dys(f.quiet.rollback_days)} · gate ${dys(f.quiet.gate_stop_days)}`],

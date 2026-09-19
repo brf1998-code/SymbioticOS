@@ -7,7 +7,7 @@ const path = require("path");
 const { q, logEvent } = require("./db");
 const { runStructured, haveKey, fakeMode, guidanceFor, modelFor, modelInfo } = require("./agent");
 const registry = require("./registry");
-const { moduleContext } = require("./proposals");
+const { sourceText } = require("./modulesource");
 
 const PRINCIPLES_DIR = process.env.PRINCIPLES_DIR || path.join(__dirname, "..", "principles");
 function conventions() {
@@ -92,8 +92,10 @@ async function generate(company, mod, version, opts = {}) {
       const files = (await registry.versionFiles(company, mod, version)) || {};
       const manifest = JSON.parse(files["module.json"] || "{}");
       const screens = registry.pageEntries(manifest).map((s) => `- ${s.label}: ${s.file} (route ${s.route})`).join("\n");
-      let src = "";
-      for (const [name, content] of Object.entries(files)) src += `\n--- ${name} ---\n${content.slice(0, name.startsWith("pages/") ? 14000 : 10000)}`;
+      // every file whole (src/modulesource.js): a data-flow drawing made from half of routes.js misses half the flows
+      const srcOut = sourceText(files, { first: ["routes.js"] });
+      const src = srcOut.text;
+      if (srcOut.cut.length) console.error(`[context] diagrams for ${company}/${mod} v${version}: cut ${srcOut.cut.map((c) => `${c.name} ${c.shown}/${c.of}`).join(", ")}`);
       const guidance = await guidanceFor(company, mod);
       const out = await runStructured({
         model,

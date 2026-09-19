@@ -120,7 +120,8 @@ async function startReview(company, mod, model, requestedBy) {
 async function runReview(reviewId) {
   const review = (await q("SELECT * FROM platform.reviews WHERE id=$1", [reviewId])).rows[0];
   const { company, module: mod, model } = review;
-  const ctx = await moduleContext(company, mod);
+  const ctx = await moduleContext(company, mod);   // every live file whole (src/modulesource.js)
+  if (ctx.cut && ctx.cut.length) console.error(`[context] review #${reviewId} of ${company}/${mod}: cut ${ctx.cut.map((c) => `${c.name} ${c.shown}/${c.of}`).join(", ")}`);
   const files = ctx.files.length ? ctx.files : ["routes.js"];
   const guidance = await guidanceFor(company, mod);
   let data, costUsd = 0;

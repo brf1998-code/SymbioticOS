@@ -84,6 +84,17 @@ router.post("/api/feedback/:id/close", requireManager, async (req, res) => {
   res.json(r.rows[0]);
 });
 
+// The manager's close-out on a shipped tile (src/closeloop.js): Done (the asker reads a check mark and a
+// thank-you) or "a little left" (what is left goes back on the board as a linked follow-up). Manager only, and
+// on a path the module page policy does not open, so a module page in a manager's browser cannot reach it.
+router.post("/api/feedback/:id/closeout", requireManager, async (req, res) => {
+  try {
+    const fb = (await q("SELECT company FROM platform.feedback WHERE id=$1", [Number(req.params.id) || 0])).rows[0];
+    if (!fb) return res.status(404).json({ error: "no such request" });
+    res.json(await closeloop.managerAnswer({ company: fb.company, feedbackId: req.params.id, actor: actor(req), answer: (req.body || {}).answer, what: (req.body || {}).what }));
+  } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
 // Module version probe: module pages poll this and reload when it changes.
 router.get("/api/c/:slug/modules/:name/version", async (req, res) => {
   const row = await registry.getModule(req.params.slug, req.params.name);
@@ -248,6 +259,7 @@ router.get("/api/c/:slug/board", async (req, res) => {
             p.target_file AS proposal_target, p.rationale AS proposal_rationale, p.status AS proposal_status, p.model AS proposal_model,
             CASE WHEN p.data_check IS NULL THEN NULL ELSE jsonb_build_object('status', p.data_check->'status', 'reason', p.data_check->'reason', 'missing', (SELECT COALESCE(jsonb_agg(m->'what'), '[]'::jsonb) FROM jsonb_array_elements(COALESCE(p.data_check->'missing','[]'::jsonb)) m)) END AS proposal_data,
             (SELECT o.message FROM platform.feedback o WHERE o.id=f.follow_up_of) AS follow_up_words,
+            (SELECT o.manager_answer FROM platform.feedback o WHERE o.id=f.follow_up_of) AS follow_up_origin,
             (SELECT c.id FROM platform.feedback c WHERE c.follow_up_of=f.id ORDER BY c.id DESC LIMIT 1) AS follow_up_id
        FROM platform.feedback f
        LEFT JOIN LATERAL (SELECT * FROM platform.proposals WHERE feedback_id=f.id ORDER BY id DESC LIMIT 1) p ON true

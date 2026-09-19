@@ -1,4 +1,4 @@
-# Symbiotic OS: Workspace Guide (current as of 2026-09-19, evening)
+# Symbiotic OS: Workspace Guide (current as of 2026-09-19, late evening)
 
 **This file is the single source of truth for how this repo and the live
 instance are worked on.** Repo: `brf1998-code/SymbioticOS` (private). Live:
@@ -480,9 +480,81 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   mode: the fake proposer's rationale says "Follow-up context received for
   request #N." when the context arrived. Units: `scripts/test-closeloop.js`,
   the `answers` cases in `scripts/test-health.js`. Not yet (manager side of
-  item 6): an email when something waits on the manager, a clarifying
-  question to the reporter, a manager answering for the floor; also nothing
-  proposes a follow-up on arrival (item 8).
+  item 6): a clarifying question to the reporter; also nothing proposes a
+  follow-up on arrival (item 8). The manager's own answer is the next bullet;
+  emails to the manager are OFF the plan (Brendan, 2026-09-19).
+- **The manager's close-out on a shipped tile** (2026-09-19, `src/closeloop.js`
+  `managerAnswer` / `mayCloseOut`, the manager side of item 6 as Brendan
+  redirected it: no emails for every change, "they will get so annoyed"; keep
+  the floor's card; give the manager one small button on the tile). A shipped
+  tile (status done, `shipped_version` set, not rolled back, a module's own
+  request) shows a manager, while NOBODY has said anything about it, a small
+  green "Done" button and a quiet "a little left" link, and nothing else asks
+  the manager anything. Done (`POST /api/feedback/:id/closeout {answer:
+  "done"}`, `requireManager`): `feedback.manager_answer` = done with
+  `manager_answer_at`, `_person`, `_by` (the signed-in person's name, else
+  "The manager", "Anetix" for an admin); the tile shows a check mark and
+  "Done. Thank you, <asker>."; the asker's My requests line is state
+  `thanked`: a check mark and "<who> marked it done. Thank you for sending it
+  in.", with a quiet green "N done" badge on the My requests link until that
+  device has opened the list once (`localStorage sos.thanked.<co>`; never a
+  pop-up). Done stops the "Did it fix it?" card and pill from coming back for
+  that request (the news items carry `manager_answer`, `to_answer` leaves it
+  out) but the asker keeps a quiet "Actually, not quite": the manager can
+  close a request, not speak for the floor. A little left (`{answer:
+  "little_left", what}`, words required): files the words as a NEW feedback
+  row tied to the original (`follow_up_of`), same module, page, screen and
+  target, under the manager's name; the original stays shipped and says
+  "<who> says: a little left. The follow-up is #N."; the floor is no longer
+  asked about the original (`mayAnswer` false; a second follow-up would be a
+  duplicate); the follow-up's card says "Follow-up to #N: a little left" (the
+  board query sends `follow_up_origin`, the original's `manager_answer`) and
+  the proposer is told the manager said it (`followUpContext`, same marker
+  sentence). Refused in plain words: not live through a build, rolled back,
+  the floor already answered (the tile already says so), answered twice. On a
+  batch tile each request in "See the N changes" has the pair, the list now
+  stays open across the 4 s redraw (`OPEN_BATCH`), and with two or more open
+  requests the tile has one "Done, all N" (`closeOutAll`, one call per
+  request). The inline "What is left?" box pauses the reload (`EDITING =
+  "left:<id>"`). The route is id-addressed (covered by `OWNERS` in auth.js)
+  and sits under `/api/feedback/<id>/`, which the module page policy does NOT
+  open (it opens `/api/feedback` exactly), so agent-written code on a module
+  page in a manager's browser cannot close a request out (proven in a
+  headless browser). Record kinds: manager_done, manager_little_left (after =
+  the words, detail.follow_up_id), and the follow-up's feedback_filed carries
+  detail.by_manager. Loop health `answers`: manager_done,
+  manager_little_left, `unanswered` now means nobody has spoken (floor or
+  manager), and met / missed / met_share count each request once (a miss is
+  the floor's not quite or the manager's a little left); the floor's own
+  `fixed_share` is untouched. Units: `scripts/test-closeloop.js`,
+  `scripts/test-health.js`. End to end, IN THE REPO this time:
+  `scripts/e2e/closeout.js` (API, 50 checks) and
+  `scripts/e2e/closeout-browser.js` (playwright, 26 checks), both against a
+  server already up in fake mode on a fresh database (header of closeout.js
+  has the one command; `scripts/e2e/lib.js` is the cookie-keeping client,
+  `person()` and `ship()`).
+- **A model reads a module's files whole** (2026-09-19, `src/modulesource.js`
+  `sourceText`, used by `proposals.moduleContext` and so by the proposer AND
+  the system review, and by `diagrams.js`). Found in the verification pass
+  against the 2026-09-18 review: every one of those readers got pages cut at
+  14,000 characters and every other file at 8,000 (10,000 for diagrams) in
+  silence, which on the library modules was 8,000 of 21,603 characters of
+  kpis/routes.js and 8,000 of 19,793 of paperline/routes.js: functionality
+  proposals, whole-module reviews and data-flow drawings written from under
+  half of the server file. Now every file is whole. One overall budget
+  (`SOS_CONTEXT_CHARS`, default 400,000 characters) guards the model's
+  window; over it, files are kept in order of need (the screen the feedback
+  came from, module.json, routes.js, other .js, pages, reference.md,
+  migrations, other docs, tour.json, the rest), the overflow is cut at the END
+  of that order, each cut is marked in the text where it happens, a NOTE at
+  the top names the cut files and tells the model not to assume what it
+  cannot see, `[context]` goes to the log, event `proposal_context_cut`, and
+  `proposal_drafted` carries `detail.context_chars` (and `context_cut` when
+  anything was). Cost: about 3 to 7 cents more per Fable proposal on the
+  library modules (15k tokens in against 8k to 12k); the review estimate
+  follows on its own. RULE: never slice a file going into a prompt without
+  saying so in the prompt and on the record. Unit:
+  `node scripts/test-modulesource.js` (the library modules arrive whole).
 - **Connections, first push: spreadsheets and label printers** (2026-09-19,
   `src/connections.js`, `public/connections.html` at `/c/<slug>/connections`
   (manager), `public/assets/print-helper.js`, build order item 5, designed in
@@ -971,7 +1043,9 @@ The cloud sandbox has npm registry access (through its proxy) and Postgres 16
 (`pg_ctlcluster 16 main start`, then create user/db `sos`/`sos`), so the app
 runs there from a plain `npm install`: tar the repo without `node_modules`
 and `.git` in the mounted folder, stage the tarball, untar, install, boot with
-`SOS_FAKE_AGENT=1`. That is also where `package-lock.json` is regenerated
+`SOS_FAKE_AGENT=1`. End to end and browser suites belong in `scripts/e2e/`
+IN THE REPO (since 2026-09-19; the earlier ones lived only in a session's
+sandbox and the next session could not rerun them). That is also where `package-lock.json` is regenerated
 after a dependency change. The `node_modules` in the mounted folder is a stale
 local install from before the SDK upgrade; Railway never sees it. The
 sandbox can reach api.anthropic.com but has no key, so a real agent run is
@@ -1002,7 +1076,9 @@ and lives in `platform.companies.monthly_cap_usd`. `SOS_PAGE_LOCK` (default
 (violations show in the browser console, nothing breaks), `off` sends none;
 the escape hatch if module pages ever stop after a deploy. Optional: `SOS_AGENT_EFFORT` (build agent reasoning
 effort, default `high`), `SOS_PERSON_HOURS` (default 12: how long a name and
-PIN sign-in lasts on a device), `SOS_SESSION_DAYS` (default 30; sessions
+PIN sign-in lasts on a device), `SOS_CONTEXT_CHARS` (default 400000: the most
+module source a proposal, system review or diagram call is given; files are
+whole below it, see "A model reads a module's files whole"), `SOS_SESSION_DAYS` (default 30; sessions
 expire server-side, not just via cookie Max-Age), `SOS_LOGIN_MAX_FAILS`
 (default 10) and `SOS_LOGIN_WINDOW_MIN` (default 15) for the per-IP login
 limiter (in-memory, uses `cf-connecting-ip`).

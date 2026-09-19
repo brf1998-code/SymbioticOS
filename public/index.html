@@ -88,6 +88,11 @@
   .dot.done { background:var(--green); } .dot.now { background:var(--amber); } .dot.fail { background:var(--red); }
   .card.batch { border-left:4px solid var(--navy); }
   .card.busy { opacity:.75; }
+  /* the manager's close-out on a shipped tile: one small Done button, a quiet "a little left" link, and the thank-you line */
+  button.small { padding:5px 11px; min-height:30px; font-size:12px; }
+  .leftlink { font-size:12px; color:var(--steel); text-decoration:underline; margin-left:2px; cursor:pointer; }
+  .thanks { color:var(--green); font-weight:700; }
+  .thanks .tick { display:inline-block; width:16px; height:16px; line-height:16px; border-radius:50%; background:var(--green); color:#fff; text-align:center; font-size:11px; margin-right:5px; }
   .card.busy button, .card.busy .pick { pointer-events:none; opacity:.5; }
   .working { display:inline-flex; align-items:center; gap:6px; background:var(--amberSoft); color:var(--amber); border-radius:8px; padding:6px 9px; font-size:12.5px; font-weight:700; margin-top:8px; }
   .working .spin { width:12px; height:12px; border:2px solid var(--amber); border-right-color:transparent; border-radius:50%; animation:spin .8s linear infinite; display:inline-block; }
@@ -214,7 +219,8 @@ const STEP_LABEL = {
   visual_check: "Visual check", test_run: "Internal tests", await_deploy: "Manager deploy gate",
 };
 let DATA = null;
-let EDITING = null;            // proposal id being adjusted, or "req:<runId>" while a requirement is being edited; pauses the reload
+let EDITING = null;            // proposal id being adjusted, "req:<runId>" while a requirement is being edited, or "left:<feedbackId>" while the manager writes what is left; pauses the reload
+const OPEN_BATCH = new Set();   // batch tiles whose "See the N changes" is open; kept across the 4 s redraw
 const CHECKED = new Set();     // "runId:i" boxes the manager has ticked at the requirement gate (survives the 4s reload)
 const MGR = () => DATA && (DATA.role === "manager" || DATA.role === "admin");
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
@@ -360,7 +366,7 @@ async function declineReview(id) {
 // Every button click is acknowledged at once: the card it belongs to greys out
 // with a "working" line until the server answers, and the header shows a pill.
 const PENDING = new Map(); // key ("fb:12" or "run:7") -> label
-const ACTION_LABELS = { review: "Sending to the AI for a proposal", decide: "Recording your decision", confirm: "Confirming, the agent starts building", deploy: "Deploying to the floor", cancel: "Cancelling", retry: "Restarting the build", fix: "Sending the findings back to the agent", override: "Overriding the review, running tests", rollback: "Rolling back", plusone: "Counting it again", close: "Closing", batch: "Starting the batch build" };
+const ACTION_LABELS = { closeout: "Closing it out", review: "Sending to the AI for a proposal", decide: "Recording your decision", confirm: "Confirming, the agent starts building", deploy: "Deploying to the floor", cancel: "Cancelling", retry: "Restarting the build", fix: "Sending the findings back to the agent", override: "Overriding the review, running tests", rollback: "Rolling back", plusone: "Counting it again", close: "Closing", batch: "Starting the batch build" };
 function pendingKey(url) {
   let m;
   if ((m = /\/api\/feedback\/(\d+)\/(\w+)/.exec(url))) return ["fb:" + m[1], ACTION_LABELS[m[2]] || "Working"];
@@ -548,7 +554,7 @@ function batchCard(run) {
   if (run.status === "deployed" || run.status === "rolled_back") {
     html += `<div class="${run.status === "deployed" ? "outcome" : "fail-note"}">${run.status === "deployed" ? "We did: " : "Rolled back: "}${esc(ev.what_changed || ev.build_summary || "").slice(0, 600)}</div>`;
   }
-  html += `<details><summary>See the ${items.length} changes</summary>` + items.map((f, i) => `<div class="chg"><span class="k">${i + 1}.</span><span class="chip screen">${esc(screenLabel(f.module, f.proposal_target) || f.screen || "")}</span> ${esc(f.proposal_body || "")}<div class="orig">"${esc(f.message)}" · ${esc(f.name || "anonymous")}${f.recurrence > 1 ? ` · x${f.recurrence}` : ""}</div>${floorSaid(f)}</div>`).join("") + `</details>`;
+  html += `<details ${OPEN_BATCH.has(run.id) || items.some(f => EDITING === "left:" + f.id) ? "open" : ""} ontoggle="this.open?OPEN_BATCH.add(${run.id}):OPEN_BATCH.delete(${run.id})"><summary>See the ${items.length} changes</summary>` + items.map((f, i) => `<div class="chg"><span class="k">${i + 1}.</span><span class="chip screen">${esc(screenLabel(f.module, f.proposal_target) || f.screen || "")}</span> ${esc(f.proposal_body || "")}<div class="orig">"${esc(f.message)}" · ${esc(f.name || "anonymous")}${f.recurrence > 1 ? ` · x${f.recurrence}` : ""}</div>${floorSaid(f)}</div>`).join("") + `</details>`;
   if (run.status === "queued") {
     html += `<div class="meta"><span class="pulse"></span>Queued: waiting for the current build on ${esc(mod.title || run.module)} to finish.</div>`;
     if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;
@@ -566,6 +572,8 @@ function batchCard(run) {
     if (MGR()) html += `<button class="go" onclick="act('/api/runs/${run.id}/deploy')">Deploy v${run.to_version} to floor</button><button class="no" onclick="if(confirm('Discard this build? The ${items.length} proposals go back to Reviewing.'))act('/api/runs/${run.id}/cancel')">Discard</button>`;
   }
   if (run.status === "failed") html += failedHtml(run, `The ${items.length} proposals go back to Reviewing.`);
+  const open = run.status === "deployed" ? items.filter(canCloseOut) : [];
+  if (open.length > 1) html += `<button class="go small" data-closeout-all="${run.id}" title="Close out the ${open.length} requests in this change that nobody has spoken about yet. Each person who asked sees a check mark and a thank-you. To say a little is left on one of them, open the changes above." onclick="closeOutAll(${run.id}, [${open.map(f => f.id).join(",")}])">&#10003; Done, all ${open.length}</button>`;
   if (run.status === "deployed" && MGR() && mod.live_version === run.to_version) html += rollbackBtn(run);
   return html + "</div>";
 }
@@ -657,14 +665,62 @@ function runBlock(fb, run) {
   return html;
 }
 
-// What the floor said once the change was live (fixed it / not quite), as one small line for a shipped card.
+// What was said once the change was live, as small lines on a shipped card: the floor's own answer (fixed it /
+// not quite), and the manager's close-out (src/closeloop.js; Brendan, 2026-09-19: no emails, one small button on
+// the tile). Done gives the request a check mark and a thank-you, which the person who asked also reads in My
+// requests; "a little left" asks what is left and puts it back on the board as a linked follow-up. The buttons
+// are manager only and only there while nobody has said anything.
+function canCloseOut(f) {
+  return MGR() && f.status === "done" && f.kind !== "module_request" && f.module && f.module !== "platform" && f.shipped_version
+    && !/^Rolled back/i.test(f.outcome || "") && !f.floor_answer && !f.manager_answer;
+}
 function floorSaid(f) {
   if (f.status !== "done") return "";
+  let html = "";
   const who = esc(f.floor_answer_by || "Someone on the floor");
-  if (f.floor_answer === "fixed") return `<div class="meta" style="color:var(--green);font-weight:700">${who} says: fixed it.</div>`;
-  if (f.floor_answer === "not_quite") return `<div class="meta" style="color:#7a4a00;font-weight:700">${who} says: not quite.${f.follow_up_id ? ` The follow-up is #${f.follow_up_id}.` : ""}</div>`;
-  if (f.shipped_at && f.person_id && !/^Rolled back/i.test(f.outcome || "")) return `<div class="meta">${esc(f.name || "The person who asked")} has not said yet whether it fixed it.</div>`;
-  return "";
+  if (f.manager_answer === "done") {
+    const thank = f.name && f.name !== f.manager_answer_by ? `, ${esc(f.name)}` : "";
+    html += `<div class="meta thanks" title="Marked done by ${esc(f.manager_answer_by || "the manager")}"><span class="tick">&#10003;</span>Done. Thank you${thank}.</div>`;
+  }
+  if (f.manager_answer === "little_left") html += `<div class="meta" style="color:#7a4a00;font-weight:700">${esc(f.manager_answer_by || "The manager")} says: a little left.${f.follow_up_id ? ` The follow-up is #${f.follow_up_id}.` : ""}</div>`;
+  if (f.floor_answer === "fixed") html += `<div class="meta" style="color:var(--green);font-weight:700">${who} says: fixed it.</div>`;
+  else if (f.floor_answer === "not_quite") html += `<div class="meta" style="color:#7a4a00;font-weight:700">${who} says: not quite.${f.follow_up_id ? ` The follow-up is #${f.follow_up_id}.` : ""}</div>`;
+  else if (!f.manager_answer && f.shipped_at && f.person_id && !/^Rolled back/i.test(f.outcome || "")) html += `<div class="meta">${esc(f.name || "The person who asked")} has not said yet whether it fixed it.</div>`;
+  return html + closeOutHtml(f);
+}
+function closeOutHtml(f) {
+  if (!canCloseOut(f)) return "";
+  if (EDITING === "left:" + f.id) {
+    return `<div class="edit"><label>What is left? It goes back on the board as a follow-up to #${f.id}.</label>
+      <textarea id="left-${f.id}" style="min-height:64px" maxlength="2000" placeholder="Say it the way you would tell the person building it"></textarea>
+      <div><button class="go small" onclick="submitLeft(${f.id})">Put it on the board</button><button class="quiet small" onclick="EDITING=null;load()">Cancel</button></div></div>`;
+  }
+  return `<div><button class="go small" data-closeout="${f.id}" title="Close this request out. ${esc(f.name || "The person who asked")} sees a check mark and a thank-you." onclick="act('/api/feedback/${f.id}/closeout',{answer:'done'})">&#10003; Done</button><a class="leftlink" data-left="${f.id}" onclick="openLeft(${f.id})">a little left</a></div>`;
+}
+function openLeft(id) {
+  EDITING = "left:" + id;   // pauses the reload while the box is open
+  render();
+  const ta = document.getElementById("left-" + id); if (ta) ta.focus();
+}
+function submitLeft(id) {
+  const ta = document.getElementById("left-" + id), what = ta ? ta.value.trim() : "";
+  if (what.length < 3) { if (ta) { ta.style.borderColor = "var(--red)"; ta.placeholder = "A few words on what is left"; ta.focus(); } return; }
+  EDITING = null;
+  act(`/api/feedback/${id}/closeout`, { answer: "little_left", what });
+}
+// A batch tile: one tap closes out every request in it that nobody has spoken about yet.
+async function closeOutAll(runId, ids) {
+  const key = "run:" + runId;
+  PENDING.set(key, ACTION_LABELS.closeout); renderBusy();
+  for (const el of document.querySelectorAll(`[data-key="${key}"]`)) { el.classList.add("busy"); if (!el.querySelector(".working")) el.insertAdjacentHTML("beforeend", pendingHtml(key)); }
+  for (const id of ids) {
+    try {
+      const res = await fetch(`/api/feedback/${id}/closeout`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answer: "done" }) });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); alert(`#${id}: ${j.error || "that did not go through"}`); }
+    } catch (e) { alert("Could not reach the server: " + e.message); break; }
+  }
+  PENDING.delete(key); renderBusy();
+  await load();
 }
 function card(fb) {
   if (fb.kind === "module_request") return requestCard(fb);
@@ -676,7 +732,9 @@ function card(fb) {
   html += `<div class="meta">#${fb.id} · ${isPlatform ? '<span class="chip platform">PLATFORM</span>' : esc(fb.module)} · ${esc(fb.name || "anonymous")}`
        + (fb.recurrence > 1 ? ` · <span class="chip rec">x${fb.recurrence}</span>` : "") + (inBatch(fb) ? ' · <span class="chip batch">IN BATCH</span>' : "") + `</div>`;
   html += `<div class="meta"><span class="chip screen">Screen: ${esc(fb.screen || fb.page || "unknown")}</span>${fb.review_id ? `<span class="chip review">REVIEW #${fb.review_id}${priorityOf(fb)}</span>` : ""}</div>`;
-  if (fb.follow_up_of) html += `<div class="meta" style="background:#fff4e5;border-radius:8px;padding:8px;color:#7a4a00"><b>Follow-up to #${fb.follow_up_of}: not quite.</b> ${esc(fb.name || "The person who asked")} tried what went live and says this is still off. First asked: "${esc(String(fb.follow_up_words || "").slice(0, 200))}"</div>`;
+  if (fb.follow_up_of) html += fb.follow_up_origin === "little_left"
+    ? `<div class="meta" style="background:#fff4e5;border-radius:8px;padding:8px;color:#7a4a00"><b>Follow-up to #${fb.follow_up_of}: a little left.</b> ${esc(fb.name || "The manager")} checked what went live and says this is left to finish. First asked: "${esc(String(fb.follow_up_words || "").slice(0, 200))}"</div>`
+    : `<div class="meta" style="background:#fff4e5;border-radius:8px;padding:8px;color:#7a4a00"><b>Follow-up to #${fb.follow_up_of}: not quite.</b> ${esc(fb.name || "The person who asked")} tried what went live and says this is still off. First asked: "${esc(String(fb.follow_up_words || "").slice(0, 200))}"</div>`;
 
   if (isPlatform) {
     if (fb.status === "new") {

@@ -5,6 +5,7 @@ const { runStructured, haveKey, assertUnderCap, modelFor, guidanceFor } = requir
 const registry = require("./registry");
 const { record } = require("./record");
 const datacheck = require("./datacheck");
+const { sourceText } = require("./modulesource");
 
 // erpLookups: the module's ERP lookup names, when it has an ERP connection.
 // Only then is the model asked what ERP data the change needs (src/datacheck.js).
@@ -22,21 +23,23 @@ function proposalSchema(files, erpLookups) {
   };
 }
 
-async function moduleContext(company, mod) {
+// The live module as a model reads it: every file WHOLE (src/modulesource.js). Until 2026-09-19 this cut
+// pages at 14,000 characters and everything else at 8,000 in silence, so proposals and system reviews were
+// written from under half of routes.js. `first` names the files this reader needs most (the screen the
+// feedback came from); it only matters when a module is over the overall budget, and then `cut` says what
+// was cut so the caller can put it on the record.
+async function moduleContext(company, mod, { first = [] } = {}) {
   const row = await registry.getModule(company, mod);
-  if (!row) return { text: "(unknown module)", files: [], screens: [] };
+  if (!row) return { text: "(unknown module)", files: [], screens: [], cut: [] };
   const files = (await registry.versionFiles(company, mod, row.live_version)) || {};
   const manifest = JSON.parse(files["module.json"] || "{}");
   const screens = registry.pageEntries(manifest);
-  let src = "";
-  for (const [name, content] of Object.entries(files)) {
-    src += `\n--- ${name} ---\n` + content.slice(0, name.startsWith("pages/") ? 14000 : 8000);
-  }
+  const src = sourceText(files, { first: first.filter(Boolean) });
   const screenList = screens.map((s) => `- ${s.label}: ${s.file} (route ${s.route})`).join("\n");
   return {
-    text: `Module "${row.title}" (${mod}), live version ${row.live_version}.\nScreens in this module:\n${screenList}\n- server logic: routes.js\nSource:\n${src}`,
+    text: `Module "${row.title}" (${mod}), live version ${row.live_version}.\nScreens in this module:\n${screenList}\n- server logic: routes.js\nSource:\n${src.text}`,
     files: Object.keys(files).filter((f) => f.startsWith("pages/") || f === "routes.js"),
-    screens,
+    screens, cut: src.cut, chars: src.chars,
   };
 }
 
@@ -46,7 +49,7 @@ async function generateProposal(feedbackId) {
   if (!fb.module || fb.module === "platform") throw new Error("platform feedback is handled outside the AI loop");
   if (fb.kind === "module_request") throw new Error("a module request is answered in its own popout, not reviewed as feedback");
 
-  const ctx = await moduleContext(fb.company, fb.module);
+  const ctx = await moduleContext(fb.company, fb.module, { first: [fb.target_file] });
   const screenLine = fb.screen ? `Screen: ${fb.screen} (${fb.target_file})` : `Screen: unknown (page ${fb.page || "?"})`;
 
   if (!haveKey()) {
@@ -80,7 +83,8 @@ async function generateProposal(feedbackId) {
     [feedbackId, data.proposal, data.class, data.target_file || fb.target_file || null, data.rationale, model, costUsd || 0]);
   await q("UPDATE platform.feedback SET status='reviewing', updated_at=now() WHERE id=$1", [feedbackId]);
   await logEvent("proposal_generated", feedbackId, { class: data.class, target: data.target_file, model, costUsd });
-  await record("proposal_drafted", { company: fb.company, module: fb.module, actor: "agent", feedback_id: feedbackId, proposal_id: r.rows[0].id, after: data.proposal, detail: { class: data.class, target: data.target_file || fb.target_file || null, rationale: data.rationale, model, cost_usd: costUsd || 0 } });
+  if (ctx.cut && ctx.cut.length) { console.error(`[context] ${fb.company}/${fb.module} is over the context budget; cut: ${ctx.cut.map((c) => `${c.name} ${c.shown}/${c.of}`).join(", ")}`); await logEvent("proposal_context_cut", feedbackId, { company: fb.company, module: fb.module, cut: ctx.cut }); }
+  await record("proposal_drafted", { company: fb.company, module: fb.module, actor: "agent", feedback_id: feedbackId, proposal_id: r.rows[0].id, after: data.proposal, detail: { class: data.class, target: data.target_file || fb.target_file || null, rationale: data.rationale, model, cost_usd: costUsd || 0, context_chars: ctx.chars || null, ...(ctx.cut && ctx.cut.length ? { context_cut: ctx.cut } : {}) } });
   // can the ERP connection give what this change needs? the platform checks, not the model
   const check = erpLookups.length ? await datacheck.apply(r.rows[0], fb, data.erp_data).catch((e) => { console.error("[datacheck]", e.message); return null; }) : null;
   return { ...r.rows[0], data_check: check };

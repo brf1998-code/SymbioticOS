@@ -308,9 +308,16 @@
     const el = panel.querySelector("#fbw-mine"); if (!el) return;
     if (!who.me) { el.style.display = "none"; return; }
     try { const r = await peopleApi("/requests", { cache: "no-store" }); if (r.ok) { const j = await r.json(); mine.requests = j.requests || []; mine.to_answer = j.to_answer || 0; } } catch (e) {}
+    drawMineLink();
+  }
+  function drawMineLink() {
+    const el = panel.querySelector("#fbw-mine"); if (!el || !who.me) return;
     el.style.display = "block";
+    // a request the manager marked done since this device last opened My requests: a quiet green badge, never a pop-up
+    const thankedNew = mine.requests.filter((r) => r.state === "thanked" && !thankedSeen().includes(r.id)).length;
     el.innerHTML = "<a href=\"#\" id=\"fbw-mine-open\" style=\"color:#1f3a5f;font-weight:700\">My requests</a>" + (mine.requests.length ? " <span style=\"color:#51606f\">(" + mine.requests.length + ")</span>" : "") +
-      (mine.to_answer ? " <span style=\"background:#c2620a;color:#fff;border-radius:10px;padding:1px 8px;font-size:11.5px;font-weight:700\">" + mine.to_answer + " to check</span>" : "");
+      (mine.to_answer ? " <span style=\"background:#c2620a;color:#fff;border-radius:10px;padding:1px 8px;font-size:11.5px;font-weight:700\">" + mine.to_answer + " to check</span>" : "") +
+      (thankedNew ? " <span id=\"fbw-thanked\" style=\"background:#2e7d4f;color:#fff;border-radius:10px;padding:1px 8px;font-size:11.5px;font-weight:700\">\u2713 " + thankedNew + " done</span>" : "");
     el.querySelector("#fbw-mine-open").onclick = (e) => { e.preventDefault(); openMine(); };
   }
   function sheet() {   // the same overlay the name picker uses
@@ -323,9 +330,18 @@
     document.body.appendChild(picker);
     return card;
   }
-  const STATE_COLOR = { live: "#c2620a", fixed: "#2e7d4f", not_quite: "#c2620a", declined: "#b3261e", rolled_back: "#b3261e" };
+  const STATE_COLOR = { live: "#c2620a", fixed: "#2e7d4f", thanked: "#2e7d4f", not_quite: "#c2620a", little_left: "#c2620a", declined: "#b3261e", rolled_back: "#b3261e" };
+  // which "marked done" requests this device has already shown its person (per company, so the badge shows once)
+  const thankedKey = "sos.thanked." + company;
+  function thankedSeen() { try { return JSON.parse(localStorage.getItem(thankedKey) || "[]") || []; } catch (e) { return []; } }
+  function markThankedSeen() {
+    const ids = mine.requests.filter((r) => r.state === "thanked").map((r) => r.id);
+    try { localStorage.setItem(thankedKey, JSON.stringify([...new Set(thankedSeen().concat(ids))].slice(-200))); } catch (e) {}
+  }
+  const TICK = "<span style=\"display:inline-block;width:17px;height:17px;line-height:17px;border-radius:50%;background:#2e7d4f;color:#fff;text-align:center;font-size:11.5px;font-weight:700;margin-right:6px\">\u2713</span>";
   function openMine() {
     const card = sheet();
+    markThankedSeen(); drawMineLink();
     const draw = () => {
       card.innerHTML = "<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px\"><div style=\"font-size:18px;font-weight:700\">My requests</div><button id=\"fbw-mine-close\" style=\"" + smallBtn("#e5e9ee", "#1c242e") + "\">Close</button></div>" +
         (mine.requests.length ? "" : "<div style=\"color:#51606f\">Nothing yet. When you send something from this button it shows up here, and you can see where it is.</div>");
@@ -336,7 +352,7 @@
         row.style.cssText = "border:1px solid #d5dbe3;border-radius:10px;padding:10px 12px;margin:8px 0";
         row.innerHTML = "<div style=\"font-weight:700\">“" + esc(r.words) + "”</div>" +
           "<div style=\"color:#51606f;font-size:12px;margin:2px 0 6px\">#" + r.id + " · " + esc(r.module || "") + (r.screen ? " · " + esc(r.screen) : "") + " · " + new Date(r.created_at).toLocaleDateString() + (r.follow_up_of ? " · follow-up to #" + r.follow_up_of : "") + "</div>" +
-          "<div data-line style=\"color:" + (STATE_COLOR[r.state] || "#1c242e") + ";font-weight:" + (r.state === "live" ? 700 : 400) + "\">" + esc(r.line) + (r.follow_up_id && r.state === "not_quite" ? " (#" + r.follow_up_id + ")" : "") + "</div>" +
+          "<div data-line style=\"color:" + (STATE_COLOR[r.state] || "#1c242e") + ";font-weight:" + (r.state === "live" || r.state === "thanked" ? 700 : 400) + "\">" + (r.state === "thanked" ? TICK : "") + esc(r.line) + (r.follow_up_id && (r.state === "not_quite" || r.state === "little_left") ? " (#" + r.follow_up_id + ")" : "") + "</div>" +
           (r.built ? "<div style=\"color:#51606f;font-size:12.5px;margin-top:4px\">What was built: " + esc(r.built) + "</div>" : "");
         if (r.can_answer) row.appendChild(answerButtons(r, async () => { await loadMine(); draw(); }));
         card.appendChild(row);
@@ -357,12 +373,13 @@
       box.innerHTML = "<div data-err style=\"color:#b3261e;font-size:12.5px;min-height:0\"></div>";
       const row = document.createElement("div"); row.style.cssText = "display:flex;gap:8px;flex-wrap:wrap";
       const err = box.querySelector("[data-err]");
-      if (r.state !== "fixed") {
+      const settled = r.state === "fixed" || r.state === "thanked";   // already closed (by them, or by the manager): only the quiet way back is left
+      if (!settled) {
         const yes = document.createElement("button"); yes.textContent = "Fixed it"; yes.setAttribute("data-answer", "fixed"); yes.style.cssText = smallBtn("#2e7d4f", "#fff");
         yes.onclick = async () => { const j = await send({ answer: "fixed" }, err); if (j) { banner("Thanks. Good to know it worked."); done(j); } };
         row.appendChild(yes);
       }
-      const no = document.createElement("button"); no.textContent = r.state === "fixed" ? "Actually, not quite" : "Not quite"; no.setAttribute("data-answer", "not_quite"); no.style.cssText = r.state === "fixed" ? smallBtn("#fff", "#51606f") : smallBtn("#c2620a", "#fff");
+      const no = document.createElement("button"); no.textContent = settled ? "Actually, not quite" : "Not quite"; no.setAttribute("data-answer", "not_quite"); no.style.cssText = settled ? smallBtn("#fff", "#51606f") : smallBtn("#c2620a", "#fff");
       no.onclick = still;
       row.appendChild(no); box.appendChild(row);
     };
@@ -396,7 +413,7 @@
     if (askCard) { askCard.remove(); askCard = null; }
     const shownKey = (id) => "sos.asked." + id;
     const wasShown = (id) => { try { return sessionStorage.getItem(shownKey(id)) === "1"; } catch (e) { return false; } };
-    const mineToAsk = changes.flatMap((c) => c.items.map((i) => Object.assign({ built: c.summary }, i))).find((i) => i.mine && i.can_answer && !i.floor_answer);
+    const mineToAsk = changes.flatMap((c) => c.items.map((i) => Object.assign({ built: c.summary }, i))).find((i) => i.mine && i.can_answer && !i.floor_answer && !i.manager_answer);   // the manager closing it out stops the question coming back
     const showAsk = (item, open) => {
       if (askCard) { askCard.remove(); askCard = null; }
       if (!open) {

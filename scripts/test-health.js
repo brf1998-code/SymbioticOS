@@ -170,6 +170,18 @@ const demo = (out) => out.companies.find((c) => c.slug === "demo");
   t("another company's answer stays its own, and the fleet adds up", out.companies.find((k) => k.slug === "acme").answers.not_quite === 1 && out.fleet.answers.not_quite === 2 && out.fleet.answers.fixed === 1, j(out.fleet.answers));
   t("with nothing answered the share is null, not zero", go(bundle({ feedback: [c] })).fleet.answers.fixed_share === null);
   t("all time takes the old answer in", demo(go(bundle({ feedback: [a, old] }), 0)).answers.fixed === 2);
+
+  // the manager's close-out on the shipped tile: Done, or a little left
+  const e = live(8, { manager_answer: "done", manager_answer_at: ago(7) });                                   // the manager closed it, the floor has not said
+  const f = live(9, { manager_answer: "little_left", manager_answer_at: ago(6) });                           // the manager says a little is left
+  const g = live(12, { manager_answer: "done", manager_answer_at: ago(11), floor_answer: "not_quite", floor_answer_at: ago(2) });   // closed, then the floor said not quite
+  const oldDone = live(24 * 60, { manager_answer: "done", manager_answer_at: ago(24 * 58) });
+  const y = demo(go(bundle({ feedback: [a, b, c, d, e, f, g, oldDone] }))).answers;
+  t("the manager's done and a little left count once each, inside the window", y.manager_done === 2 && y.manager_little_left === 1, j(y));
+  t("a request the manager closed is no longer unanswered", y.went_live === 7 && y.unanswered === 2 && y.unanswered_named === 1, j(y));
+  t("the floor's own share is still the floor's: the manager's taps do not move it", y.fixed === 1 && y.not_quite === 2 && y.fixed_share === Math.round((1 / 3) * 100) / 100, j(y));
+  t("met and missed count each request once: a done the floor later called not quite is a miss", y.met === 2 && y.missed === 3 && y.met_share === 0.4, j(y));
+  t("with nobody having spoken the met share is null", go(bundle({ feedback: [c] })).fleet.answers.met_share === null && go(bundle({ feedback: [c] })).fleet.answers.manager_done === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
