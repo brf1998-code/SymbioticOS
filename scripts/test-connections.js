@@ -14,7 +14,7 @@ const j = (x) => JSON.stringify(x);
   t("files and printer declarations normalize", d.ok && d.connections.stock.key.join(",") === "item,location" && d.connections.stock.columns.item[0] === "Part" && d.connections.labels.templates[0] === "traveler" && d.connections.labels.label === "Traveler labels", j(d));
   t("a files connection needs a table and a key", !c.declared({ connections: { a: { kind: "files" } } }).ok && /table/.test(c.declared({ connections: { a: { kind: "files", key: "x" } } }).errors[0]) && /key/.test(c.declared({ connections: { a: { kind: "files", table: "t" } } }).errors[0]));
   t("a printer needs its label names", /templates/.test(c.declared({ connections: { a: { kind: "printer" } } }).errors[0]));
-  t("a kind not built yet is refused, and a bad name", /erp/.test(c.declared({ connections: { a: { kind: "erp" } } }).errors[0]) && /name/.test(c.declared({ connections: { "Bad Name": { kind: "printer", templates: ["x"] } } }).errors[0]));
+  t("a kind not built yet is refused, and a bad name", /kind must be one of files, printer, erp/.test(c.declared({ connections: { a: { kind: "mes" } } }).errors[0]) && /name/.test(c.declared({ connections: { "Bad Name": { kind: "printer", templates: ["x"] } } }).errors[0]));
   t("a table name that is not an identifier is refused", !c.declared({ connections: { a: { kind: "files", table: "inventory; drop", key: "id" } } }).ok);
 }
 
@@ -62,6 +62,30 @@ const j = (x) => JSON.stringify(x);
   t("a module page visit without one mints a secure device cookie and carries it on the same request", nexted && /^sos_device=[a-f0-9]{24}; Path=\/; Max-Age=\d+; SameSite=Lax; Secure$/.test(set) && c.deviceOf(r2), set);
   set = null; c.deviceCookie({ headers: {}, path: "/c/demo/", protocol: "http" }, res, () => {});
   t("the board does not get one", set === null);
+}
+
+// erp declarations and the pure parts of the query path
+{
+  const d = c.declared({ connections: { erp: { kind: "erp", label: "SAP", queries: { parts: { params: ["part_no"], fields: ["part_no", "on_hand"], about: "stock" }, orders: { fields: ["so"] } } } } });
+  t("an erp declaration normalizes its queries", d.ok && d.connections.erp.queries.parts.params[0] === "part_no" && d.connections.erp.queries.orders.params.length === 0 && d.connections.erp.queries.parts.about === "stock", j(d));
+  t("no queries, no fields, a bad query name are refused", /lists the named queries/.test(c.declared({ connections: { e: { kind: "erp" } } }).errors[0]) && /names no fields/.test(c.declared({ connections: { e: { kind: "erp", queries: { p: {} } } } }).errors[0]) && /not a plain name/.test(c.declared({ connections: { e: { kind: "erp", queries: { "Bad Q": { fields: ["a"] } } } } }).errors[0]));
+  t("a module carrying the address or a login is refused", /never carries "base_url"/.test(c.declared({ connections: { e: { kind: "erp", queries: { p: { fields: ["a"] } }, base_url: "x" } } }).errors[0]) && /never carries "password"/.test(c.declared({ connections: { e: { kind: "erp", queries: { p: { fields: ["a"] } }, password: "x" } } }).errors[0]));
+  t("fillPath: url encoding and OData quote doubling, unknown params become empty", c.fillPath("S?$filter=A eq '{a}'&b={b}&c={c}", { a: "x'y", b: "1 2" }) === "S?$filter=A eq 'x%27%27y'&b=1%202&c=");
+  t("rowsOf: v2, v4, epicor, array, keyed, single entity", c.rowsOf("sap_odata", '{"d":{"results":[{"a":1}]}}').length === 1 && c.rowsOf("sap_odata", '{"value":[{"a":1},{"a":2}]}').length === 2 && c.rowsOf("epicor_baq", '{"value":[]}').length === 0 && c.rowsOf("json", '[{"a":1}]').length === 1 && c.rowsOf("json", '{"data":[{"a":1}]}').length === 1 && c.rowsOf("sap_odata", '{"d":{"a":1}}')[0].a === 1);
+  let e = ""; try { c.rowsOf("json", "nope"); } catch (x) { e = x.message; }
+  t("not JSON is named as such", /not answer with JSON/.test(e));
+  e = ""; try { c.rowsOf("json", '{"ok":true,"other":1}'); } catch (x) { e = x.message; }
+  t("a plain json object is one row for the json flavor", e === "" && c.rowsOf("json", '{"ok":true}')[0].ok === true);
+  e = ""; try { c.rowsOf("sap_odata", '{"count":3}'); } catch (x) { e = x.message; }
+  t("an object with no rows is refused for SAP", /not with a list of rows/.test(e), e);
+  t("mapRows: dotted paths, nulls for what is missing, capped rows", j(c.mapRows([{ a: { b: "x" }, n: 0 }], ["p", "q", "r"], { p: "a.b", q: "n" })) === j([{ p: "x", q: 0, r: null }]) && c.mapRows(new Array(6000).fill({ a: 1 }), ["a"], { a: "a" }).length === 5000);
+  const h = c.authHeaders({ flavor: "sap_odata", sap_client: "100" }, { user: "u", password: "p" });
+  t("auth headers for SAP basic + client", h.authorization === "Basic dTpw" && h["sap-client"] === "100" && h.accept === "application/json");
+  t("auth headers for Epicor api key, json bearer, custom header", c.authHeaders({ flavor: "epicor_baq" }, { api_key: "K" })["x-api-key"] === "K" && c.authHeaders({ flavor: "json" }, { api_key: "K" }).authorization === "Bearer K" && c.authHeaders({ flavor: "json", auth_header: "X-Token" }, { api_key: "K" })["x-token"] === "K");
+  const st = c.erpSettings({ settings: { flavor: "sap_odata", base_url: "  https://x/ ", freshness_s: 0, queries: { parts: { path: "P", fields: { item: "Material", "bad name": "x" }, freshness_s: 30 } } } });
+  t("erpSettings: trimmed url, default freshness, per-query freshness, bad field names dropped", st.base_url === "https://x/" && st.freshness_s === 300 && st.queries.parts.freshness_s === 30 && !("bad name" in st.queries.parts.fields) && st.transport === "direct" && st.verify_tls === true);
+  const bad = c.erpSettings({ settings: { flavor: "oracle", transport: "pigeon", verify_tls: false } });
+  t("unknown flavor and transport fall back; verify_tls can be turned off", bad.flavor === "sap_odata" && bad.transport === "direct" && bad.verify_tls === false);
 }
 
 // secrets (ready for the erp kind)

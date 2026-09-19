@@ -33,17 +33,23 @@
   .preview img { border:1px solid var(--line); background:#fff; max-width:100%; margin-top:6px; }
   code { background:var(--fog); padding:1px 5px; border-radius:4px; font-size:12px; }
   .empty { color:var(--steel); font-size:13px; padding:20px 0; }
+  textarea { font-family:inherit; font-size:12.5px; border:1px solid var(--line); border-radius:7px; padding:7px; width:100%; }
+  pre.note { background:var(--fog); border-radius:8px; padding:10px; white-space:pre-wrap; font:12.5px/1.5 system-ui,sans-serif; margin-top:6px; }
+  .admin { border:1px dashed var(--navy); border-radius:8px; padding:10px; margin-top:10px; }
+  .admin label { display:block; font-size:12px; color:var(--steel); margin-top:8px; }
+  .admin input, .admin select { width:100%; max-width:640px; }
+  .q { background:#fff; border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:8px; }
 </style>
 </head>
 <body>
-  <div class="band"><h1>Connections</h1><div class="sub" id="sub">The outside world: spreadsheets, label printers. The platform owns every connection; a module only uses it.</div></div>
+  <div class="band"><h1>Connections</h1><div class="sub" id="sub">The outside world: spreadsheets, label printers, the ERP. The platform owns every connection; a module only uses it.</div></div>
   <div class="wrap">
     <div class="intro">Each module says what it needs from outside in its own words. Set it up here once, test it with one button, and the module uses it from then on. Nothing on this page is written by the agents that build modules.</div>
     <div id="list"></div>
   </div>
 <script>
 const SLUG = location.pathname.split("/")[2];
-let D = null;
+let D = null, ROLE = null;
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
 function when(t) { return t ? new Date(t).toLocaleString() : "never"; }
 async function api(p, body) {
@@ -55,6 +61,7 @@ async function api(p, body) {
 }
 async function load() {
   D = await api("/connections");
+  ROLE = D.role || "";
   document.querySelector(".band h1").textContent = `Connections`;
   document.getElementById("sub").textContent = `${SLUG}: ` + (D.modules.length ? `${D.modules.reduce((n, m) => n + m.connections.length, 0)} connection(s) across ${D.modules.length} module(s)` : "no module on this floor declares a connection yet");
   const list = document.getElementById("list");
@@ -95,12 +102,70 @@ function card(m, c) {
         <li>Open this page or any screen of the module on that device, choose the printer, print a test label.</li>
       </ol>
       ${c.jobs.length ? `<div class="tw"><table><tr><th>When</th><th>Label</th><th>Device</th><th>Printer</th><th>Result</th></tr>${c.jobs.map(j => `<tr><td>${when(j.created_at)}</td><td>${esc(j.template)}</td><td>${esc(j.device || "")}</td><td>${esc(j.printer || "")}</td><td class="${j.status === "done" ? "ok" : j.status === "failed" ? "bad" : j.status === "queued" || j.status === "sent" ? "warn" : ""}">${esc(j.status)}${j.error ? `: ${esc(j.error)}` : ""}</td></tr>`).join("")}</table></div>` : ""}`;
+  } else if (c.kind === "erp") {
+    const s = c.settings;
+    const lt = c.detail.last_test || [];
+    body = `
+      <div class="sub" style="margin-top:6px">Lookups this module needs: ${c.queries.map(qq => `<code>${esc(qq.name)}</code> (${esc(qq.about || "a read-only lookup")}; fields ${qq.fields.join(", ")}${qq.params.length ? `; looked up by ${qq.params.join(", ")}` : ""}) ${qq.defined ? `<span class="ok">defined</span>` : `<span class="warn">not defined on the platform yet</span>`}`).join("<br>")}
+        <br>${s.base_url ? `System: ${esc({ sap_odata: "SAP (OData)", epicor_baq: "Epicor (BAQ)", json: "JSON API" }[s.flavor])} at <code>${esc(s.base_url)}</code>, login ${c.has_login ? "entered" : "<span class='warn'>not entered</span>"}, answers kept ${s.freshness_s >= 60 ? Math.round(s.freshness_s / 60) + " min" : s.freshness_s + " s"}.` : "<span class='warn'>Where the system is has not been entered yet.</span>"}
+        ${c.detail.last_fetched_at ? ` Last read ${when(c.detail.last_fetched_at)}.` : ""}
+        ${c.last_error ? `<br><span class="bad">Last trouble: ${esc(c.last_error)}</span>` : ""}</div>
+      ${lt.length ? `<div class="sub" style="margin-top:6px"><b>Last test</b> (${when(c.detail.last_tested_at)}): ${lt.map(r => `${esc(r.query)}: ${r.ok ? `<span class="ok">${r.rows} rows</span>${r.empty_fields.length ? ` <span class="warn">(${r.empty_fields.join(", ")} came back empty: check the field names)</span>` : ""}` : `<span class="bad">${esc(r.error)}</span>`}`).join("; ")}</div>` : ""}
+      <div style="margin-top:6px"><button class="go" onclick="testErp('${m.module}','${c.name}')">Test the lookups</button> <a href="/api/c/${SLUG}/connections/${m.module}/${c.name}/it-note.txt" download><button class="quiet">Download the note for IT</button></a></div>
+      <div id="t-${id}"></div>
+      <details style="margin-top:8px"><summary class="sub" style="cursor:pointer">The note to send IT (plain words, with the technical part filled in as far as it is known)</summary><pre class="note">${esc(c.it_note)}</pre></details>
+      ${ROLE === "admin" ? adminErp(m, c) : `<div class="sub" style="margin-top:8px">Where the system is, the lookups and the login are entered by Anetix on the platform once IT answers.</div>`}`;
   }
   return `<div class="card" id="c-${id}">
-    <div class="head"><b>${esc(c.label)}</b> ${status} <span class="kind">${c.kind === "files" ? "spreadsheet" : "label printer"}</span></div>
+    <div class="head"><b>${esc(c.label)}</b> ${status} <span class="kind">${c.kind === "files" ? "spreadsheet" : c.kind === "printer" ? "label printer" : "ERP, read only"}</span></div>
     <div class="sub">${esc(c.text.what)} <b>What a person does:</b> ${esc(c.text.person)}</div>
     ${body}
   </div>`;
+}
+// ---- erp (admin sets it up; the manager tests and sends the note) ----
+function adminErp(m, c) {
+  const id = `${m.module}-${c.name}`; const s = c.settings;
+  return `<div class="admin"><b>Admin setup</b> <span class="sub">(only an admin sees this; the login never comes back out)</span>
+    <label>System</label><select id="e-flavor-${id}"><option value="sap_odata" ${s.flavor === "sap_odata" ? "selected" : ""}>SAP (OData through Gateway or S/4HANA)</option><option value="epicor_baq" ${s.flavor === "epicor_baq" ? "selected" : ""}>Epicor Kinetic (BAQ REST)</option><option value="json" ${s.flavor === "json" ? "selected" : ""}>Any read-only JSON endpoint</option></select>
+    <label>Base URL (the service root; each lookup's path is added to it)</label><input id="e-url-${id}" value="${esc(s.base_url)}" placeholder="https://sap.example.com/sap/opu/odata/sap/ZSTOCK_SRV/">
+    <label>Transport</label><select id="e-tr-${id}"><option value="direct" ${s.transport === "direct" ? "selected" : ""}>direct: the platform calls the system over HTTPS</option><option value="bridge" ${s.transport === "bridge" ? "selected" : ""}>bridge: a plant-side program carries the calls (not available yet)</option></select>
+    <label>Answers are kept for (seconds)</label><input id="e-fresh-${id}" type="number" min="5" value="${s.freshness_s}">
+    <label>SAP client (SAP only, optional)</label><input id="e-client-${id}" value="${esc(s.sap_client)}" placeholder="100">
+    <label><input type="checkbox" id="e-tls-${id}" ${s.verify_tls ? "checked" : ""} style="width:auto"> Check the system's certificate (untick only for a self-signed on-prem certificate)</label>
+    <label>Login: user and password, or an API key (leave blank to keep what is entered)</label>
+    <input id="e-user-${id}" placeholder="technical user" autocomplete="off" style="max-width:300px"> <input id="e-pw-${id}" type="password" placeholder="password" autocomplete="new-password" style="max-width:300px"> <input id="e-key-${id}" placeholder="API key (instead of a password)" autocomplete="off" style="max-width:300px">
+    ${c.queries.map(qq => { const d = qq.definition || { path: "", fields: {}, test_params: {} }; return `<div class="q"><b>${esc(qq.name)}</b> <span class="sub">${esc(qq.about || "")}</span>
+      <label>Path after the base URL, with {param} for each of: ${qq.params.length ? qq.params.map(p => "{" + p + "}").join(", ") : "none"}</label><input id="e-path-${id}-${qq.name}" value="${esc(d.path)}" placeholder="${s.flavor === "epicor_baq" ? "BaqSvc/StockByPart/?PartNum={part_no}" : "StockSet?$filter=Plant eq '1000'"}">
+      <label>The system's field behind each of the module's fields (dotted paths allowed)</label>
+      ${qq.fields.map(f => `<div style="margin-top:3px"><code style="display:inline-block;min-width:120px">${esc(f)}</code> <input id="e-f-${id}-${qq.name}-${f}" value="${esc(d.fields[f] || "")}" placeholder="e.g. ${s.flavor === "sap_odata" ? "Material" : "PartNum"}" style="max-width:300px"></div>`).join("")}
+      ${qq.params.length ? `<label>Values to test with (${qq.params.join(", ")})</label>${qq.params.map(p => `<input id="e-tp-${id}-${qq.name}-${p}" value="${esc(d.test_params[p] || "")}" placeholder="${p}" style="max-width:300px;margin-right:6px">`).join("")}` : ""}
+    </div>`; }).join("")}
+    <button class="primary" onclick="saveErp('${m.module}','${c.name}')">Save setup</button> <button class="quiet" onclick="saveErp('${m.module}','${c.name}',true)">Clear the login</button>
+    <div id="e-note-${id}" class="sub"></div></div>`;
+}
+async function saveErp(mod, name, clear) {
+  const id = `${mod}-${name}`; const c = D.modules.find(x => x.module === mod).connections.find(x => x.name === name);
+  const g = (k) => (document.getElementById(k) || {}).value || "";
+  const queries = {};
+  for (const qq of c.queries) {
+    const fields = {}; for (const f of qq.fields) fields[f] = g(`e-f-${id}-${qq.name}-${f}`);
+    const test_params = {}; for (const p of qq.params) test_params[p] = g(`e-tp-${id}-${qq.name}-${p}`);
+    queries[qq.name] = { path: g(`e-path-${id}-${qq.name}`), fields, test_params };
+  }
+  const body = { settings: { flavor: g(`e-flavor-${id}`), base_url: g(`e-url-${id}`), transport: g(`e-tr-${id}`), freshness_s: Number(g(`e-fresh-${id}`)), sap_client: g(`e-client-${id}`), verify_tls: document.getElementById(`e-tls-${id}`).checked, queries } };
+  if (clear) body.clear_secrets = true;
+  else if (g(`e-user-${id}`) || g(`e-key-${id}`)) body.secrets = { user: g(`e-user-${id}`), password: g(`e-pw-${id}`), api_key: g(`e-key-${id}`) };
+  try { const r = await fetch(`/api/admin/connections/${SLUG}/${mod}/${name}/erp`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const j = await r.json(); if (!r.ok) throw new Error(j.error || "failed"); document.getElementById(`e-note-${id}`).textContent = `Saved. Login ${j.has_login ? "entered" : "not entered"}.`; setTimeout(load, 800); }
+  catch (e) { document.getElementById(`e-note-${id}`).textContent = e.message; }
+}
+async function testErp(mod, name) {
+  const out = document.getElementById(`t-${mod}-${name}`);
+  out.innerHTML = `<div class="box">Asking the system...</div>`;
+  try {
+    const r = await api(`/connections/${mod}/${name}/test`, {});
+    out.innerHTML = `<div class="box">${r.results.map(x => x.ok ? `<div><span class="ok">${esc(x.query)}: ${x.rows} rows</span>${x.sample ? ` <span class="sub">first row: ${esc(Object.entries(x.sample).map(([k, v]) => `${k}=${v == null ? "" : v}`).join(", "))}</span>` : ""}${x.empty_fields.length ? ` <span class="warn">${x.empty_fields.join(", ")} came back empty</span>` : ""}</div>` : `<div class="bad">${esc(x.query)}: ${esc(x.error)}</div>`).join("")}</div>`;
+    setTimeout(load, 1500);
+  } catch (e) { out.innerHTML = `<div class="box bad">${esc(e.message)}</div>`; }
 }
 // ---- files ----
 function readFile(file) {

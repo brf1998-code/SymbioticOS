@@ -43,6 +43,11 @@ S0-94 | 2026-09-19 | PASS | same, a browser context where localhost:9100 refuses
 S0-95 | 2026-09-19 | PASS | sandbox: settings saved and bounded (dpmm 99 fell back to 8); the preview endpoint answered 503 with the ZPL because the sandbox cannot reach the renderer (a live check on Railway is still to do) | pilot | live check open |
 S0-96 | 2026-09-19 | PASS | sandbox: device B saw nothing of device A's job and could not finish it; a test label from device B went to B | pilot | n/a
 S3-11 | 2026-09-19 | PASS | gate unit: erp kind refused, files without key refused, printer without labels/tag.zpl refused, all three pass once complete; station page policy carries localhost:9100 and /api/c/demo/print/ and not the board; the kpis page policy carries neither | pilot | n/a
+S0-97 | 2026-09-19 | PASS | sandbox, fresh database, 37 of 37 checks end to end against the stand-in SAP: setup saved with the login encrypted, test 5 rows with mapped sample, connected, module read mapped fresh rows, cached, on the record; the login absent from every answer and the backup | pilot | n/a
+S0-98 | 2026-09-19 | PASS | sandbox: dead address with cache cleared gave a plain reason (refused the connection); with an old cache the old 5 rows came back fresh=false and the card stayed connected with the trouble shown | pilot | n/a
+S0-99 | 2026-09-19 | PASS | sandbox: OnHandQty came back as an empty field with the other three fine; a path with {item} on a query with no params was refused with the param named; an OData filter written into the path reached the ERP (1 row for clip) | pilot | n/a
+S0-100 | 2026-09-19 | PASS | sandbox: the note names the access, the lookup and its four fields, the source, the cache time, how the login is kept; no dashes | pilot | n/a
+S3-12 | 2026-09-19 | PASS | gate unit: base_url and user in a module declaration refused with the key named; no fields refused; no queries refused; a proper declaration passes (also in the connections unit cases, 38 of 38) | pilot | n/a
 
 ## Stage 1
 

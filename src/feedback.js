@@ -513,7 +513,7 @@ router.get("/api/admin/health", requireAdmin, async (req, res) => {
 // The company's connections page (manager): every declared connection of
 // every live module, its state, and what a person has to set up.
 router.get("/api/c/:slug/connections", requireManager, async (req, res) => {
-  try { res.json({ company: req.params.slug, modules: await connections.companyView(req.params.slug) }); }
+  try { res.json({ company: req.params.slug, role: req.sosRole, modules: await connections.companyView(req.params.slug) }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 router.post("/api/c/:slug/connections/:mod/:name/settings", requireManager, async (req, res) => {
@@ -530,9 +530,23 @@ router.post("/api/c/:slug/connections/:mod/:name/load", requireManager, async (r
   try { res.json(await connections.loadUpload(req.params.slug, req.params.mod, req.params.name, Number((req.body || {}).upload_id), actor(req))); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
-// printer: a test label for this device, a preview of the test label, the jobs
+// printer: a test label for this device; erp: every query with its test params
 router.post("/api/c/:slug/connections/:mod/:name/test", requireManager, async (req, res) => {
-  try { res.json(await connections.testLabel(req.params.slug, req.params.mod, req.params.name, req)); }
+  try {
+    const c = await connections.row(req.params.slug, req.params.mod, req.params.name);
+    if (c && c.kind === "erp") return res.json(await connections.testErp(req.params.slug, req.params.mod, req.params.name, actor(req)));
+    res.json(await connections.testLabel(req.params.slug, req.params.mod, req.params.name, req));
+  }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+// erp: where the system is, how each query is fulfilled, the read-only login
+// (admin only during pilots, decided 2026-09-19; the login never comes back out)
+router.post("/api/admin/connections/:slug/:mod/:name/erp", requireAdmin, async (req, res) => {
+  try { res.json(await connections.setErp(req.params.slug, req.params.mod, req.params.name, req.body || {}, actor(req))); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.get("/api/c/:slug/connections/:mod/:name/it-note.txt", requireManager, async (req, res) => {
+  try { res.set("Content-Disposition", `attachment; filename="read-only-access-${req.params.slug}-${req.params.name}.txt"`).type("text/plain").send(await connections.itNote(req.params.slug, req.params.mod, req.params.name)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 router.get("/api/c/:slug/connections/:mod/:name/preview.png", requireManager, async (req, res) => {

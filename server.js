@@ -39,6 +39,10 @@ async function main() {
   app.get("/login", (_req, res) => res.sendFile(page("login.html")));
   app.post("/login", express.json(), auth.loginHandler);
   app.get("/logout", auth.logoutHandler);
+  // A stand-in ERP for the showroom: SAP-shaped OData answers about the paper
+  // line's stock, so a demo company's erp connection has something to talk
+  // to (base URL <this host>/erp-demo/). Static rows, read only, no login.
+  app.get("/erp-demo/:entity", connections.demoErp);
 
   app.use(auth.middleware);    // everything below needs a floor, manager, or admin session
   app.use(auth.companyGuard);  // and a floor or manager session reaches its own company only

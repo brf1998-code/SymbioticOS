@@ -294,7 +294,13 @@ module.exports = function makeRouter(ctx) {
     const delivered = (await db(
       `SELECT r.*, s.name AS station_name FROM material_requests r LEFT JOIN stations s ON s.id=r.station_id
         WHERE r.status='delivered' ORDER BY r.delivered_at DESC LIMIT 15`)).rows;
-    res.json({ inventory, requests, delivered });
+    // what the ERP says is on hand, through the platform's read-only
+    // connection "erp" (ctx.connections.erp); the page says "not connected
+    // yet" until the platform has it set up
+    let erp;
+    try { const r = await connections.erp.query("parts", {}); erp = { rows: r.rows, fresh: r.fresh, fetched_at: r.fetched_at }; }
+    catch (e) { erp = { rows: [], error: e.message }; }
+    res.json({ inventory, requests, delivered, erp });
   });
 
   router.post("/api/requests", async (req, res) => {

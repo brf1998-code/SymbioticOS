@@ -33,7 +33,9 @@ labels/<name>.zpl    label layouts, only when the module prints labels (below)
   "connections": {                      only what the design's Connections section names (below)
     "stock":  { "kind": "files", "label": "Stock count spreadsheet", "table": "items", "key": "sku",
                 "columns": { "qty": ["Qty", "On hand"] } },
-    "labels": { "kind": "printer", "label": "Bin labels", "templates": ["bin"] }
+    "labels": { "kind": "printer", "label": "Bin labels", "templates": ["bin"] },
+    "erp":    { "kind": "erp", "label": "Epicor (read only)",
+                "queries": { "part": { "params": ["part_no"], "fields": ["part_no", "description", "on_hand"], "about": "one part and what the ERP says is on hand" } } }
   }
 }
 ```
@@ -162,6 +164,21 @@ before a connection is set up (say "not connected yet" where it matters,
   not reachable) for a "what the label looks like" image. `status()` returns
   `{ connected, printers, last_printed_at, error }`. Never write `^XA` to a
   socket, a file or a fetch: module code cannot reach a printer, only this.
+- `erp`: the company's ERP, MES or scheduling system, read only, through a
+  short list of named lookups. Declare each query the module needs: its
+  `params` (what it is looked up by), the `fields` the module expects back,
+  and `about` in plain words. Never write where the system is or any login
+  in the module: the platform's administrator enters the address, the path
+  behind each query and the read-only login on the platform, and the
+  manager tests it there. In a route,
+  `const r = await ctx.connections.erp.query("part", { part_no: "A-100" })`
+  returns `{ rows, fetched_at, fresh, from_cache }`; each row has exactly the
+  declared fields (null where the system had nothing). Answers are cached a
+  few minutes; when the system is down the last good rows come back with
+  `fresh: false`, so show them with "as of <time>". Until it is set up,
+  `query()` throws with a plain reason: catch it and show "not connected
+  yet". Nothing is ever written back; a module that needs to write to the
+  ERP is out of scope of a first version.
 
 A barcode or QR scanner in keyboard mode needs nothing to connect: give the
 page a scan field that keeps focus, treats Enter as the end of a scan, and

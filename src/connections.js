@@ -25,12 +25,25 @@
 //            to the printer chosen there. Module code never talks to a
 //            printer. Surface: print(req, template, data), preview(template,
 //            data), status().
-//   erp      next push (read-only named queries; SAP first).
+//   erp      the company's ERP, MES or scheduling system, READ ONLY, through a
+//            short list of named queries. The module declares the queries it
+//            needs (name, params, the fields it expects); the admin defines on
+//            the platform how each is fulfilled (base URL, flavor, a path
+//            template per query, the ERP field behind each module field, test
+//            params) and enters the read-only login, encrypted. The platform
+//            runs the query, maps the fields, caches the rows with a freshness
+//            per query, and returns stale rows with fresh=false when the ERP
+//            is down. Flavors: sap_odata (SAP Gateway / S/4HANA OData v2 or
+//            v4; SAP sets the pattern for NEWP), epicor_baq (Epicor Kinetic
+//            BAQ REST), json (any read-only JSON endpoint). Transport: direct
+//            (the instance calls the ERP over HTTPS); bridge (a plant-side
+//            program carries the query, for an ERP the cloud cannot reach) is
+//            designed in but not built: settings.transport="bridge" answers
+//            "not available yet". Surface: query(name, params), status().
 //
-// Secrets: none of this push's kinds has any; the column and the cipher are
-// here so the ERP kind lands without a schema change. The key lives only in
-// the platform's env (SOS_CONNECTION_KEY, else derived from SESSION_SECRET),
-// never in the agent's allow-list.
+// Secrets: the ERP login lives in the secrets column, AES-256-GCM with a key
+// that lives only in the platform's env (SOS_CONNECTION_KEY, else derived
+// from SESSION_SECRET), never in the agent's allow-list, never in a page.
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
@@ -39,7 +52,10 @@ const migrate = require("./migrate");
 const attachments = require("./attachments");
 const { record } = require("./record");
 
-const KINDS = ["files", "printer"];
+const KINDS = ["files", "printer", "erp"];
+const ERP_FLAVORS = ["sap_odata", "epicor_baq", "json"];
+const ERP_TRANSPORTS = ["direct", "bridge"];
+const ERP_MAX_ROWS = 5000;
 const NAME = /^[a-z][a-z0-9_]{0,39}$/;
 const IDENT = /^[a-z_][a-z0-9_]{0,62}$/;
 const JOB_TTL_MS = 10 * 60e3;          // an unclaimed print job expires
@@ -95,6 +111,16 @@ CREATE TABLE IF NOT EXISTS platform.print_jobs (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS print_jobs_device ON platform.print_jobs (company, device, status);
+CREATE TABLE IF NOT EXISTS platform.erp_cache (
+  company     TEXT NOT NULL,
+  module      TEXT NOT NULL,
+  connection  TEXT NOT NULL,
+  query       TEXT NOT NULL,
+  params_hash TEXT NOT NULL,
+  rows        JSONB NOT NULL DEFAULT '[]'::jsonb,
+  fetched_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (company, module, connection, query, params_hash)
+);
 `;
 async function init() { await q(SCHEMA); }
 
@@ -142,6 +168,21 @@ function declared(manifest) {
       const t = Array.isArray(d.templates) ? d.templates : [];
       if (!t.length || t.some((x) => !/^[a-z][a-z0-9_-]{0,39}$/.test(String(x)))) errors.push(`connection "${name}": "templates" lists the label names, each kept as labels/<name>.zpl`);
       n.templates = t.map(String);
+    }
+    if (d.kind === "erp") {
+      const qs = d.queries && typeof d.queries === "object" && !Array.isArray(d.queries) ? d.queries : null;
+      if (!qs || !Object.keys(qs).length) errors.push(`connection "${name}": an erp connection lists the named queries it needs ("queries": { name: { params, fields, about } })`);
+      n.queries = {};
+      for (const [qn, qv] of Object.entries(qs || {})) {
+        if (!NAME.test(qn)) { errors.push(`connection "${name}": query "${qn}" is not a plain name`); continue; }
+        const qd = qv && typeof qv === "object" ? qv : {};
+        const params = Array.isArray(qd.params) ? qd.params.map(String) : [];
+        const fields = Array.isArray(qd.fields) ? qd.fields.map(String) : [];
+        if (!fields.length) errors.push(`connection "${name}": query "${qn}" names no fields; say which fields the module expects back`);
+        if (params.some((x) => !IDENT.test(x)) || fields.some((x) => !IDENT.test(x))) errors.push(`connection "${name}": query "${qn}": params and fields are plain identifiers`);
+        n.queries[qn] = { params, fields, about: String(qd.about || "").slice(0, 200) };
+      }
+      for (const k of ["url", "base_url", "user", "password", "path", "host"]) if (d[k] != null) errors.push(`connection "${name}": a module never carries "${k}"; the admin enters where the ERP is and the login on the platform`);
     }
     out[name] = n;
   }
@@ -359,6 +400,216 @@ async function previewPng(zpl, settings) {
   } catch (e) { previews.set(k, { png: null, at: Date.now() }); return null; }
 }
 
+// ---- erp: read-only named queries ----------------------------------------------------------
+const http = require("http"), https = require("https");
+function httpGet(url, { headers = {}, timeoutMs = 15000, verifyTls = true } = {}) {
+  return new Promise((resolve, reject) => {
+    let u; try { u = new URL(url); } catch (e) { return reject(new Error("the ERP address is not a valid URL")); }
+    if (!/^https?:$/.test(u.protocol)) return reject(new Error("the ERP address must start with http:// or https://"));
+    const mod = u.protocol === "https:" ? https : http;
+    const req = mod.request(u, { method: "GET", headers, rejectUnauthorized: verifyTls, timeout: timeoutMs }, (res) => {
+      const chunks = []; let size = 0;
+      res.on("data", (c) => { size += c.length; if (size > 20 * 1024 * 1024) { req.destroy(new Error("the ERP answered with more than 20 MB")); return; } chunks.push(c); });
+      res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, text: Buffer.concat(chunks).toString("utf8") }));
+    });
+    req.on("timeout", () => req.destroy(new Error(`the ERP did not answer within ${Math.round(timeoutMs / 1000)} seconds`)));
+    req.on("error", (e) => reject(new Error(e.code === "ENOTFOUND" ? "the ERP address could not be found" : e.code === "ECONNREFUSED" ? "the ERP refused the connection" : /certificate|self.signed|CERT/i.test(e.message) ? `the ERP's certificate is not trusted (${e.message})` : e.message)));
+    req.end();
+  });
+}
+// Settings the admin keeps for an erp connection, bounded.
+function erpSettings(c) {
+  const s = (c && c.settings) || {};
+  const out = {
+    flavor: ERP_FLAVORS.includes(s.flavor) ? s.flavor : "sap_odata",
+    transport: ERP_TRANSPORTS.includes(s.transport) ? s.transport : "direct",
+    base_url: String(s.base_url || "").trim().slice(0, 500),
+    verify_tls: s.verify_tls !== false,
+    freshness_s: Number(s.freshness_s) > 0 ? Math.min(86400, Math.round(Number(s.freshness_s))) : 300,
+    sap_client: String(s.sap_client || "").slice(0, 10),
+    auth_header: String(s.auth_header || "").slice(0, 60),
+    queries: {},
+  };
+  for (const [qn, qv] of Object.entries(s.queries || {})) {
+    if (!NAME.test(qn)) continue;
+    const q = qv && typeof qv === "object" ? qv : {};
+    const fields = {};
+    for (const [mf, ef] of Object.entries(q.fields || {})) if (IDENT.test(mf) && ef != null && String(ef).trim()) fields[mf] = String(ef).trim().slice(0, 120);
+    out.queries[qn] = { path: String(q.path || "").trim().slice(0, 1000), fields, test_params: q.test_params && typeof q.test_params === "object" ? q.test_params : {}, freshness_s: Number(q.freshness_s) > 0 ? Math.min(86400, Math.round(Number(q.freshness_s))) : null };
+  }
+  return out;
+}
+// {param} in a path template becomes the value, escaped for a URL and, in an
+// OData filter, for its single quotes.
+function fillPath(template, params) {
+  return String(template).replace(/\{([a-zA-Z0-9_]+)\}/g, (_, k) => {
+    const v = params && params[k] != null ? String(params[k]) : "";
+    return encodeURIComponent(v.replace(/'/g, "''")).replace(/'/g, "%27");
+  });
+}
+// The rows out of an ERP answer, by flavor. SAP OData v2 wraps them in
+// d.results, v4 in value; Epicor BAQ in value; a plain JSON endpoint in an
+// array or a rows/value/data/results key.
+function rowsOf(flavor, body) {
+  let j; try { j = JSON.parse(body); } catch (e) { throw new Error("the ERP did not answer with JSON (is the address the OData service itself?)"); }
+  if (j && j.error) { const m = j.error.message; throw new Error(`the ERP answered with an error: ${typeof m === "string" ? m : (m && m.value) || JSON.stringify(j.error).slice(0, 200)}`); }
+  if (Array.isArray(j)) return j;
+  if (j && j.d) { if (Array.isArray(j.d.results)) return j.d.results; if (Array.isArray(j.d)) return j.d; if (typeof j.d === "object") return [j.d]; }
+  for (const k of ["value", "rows", "data", "results", "items"]) if (j && Array.isArray(j[k])) return j[k];
+  if (j && typeof j === "object" && !Array.isArray(j) && flavor === "json") return [j];
+  throw new Error("the ERP answered, but not with a list of rows the platform recognizes");
+}
+const pick = (row, pathStr) => String(pathStr).split(".").reduce((o, k) => (o == null ? undefined : o[k]), row);
+function mapRows(rows, declaredFields, fieldMap) {
+  return rows.slice(0, ERP_MAX_ROWS).map((r) => { const o = {}; for (const f of declaredFields) { const src = fieldMap[f]; const v = src ? pick(r, src) : undefined; o[f] = v === undefined ? null : v; } return o; });
+}
+function authHeaders(settings, secrets) {
+  const h = { accept: "application/json" };
+  const sec = secrets || {};
+  if (sec.user) h.authorization = "Basic " + Buffer.from(`${sec.user}:${sec.password || ""}`).toString("base64");
+  if (sec.api_key) { const name = settings.auth_header || (settings.flavor === "epicor_baq" ? "x-api-key" : "authorization"); h[name.toLowerCase()] = name.toLowerCase() === "authorization" && !sec.user ? `Bearer ${sec.api_key}` : sec.api_key; }
+  if (settings.flavor === "sap_odata" && settings.sap_client) h["sap-client"] = settings.sap_client;
+  return h;
+}
+// Run one named query against the ERP, no cache. Throws with plain words.
+async function erpFetch(company, mod, name, qname, params) {
+  const c = await row(company, mod, name);
+  const live = await liveDeclaration(company, mod, name);
+  if (!c || !live || live.kind !== "erp") throw new Error("no such ERP connection on this module");
+  const decl = live.queries[qname];
+  if (!decl) throw new Error(`the module has no query named ${qname}`);
+  const s = erpSettings(c);
+  const def = s.queries[qname];
+  if (!s.base_url || !def || !def.path) throw new Error(`${c.label || name} is not connected yet (the query "${qname}" has no definition on the platform)`);
+  if (s.transport === "bridge") throw new Error("the plant-side bridge is not available yet; set the transport to direct until it is");
+  for (const p of decl.params) if (params == null || params[p] == null || params[p] === "") throw new Error(`the query ${qname} needs ${p}`);
+  const url = s.base_url.replace(/\/+$/, "/") + fillPath(def.path, params).replace(/^\/+/, "");
+  let secrets = null;
+  if (c.secrets) { try { secrets = decrypt(c.secrets); } catch (e) { throw new Error("the stored login cannot be read (the platform's connection key changed); enter the login again"); } }
+  const r = await httpGet(url, { headers: authHeaders(s, secrets), verifyTls: s.verify_tls });
+  if (r.status === 401 || r.status === 403) throw new Error(`the ERP refused the login (${r.status})`);
+  if (r.status === 404) throw new Error("the ERP has no such service or query at that path (404)");
+  if (r.status >= 400) throw new Error(`the ERP answered ${r.status}`);
+  const raw = rowsOf(s.flavor, r.text);
+  return { rows: mapRows(raw, decl.fields, def.fields), raw_count: raw.length, url: url.replace(/\?.*/, "") };
+}
+const paramsHash = (params) => crypto.createHash("md5").update(JSON.stringify(params || {}, Object.keys(params || {}).sort())).digest("hex");
+// What a module calls: fresh rows from the cache, else the ERP, else stale
+// rows with fresh=false; and a plain error when nothing is there.
+async function erpQuery(company, mod, name, qname, params) {
+  const c = await row(company, mod, name);
+  const s = erpSettings(c);
+  const def = s.queries[qname] || {};
+  const fresh_s = def.freshness_s || s.freshness_s;
+  const h = paramsHash(params);
+  const cached = (await q("SELECT rows, fetched_at FROM platform.erp_cache WHERE company=$1 AND module=$2 AND connection=$3 AND query=$4 AND params_hash=$5", [company, mod, name, qname, h])).rows[0];
+  if (cached && Date.now() - new Date(cached.fetched_at).getTime() < fresh_s * 1000) return { rows: cached.rows, fetched_at: cached.fetched_at, fresh: true, from_cache: true };
+  try {
+    const out = await erpFetch(company, mod, name, qname, params);
+    await q(`INSERT INTO platform.erp_cache (company, module, connection, query, params_hash, rows, fetched_at) VALUES ($1,$2,$3,$4,$5,$6,now())
+             ON CONFLICT (company, module, connection, query, params_hash) DO UPDATE SET rows=EXCLUDED.rows, fetched_at=now()`, [company, mod, name, qname, h, JSON.stringify(out.rows)]);
+    if (c && c.status !== "connected") await setStatus(company, mod, name, "connected", { detail: { last_query: qname, last_fetched_at: new Date().toISOString() } });
+    else await q("UPDATE platform.connections SET detail = detail || $4::jsonb, last_checked=now() WHERE company=$1 AND module=$2 AND name=$3", [company, mod, name, JSON.stringify({ last_query: qname, last_fetched_at: new Date().toISOString() })]);
+    return { rows: out.rows, fetched_at: new Date().toISOString(), fresh: true, from_cache: false };
+  } catch (e) {
+    if (c && s.base_url) await setStatus(company, mod, name, cached ? "connected" : "error", { error: e.message.slice(0, 300) });
+    if (cached) return { rows: cached.rows, fetched_at: cached.fetched_at, fresh: false, from_cache: true, error: e.message };
+    throw e;
+  }
+}
+// The admin sets where the ERP is, how each query is fulfilled, and the login.
+async function setErp(company, mod, name, { settings, secrets, clear_secrets }, actor) {
+  const c = await row(company, mod, name);
+  if (!c || c.kind !== "erp") throw new Error("no such ERP connection");
+  const before = erpSettings(c);
+  const next = erpSettings({ settings: { ...c.settings, ...(settings || {}), queries: { ...(c.settings && c.settings.queries) || {}, ...((settings || {}).queries || {}) } } });
+  let enc = c.secrets;
+  if (clear_secrets) enc = null;
+  else if (secrets && (secrets.user || secrets.api_key)) enc = encrypt({ user: String(secrets.user || "").slice(0, 200), password: String(secrets.password || "").slice(0, 500), api_key: String(secrets.api_key || "").slice(0, 1000) });
+  await q("UPDATE platform.connections SET settings=$4, secrets=$5, updated_at=now() WHERE company=$1 AND module=$2 AND name=$3", [company, mod, name, JSON.stringify(next), enc]);
+  await q("DELETE FROM platform.erp_cache WHERE company=$1 AND module=$2 AND connection=$3", [company, mod, name]);
+  await record("connection_settings", { company, module: mod, actor: actor || "admin", before: JSON.stringify(before), after: JSON.stringify(next), detail: { connection: name, kind: "erp", login: clear_secrets ? "cleared" : secrets && (secrets.user || secrets.api_key) ? "set" : "kept" } });
+  return { settings: next, has_login: Boolean(enc) };
+}
+// The one-button test: every declared query with its test params.
+async function testErp(company, mod, name, actor) {
+  const c = await row(company, mod, name);
+  const live = await liveDeclaration(company, mod, name);
+  if (!c || !live || live.kind !== "erp") throw new Error("no such ERP connection");
+  const s = erpSettings(c);
+  const results = [];
+  for (const [qname, decl] of Object.entries(live.queries)) {
+    const def = s.queries[qname];
+    if (!def || !def.path) { results.push({ query: qname, ok: false, error: "no definition on the platform yet" }); continue; }
+    const used = [...def.path.matchAll(/\{([a-zA-Z0-9_]+)\}/g)].map((m) => m[1]).filter((p) => !decl.params.includes(p));
+    if (used.length) { results.push({ query: qname, ok: false, error: `the path uses {${used[0]}} but the module's query ${qname} has no such param (it has ${decl.params.length ? decl.params.join(", ") : "none"})` }); continue; }
+    try {
+      const out = await erpFetch(company, mod, name, qname, def.test_params || {});
+      const empty = decl.fields.filter((f) => out.rows.length && out.rows.every((r) => r[f] == null));
+      results.push({ query: qname, ok: true, rows: out.rows.length, raw_count: out.raw_count, sample: out.rows[0] || null, empty_fields: empty, url: out.url });
+    } catch (e) { results.push({ query: qname, ok: false, error: e.message }); }
+  }
+  const ok = results.every((r) => r.ok);
+  await setStatus(company, mod, name, ok ? "connected" : "error", { error: ok ? null : results.find((r) => !r.ok).error, detail: { last_test: results.map((r) => ({ query: r.query, ok: r.ok, rows: r.rows || 0, empty_fields: r.empty_fields || [], error: r.error || null })), last_tested_at: new Date().toISOString() } });
+  if (ok) await q("DELETE FROM platform.erp_cache WHERE company=$1 AND module=$2 AND connection=$3", [company, mod, name]);
+  await record("connection_tested", { company, module: mod, actor: actor || "manager", after: ok ? `every query answered: ${results.map((r) => `${r.query} ${r.rows} rows`).join(", ")}` : results.filter((r) => !r.ok).map((r) => `${r.query}: ${r.error}`).join("; "), detail: { connection: name, kind: "erp", ok } });
+  return { ok, results };
+}
+// The note to IT, in the words IT uses, for the manager to send. Templated
+// for now; a generated walkthrough is a later push.
+const FLAVOR_NAME = { sap_odata: "SAP (an OData service through SAP Gateway or S/4HANA)", epicor_baq: "Epicor Kinetic (a BAQ through the REST API)", json: "the system's read-only JSON API" };
+async function itNote(company, mod, name) {
+  const c = await row(company, mod, name);
+  const live = await liveDeclaration(company, mod, name);
+  if (!c || !live || live.kind !== "erp") throw new Error("no such ERP connection");
+  const co = (await q("SELECT name FROM platform.companies WHERE slug=$1", [company])).rows[0];
+  const m = (await q("SELECT title FROM platform.modules WHERE company=$1 AND name=$2", [company, mod])).rows[0];
+  const s = erpSettings(c);
+  const lines = [];
+  lines.push(`Read-only access request: ${co ? co.name : company}, ${m ? m.title : mod}`);
+  lines.push("");
+  lines.push(`What we are asking for: a technical (service) user with READ-ONLY access to ${FLAVOR_NAME[s.flavor]}, limited to the lookups below. No write access, no other data, no user data.`);
+  lines.push("");
+  lines.push("The lookups the floor tool needs:");
+  for (const [qn, d] of Object.entries(live.queries)) {
+    const def = s.queries[qn];
+    lines.push(`  ${qn}: ${d.about || "a read-only lookup"}. Fields we read: ${d.fields.join(", ")}${d.params.length ? `. Looked up by: ${d.params.join(", ")}` : ""}${def && def.path ? `. Path: ${def.path}` : ""}`);
+  }
+  lines.push("");
+  lines.push(`Where the calls come from: the Symbiotic OS instance (hosted; we will give you its outbound address if you allow-list by address), over HTTPS${s.base_url ? ` to ${s.base_url}` : " to the service address you give us"}.`);
+  lines.push("How often: a few reads a minute at most; results are cached on our side for " + (s.freshness_s >= 60 ? `${Math.round(s.freshness_s / 60)} minute${s.freshness_s >= 120 ? "s" : ""}` : `${s.freshness_s} seconds`) + ".");
+  lines.push("How the login is kept: encrypted on the platform, entered by our administrator, never stored on a plant device, never visible on any screen of the tool.");
+  lines.push("What we need back from you: the service address (the OData service URL or the BAQ name), the technical user and its password (or an API key), and, for SAP, the client number.");
+  return lines.join("\n");
+}
+
+// A stand-in ERP for demos: /erp-demo/parts answers like an SAP OData v2
+// service (d.results), /erp-demo/orders too. Read only, static, no login.
+const DEMO_ROWS = {
+  parts: [
+    { Material: "paper_white", MaterialDescription: "Copy paper, white, 20 lb", AvailableStock: 480, ReorderPoint: 100, Plant: "1000", BaseUnit: "SH" },
+    { Material: "paper_blue", MaterialDescription: "Copy paper, blue, 20 lb", AvailableStock: 35, ReorderPoint: 60, Plant: "1000", BaseUnit: "SH" },
+    { Material: "paper_yellow", MaterialDescription: "Copy paper, yellow, 20 lb", AvailableStock: 210, ReorderPoint: 60, Plant: "1000", BaseUnit: "SH" },
+    { Material: "clip", MaterialDescription: "Paper clip, #1, steel", AvailableStock: 1200, ReorderPoint: 200, Plant: "1000", BaseUnit: "EA" },
+    { Material: "tape", MaterialDescription: "Tape, clear, 3/4 in", AvailableStock: 8, ReorderPoint: 12, Plant: "1000", BaseUnit: "EA" },
+  ],
+  orders: [
+    { SalesOrder: "4500017", Customer: "Northside Schools", Material: "paper_white", OrderQty: 200, DueDate: "2026-09-26", Status: "open" },
+    { SalesOrder: "4500018", Customer: "Harbor Camp", Material: "paper_blue", OrderQty: 60, DueDate: "2026-09-24", Status: "open" },
+  ],
+};
+function demoErp(req, res) {
+  const rows = DEMO_ROWS[String(req.params.entity || "").toLowerCase()];
+  if (!rows) return res.status(404).json({ error: { message: { value: "Resource not found" } } });
+  let out = rows;
+  const f = String(req.query.$filter || "");
+  const m = /^(\w+)\s+eq\s+'([^']*)'$/.exec(f.trim());
+  if (m) out = rows.filter((r) => String(r[m[1]]) === m[2]);
+  for (const [k, v] of Object.entries(req.query)) if (!k.startsWith("$") && rows[0] && k in rows[0]) out = out.filter((r) => String(r[k]) === String(v));
+  const top = Number(req.query.$top); if (top > 0) out = out.slice(0, top);
+  res.set("Cache-Control", "no-store").json({ d: { results: out } });
+}
+
 // ---- the device cookie ------------------------------------------------------------------
 // Every browser that opens a module page or the connections page gets a
 // random device id, so a print job goes back to the device that asked for it.
@@ -394,7 +645,15 @@ function surfaces(company, mod, version, manifest) {
       const c = await row(company, mod, name);
       const det = (c && c.detail) || {};
       if (d.kind === "files") return { kind: "files", connected: Boolean(c && c.status === "connected"), table: d.table, last_loaded_at: det.last_loaded_at || null, rows: det.last_rows || null, filename: det.last_file || null };
+      if (d.kind === "erp") { const s = erpSettings(c); const defined = {}; for (const qn of Object.keys(d.queries)) defined[qn] = Boolean(s.queries[qn] && s.queries[qn].path); return { kind: "erp", connected: Boolean(c && c.status === "connected"), queries: defined, last_fetched_at: det.last_fetched_at || null, error: (c && c.last_error) || null }; }
       return { kind: "printer", connected: Boolean(c && c.status === "connected"), printers: det.printers || [], last_printed_at: det.last_printed_at || null, error: (c && c.last_error) || null };
+    };
+    if (d.kind === "erp") out[name] = {
+      kind: "erp", status,
+      async query(qname, params) {
+        if (!d.queries[qname]) throw new Error(`no query named ${qname} on this connection`);
+        return erpQuery(company, mod, name, qname, params || {});
+      },
     };
     if (d.kind === "files") out[name] = { kind: "files", status };
     if (d.kind === "printer") out[name] = {
@@ -423,6 +682,8 @@ function stubs(manifest) {
   const out = {};
   for (const [name, d] of Object.entries(connections)) out[name] = d.kind === "printer"
     ? { kind: "printer", status: async () => ({ kind: "printer", connected: false, printers: [] }), print: async () => ({ job_id: 0, queued: false, device: false, zpl: "" }), preview: async () => ({ zpl: "", png: null }) }
+    : d.kind === "erp"
+    ? { kind: "erp", status: async () => ({ kind: "erp", connected: false, queries: {} }), query: async () => { throw new Error("not connected yet"); } }
     : { kind: "files", status: async () => ({ kind: "files", connected: false, table: d.table }) };
   return out;
 }
@@ -431,6 +692,7 @@ function stubs(manifest) {
 const KIND_TEXT = {
   files: { what: "A spreadsheet the company keeps, loaded into one of the module's tables. Upload it here whenever it changes; matching rows are replaced, the rest are added.", person: "Nothing to install. Keep the header row as it is so the columns match." },
   printer: { what: "Labels printed on a Zebra printer from the PC or tablet that asks for them. The module keeps the label layouts; the platform sends each label to the printer chosen on that device.", person: "On each PC or tablet that prints: install Zebra Browser Print (free, from zebra.com), open this page or a module screen, choose the printer when asked, print a test label." },
+  erp: { what: "Read-only lookups in the company's ERP or scheduling system, a short fixed list the module names. The platform runs each lookup, keeps the answer for a few minutes, and shows the last good answer if the system is down. Nothing is ever written back.", person: "Send the note below to IT and get a read-only login. Anetix enters the login and the lookups on the platform; you press Test." },
 };
 async function companyView(company) {
   const registry = require("./registry");
@@ -453,6 +715,12 @@ async function companyView(company) {
         item.uploads = (await q("SELECT id, filename, row_count, status, loaded_rows, actor, created_at, loaded_at FROM platform.connection_uploads WHERE company=$1 AND module=$2 AND connection=$3 AND status='loaded' ORDER BY id DESC LIMIT 5", [company, m.name, name])).rows;
       }
       if (d.kind === "printer") { item.templates = d.templates; item.settings = printerSettings(c); item.jobs = await jobs(company, m.name, name, 10); }
+      if (d.kind === "erp") {
+        const s = erpSettings(c);
+        item.queries = Object.entries(d.queries).map(([qn, qd]) => ({ name: qn, ...qd, defined: Boolean(s.queries[qn] && s.queries[qn].path), definition: s.queries[qn] || null }));
+        item.settings = s; item.has_login = Boolean(c && c.secrets);
+        item.it_note = await itNote(company, m.name, name);
+      }
       list.push(item);
     }
     out.push({ module: m.name, title: m.title, version: m.live_version, connections: list });
@@ -481,7 +749,7 @@ async function testLabel(company, mod, name, req) {
   return { job_id: job.id, zpl };
 }
 async function deleteCompany(company) {
-  for (const t of ["print_jobs", "connection_uploads", "connections"]) await q(`DELETE FROM platform.${t} WHERE company=$1`, [company]);
+  for (const t of ["print_jobs", "connection_uploads", "erp_cache", "connections"]) await q(`DELETE FROM platform.${t} WHERE company=$1`, [company]);
 }
 
 module.exports = {
@@ -489,4 +757,5 @@ module.exports = {
   previewUpload, loadUpload, matchColumns, coerce, parseAll,
   renderZpl, zplEscape, previewPng, printerSettings, TEST_LABEL, queueJob, nextJob, finishJob, jobs, testLabel,
   deviceCookie, deviceOf, cookies, encrypt, decrypt, deleteCompany, KIND_TEXT,
+  erpSettings, fillPath, rowsOf, mapRows, authHeaders, erpFetch, erpQuery, setErp, testErp, itNote, httpGet, ERP_FLAVORS, ERP_TRANSPORTS, demoErp, DEMO_ROWS,
 };

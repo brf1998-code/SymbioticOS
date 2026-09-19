@@ -62,6 +62,22 @@
       "templates": [
         "traveler"
       ]
+    },
+    "erp": {
+      "kind": "erp",
+      "label": "SAP stock (read only)",
+      "queries": {
+        "parts": {
+          "params": [],
+          "fields": [
+            "item",
+            "description",
+            "on_hand",
+            "reorder_at"
+          ],
+          "about": "every stock item the line uses, with what the ERP says is on hand and its reorder point"
+        }
+      }
     }
   }
 }

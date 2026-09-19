@@ -30,7 +30,8 @@
   <h3>Open requests</h3>
   <div id="requests"></div>
   <h3>Inventory</h3>
-  <table><thead><tr><th>Item</th><th>At the line</th><th>In stock</th></tr></thead><tbody id="inv"></tbody></table>
+  <table><thead><tr><th>Item</th><th>At the line</th><th>In stock</th><th>ERP says</th></tr></thead><tbody id="inv"></tbody></table>
+  <div class="sub" id="erpnote"></div>
   <h3>Recently delivered</h3>
   <div id="delivered" class="sub"></div>
   <div class="sub" style="margin-top:14px"><a href="#" id="board">Line board</a> · <a href="#" id="stations">Stations</a></div>
@@ -49,8 +50,10 @@ async function load() {
       <button onclick="deliver(${q.id})">Deliver</button></div>`).join("") || `<div class="sub">nothing requested</div>`;
   const items = {};
   for (const i of d.inventory) { (items[i.item] = items[i.item] || {})[i.location] = i.qty; }
+  const erp = {}; for (const r of (d.erp && d.erp.rows) || []) erp[r.item] = r;
   document.getElementById("inv").innerHTML = Object.entries(items).map(([k, v]) =>
-    `<tr><td>${LABEL[k] || k}</td><td class="${(v.line || 0) <= 1 ? "low" : ""}">${v.line || 0}</td><td>${v.stock || 0}</td></tr>`).join("");
+    `<tr><td>${LABEL[k] || k}</td><td class="${(v.line || 0) <= 1 ? "low" : ""}">${v.line || 0}</td><td>${v.stock || 0}</td><td>${erp[k] ? `${erp[k].on_hand}${erp[k].reorder_at != null && Number(erp[k].on_hand) <= Number(erp[k].reorder_at) ? " (below reorder point)" : ""}` : ""}</td></tr>`).join("");
+  document.getElementById("erpnote").textContent = !d.erp ? "" : d.erp.error ? `ERP: not connected yet (${d.erp.error})` : d.erp.rows.length ? `ERP figures as of ${new Date(d.erp.fetched_at).toLocaleTimeString()}${d.erp.fresh ? "" : " (the ERP is not answering right now; these are the last figures it gave)"}` : "ERP: connected, but it returned no rows for these items.";
   document.getElementById("delivered").innerHTML = d.delivered.map(q => `${q.qty} × ${LABEL[q.item] || q.item} to ${esc(q.station_name || "?")} at ${new Date(q.delivered_at).toLocaleTimeString()}`).join("<br>") || "none yet";
 }
 async function deliver(id) {

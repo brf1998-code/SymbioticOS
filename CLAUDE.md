@@ -431,12 +431,51 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   label_failed. `paperline` declares `stock` (files into `inventory`, key
   item+location) and `labels` (printer, `labels/traveler.zpl`, printed from
   station 1). Backup carries the three tables; company delete removes them.
-  Unit: `node scripts/test-connections.js`. Not yet: the ERP kind (SAP first,
-  read-only named queries; NEWP's reach unknown, so the query must be able to
-  run through a plant-side bridge later), the generated setup walkthrough
-  (the page carries a fixed three-step text per kind for now), uploads from a
-  module page (the module links to the connections page instead), the
+  Unit: `node scripts/test-connections.js`. Not yet: the generated setup
+  walkthrough (the page carries a fixed text per kind for now), uploads from
+  a module page (the module links to the connections page instead), the
   scanner kind (needs nothing).
+- **Connections, second push: the ERP kind** (2026-09-19, `src/connections.js`
+  erp section, the connections page's ERP card with an admin-only setup form,
+  `modules/paperline` "erp"). Read only, through named queries. The module
+  declares each query it needs (`queries: { name: { params, fields, about } }`);
+  the gate refuses a module that carries `base_url`, `url`, `user`,
+  `password`, `path` or `host` (the platform holds those). The ADMIN (Brendan,
+  during pilots: decided 2026-09-19) enters on the connections page: flavor
+  (`sap_odata`: SAP Gateway / S/4HANA OData v2 or v4, `epicor_baq`: Kinetic
+  BAQ REST, `json`: any read-only JSON endpoint), base URL, transport
+  (`direct`; `bridge` is designed in and answers "not available yet"), answer
+  freshness, SAP client, certificate check (off for a self-signed on-prem
+  certificate), the login (user and password or an API key, encrypted with
+  AES-256-GCM under `SOS_CONNECTION_KEY`, else SESSION_SECRET; SET
+  SOS_CONNECTION_KEY ON RAILWAY so a session secret rotation does not lose the
+  logins; a login that cannot be decrypted says so and asks for it again), and
+  per query: the path after the base URL with `{param}` placeholders (URL
+  encoded, OData quotes doubled), the system's field behind each module field
+  (dotted paths), test values. `POST /api/admin/connections/:slug/:mod/:name/erp`
+  saves it and clears the cache; the login never comes back out of any
+  endpoint. The manager's Test button (`.../test`, shared with the printer
+  kind) runs every query with its test values and reports rows, a mapped
+  sample and fields that came back empty (a wrong field name), plus a path
+  that uses a `{param}` the query does not declare. The module's
+  `query(name, params)` reads `platform.erp_cache` when fresh, else calls the
+  ERP (`httpGet` over http/https with a 15 s timeout, 20 MB cap, plain-words
+  errors for refused, not found, certificate, 401/403/404), maps the fields,
+  stores the rows, and on failure returns the cached rows with `fresh: false`
+  (the connection stays connected with `last_error` set) or throws with the
+  reason when nothing is cached. The IT note (`.../it-note.txt`, and on the
+  card) is templated in plain words from the declaration and the settings:
+  what read-only access, which lookups and fields, where the calls come from,
+  how the login is kept, what we need back. A stand-in ERP for the showroom
+  answers at `/erp-demo/parts` and `/erp-demo/orders` (public, static rows,
+  SAP OData v2 shape, `$filter=Field eq 'x'` and `$top` honoured), so a demo
+  company's erp connection can be set up with base URL `<host>/erp-demo/`.
+  `paperline` declares `erp` with one query `parts` (fields item, description,
+  on_hand, reorder_at) and the stockroom page shows an "ERP says" column with
+  "below reorder point" and an as-of line. Backup carries `erp_cache`. Not
+  yet: the bridge transport itself, a generated (not templated) walkthrough,
+  SAP CSRF-protected writes (never), OData paging past the first page (rows
+  are capped at 5000; use `$top` and a filter in the path).
 - **Loop health** (2026-09-19, `src/health.js`, `GET /api/admin/health?days=`,
   the top card on /admin, build order item 4). The platform's own numbers,
   per company and across the fleet, for Brendan (the manager's board shows
@@ -763,6 +802,12 @@ tested on the live instance; a launch test with a bogus key (init message,
 tool list, 401 from the API) proves the CLI itself starts.
 
 ## Live instance env vars (Railway service `SymbioticOS`)
+
+- `SOS_CONNECTION_KEY`: the key the ERP logins are encrypted under (any long
+  random string; `openssl rand -hex 32`). Optional: without it the platform
+  derives a key from SESSION_SECRET, so rotating that secret would make every
+  stored login unreadable. Set it once and never change it without re-entering
+  the logins.
 
 `DATABASE_URL` (reference to Postgres), `ANTHROPIC_API_KEY`,
 `SOS_FLOOR_PASSWORD`, `SOS_MANAGER_PASSWORD`, `SOS_ADMIN_PASSWORD`,
