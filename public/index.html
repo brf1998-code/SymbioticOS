@@ -548,7 +548,7 @@ function batchCard(run) {
   if (run.status === "deployed" || run.status === "rolled_back") {
     html += `<div class="${run.status === "deployed" ? "outcome" : "fail-note"}">${run.status === "deployed" ? "We did: " : "Rolled back: "}${esc(ev.what_changed || ev.build_summary || "").slice(0, 600)}</div>`;
   }
-  html += `<details><summary>See the ${items.length} changes</summary>` + items.map((f, i) => `<div class="chg"><span class="k">${i + 1}.</span><span class="chip screen">${esc(screenLabel(f.module, f.proposal_target) || f.screen || "")}</span> ${esc(f.proposal_body || "")}<div class="orig">"${esc(f.message)}" · ${esc(f.name || "anonymous")}${f.recurrence > 1 ? ` · x${f.recurrence}` : ""}</div></div>`).join("") + `</details>`;
+  html += `<details><summary>See the ${items.length} changes</summary>` + items.map((f, i) => `<div class="chg"><span class="k">${i + 1}.</span><span class="chip screen">${esc(screenLabel(f.module, f.proposal_target) || f.screen || "")}</span> ${esc(f.proposal_body || "")}<div class="orig">"${esc(f.message)}" · ${esc(f.name || "anonymous")}${f.recurrence > 1 ? ` · x${f.recurrence}` : ""}</div>${floorSaid(f)}</div>`).join("") + `</details>`;
   if (run.status === "queued") {
     html += `<div class="meta"><span class="pulse"></span>Queued: waiting for the current build on ${esc(mod.title || run.module)} to finish.</div>`;
     if (MGR()) html += `<button class="quiet" onclick="act('/api/runs/${run.id}/cancel')">Cancel</button>`;
@@ -657,6 +657,15 @@ function runBlock(fb, run) {
   return html;
 }
 
+// What the floor said once the change was live (fixed it / not quite), as one small line for a shipped card.
+function floorSaid(f) {
+  if (f.status !== "done") return "";
+  const who = esc(f.floor_answer_by || "Someone on the floor");
+  if (f.floor_answer === "fixed") return `<div class="meta" style="color:var(--green);font-weight:700">${who} says: fixed it.</div>`;
+  if (f.floor_answer === "not_quite") return `<div class="meta" style="color:#7a4a00;font-weight:700">${who} says: not quite.${f.follow_up_id ? ` The follow-up is #${f.follow_up_id}.` : ""}</div>`;
+  if (f.shipped_at && f.person_id && !/^Rolled back/i.test(f.outcome || "")) return `<div class="meta">${esc(f.name || "The person who asked")} has not said yet whether it fixed it.</div>`;
+  return "";
+}
 function card(fb) {
   if (fb.kind === "module_request") return requestCard(fb);
   const run = DATA.runs.find(r => (r.feedback_ids || [r.feedback_id]).includes(fb.id) && r.status !== "cancelled");
@@ -667,6 +676,7 @@ function card(fb) {
   html += `<div class="meta">#${fb.id} · ${isPlatform ? '<span class="chip platform">PLATFORM</span>' : esc(fb.module)} · ${esc(fb.name || "anonymous")}`
        + (fb.recurrence > 1 ? ` · <span class="chip rec">x${fb.recurrence}</span>` : "") + (inBatch(fb) ? ' · <span class="chip batch">IN BATCH</span>' : "") + `</div>`;
   html += `<div class="meta"><span class="chip screen">Screen: ${esc(fb.screen || fb.page || "unknown")}</span>${fb.review_id ? `<span class="chip review">REVIEW #${fb.review_id}${priorityOf(fb)}</span>` : ""}</div>`;
+  if (fb.follow_up_of) html += `<div class="meta" style="background:#fff4e5;border-radius:8px;padding:8px;color:#7a4a00"><b>Follow-up to #${fb.follow_up_of}: not quite.</b> ${esc(fb.name || "The person who asked")} tried what went live and says this is still off. First asked: "${esc(String(fb.follow_up_words || "").slice(0, 200))}"</div>`;
 
   if (isPlatform) {
     if (fb.status === "new") {
@@ -712,6 +722,7 @@ function card(fb) {
 
   if (fb.status === "done" || fb.status === "declined") {
     if (fb.outcome) html += `<div class="${fb.status === "done" ? "outcome" : "fail-note"}">${fb.status === "done" ? "You said / we did: " : "Declined: "}${esc(fb.outcome)}</div>`;
+    html += floorSaid(fb);
     const modRow = DATA.modules.find(m => m.name === fb.module);
     if (fb.status === "done" && run && run.status === "deployed" && MGR() && modRow && modRow.live_version === run.to_version) html += rollbackBtn(run);
   }

@@ -507,6 +507,8 @@ async function deploy(runId) {
     await q("UPDATE platform.feedback SET status='done', outcome=$2, batch_id=NULL, updated_at=now() WHERE id=$1",
       [p.feedback_id, `Deployed v${result.to}${ps.length > 1 ? ` (batch of ${ps.length})` : ""}: ${summary || p.body.slice(0, 500)}`]);
   }
+  // close the loop: the floor sees what went live and who asked, and the asker is asked whether it fixed it
+  await require("./closeloop").markShipped(ps.map((p) => p.feedback_id), result.to).catch((e) => console.error("[closeloop] markShipped:", e.message));
   if (run.lane === "module") await require("./modulebuild").afterDeploy(await getRun(runId), result);
   kickQueue(run.company, run.module).catch((e) => console.error("queue kick failed:", e));
   return result;
@@ -521,6 +523,7 @@ async function rollbackRun(runId) {
   for (const p of ps) {
     await q("UPDATE platform.feedback SET outcome=$2, updated_at=now() WHERE id=$1", [p.feedback_id, `Rolled back to v${result.to}.`]);
   }
+  await require("./closeloop").markRolledBack(ps.map((p) => p.feedback_id)).catch((e) => console.error("[closeloop] markRolledBack:", e.message));
   return result;
 }
 

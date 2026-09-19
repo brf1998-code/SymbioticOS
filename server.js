@@ -24,6 +24,7 @@ async function main() {
   await initPlatformSchema();
   await record.init();   // the interaction record: insert-only, what everyone said and decided
   await people.init();        // operator identity: names and PINs per company
+  await require("./src/closeloop").init();   // close the loop: my requests, what went live, fixed it / not quite
   await connections.init();   // what modules reach outside through: spreadsheets, label printers (src/connections.js)
   await require("./src/datacheck").init();   // the review-time check that a change's ERP data is available, and the admin's data requests
 

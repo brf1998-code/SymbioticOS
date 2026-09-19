@@ -21,6 +21,7 @@ const health = require("./health");
 const connections = require("./connections");
 const datacheck = require("./datacheck");
 const people = require("./people");
+const closeloop = require("./closeloop");
 
 const router = express.Router();
 // the restore route carries a whole backup and parses its own body
@@ -245,7 +246,9 @@ router.get("/api/c/:slug/board", async (req, res) => {
   const feedback = (await q(
     `SELECT f.*, p.id AS proposal_id, p.body AS proposal_body, p.class AS proposal_class,
             p.target_file AS proposal_target, p.rationale AS proposal_rationale, p.status AS proposal_status, p.model AS proposal_model,
-            CASE WHEN p.data_check IS NULL THEN NULL ELSE jsonb_build_object('status', p.data_check->'status', 'reason', p.data_check->'reason', 'missing', (SELECT COALESCE(jsonb_agg(m->'what'), '[]'::jsonb) FROM jsonb_array_elements(COALESCE(p.data_check->'missing','[]'::jsonb)) m)) END AS proposal_data
+            CASE WHEN p.data_check IS NULL THEN NULL ELSE jsonb_build_object('status', p.data_check->'status', 'reason', p.data_check->'reason', 'missing', (SELECT COALESCE(jsonb_agg(m->'what'), '[]'::jsonb) FROM jsonb_array_elements(COALESCE(p.data_check->'missing','[]'::jsonb)) m)) END AS proposal_data,
+            (SELECT o.message FROM platform.feedback o WHERE o.id=f.follow_up_of) AS follow_up_words,
+            (SELECT c.id FROM platform.feedback c WHERE c.follow_up_of=f.id ORDER BY c.id DESC LIMIT 1) AS follow_up_id
        FROM platform.feedback f
        LEFT JOIN LATERAL (SELECT * FROM platform.proposals WHERE feedback_id=f.id ORDER BY id DESC LIMIT 1) p ON true
       WHERE f.company=$1
@@ -546,6 +549,21 @@ router.post("/api/c/:slug/who/sign-in", async (req, res) => {
   catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
 router.post("/api/c/:slug/who/sign-out", async (req, res) => { people.signOut(req, res); res.json({ ok: true }); });
+// ---- close the loop, floor side (src/closeloop.js). Under /who on purpose: the feedback button uses these from
+// module pages, and they do no more than the feedback endpoint already lets a page do (read the signed-in
+// person's own requests, file a request under their name).
+router.get("/api/c/:slug/who/requests", async (req, res) => {
+  try { const me = whoAmI(req); res.set("Cache-Control", "no-store").json({ me, ...(await closeloop.myRequests(req.params.slug, me && me.id)) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.get("/api/c/:slug/who/news", async (req, res) => {
+  try { const me = whoAmI(req); res.set("Cache-Control", "no-store").json(await closeloop.news(req.params.slug, String(req.query.module || ""), me && me.id)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.post("/api/c/:slug/who/requests/:id/answer", async (req, res) => {
+  try { res.json(await closeloop.answer({ company: req.params.slug, feedbackId: req.params.id, person: whoAmI(req), role: req.sosRole, answer: (req.body || {}).answer, what: (req.body || {}).what })); }
+  catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
 router.post("/api/c/:slug/people", requireManager, async (req, res) => {
   try { const out = await people.add(req.params.slug, req.body || {}); await record("person_added", { company: req.params.slug, actor: actor(req), after: out.person.name, detail: { person_id: out.person.id, role: out.person.role } }); res.json(out); }
   catch (e) { res.status(400).json({ error: e.message }); }

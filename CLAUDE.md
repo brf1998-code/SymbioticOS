@@ -426,8 +426,63 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   person_signed_in. `people` is in `backup.js PLATFORM_TABLES` and in company
   delete. Unit: `node scripts/test-people.js`. Not yet: "my requests", asking
   the reporter a question, fixed it / not quite (the next push, which this is
-  the ground for); handing the person to module code on `ctx` (the paperline
-  station still has its own operator box); per-person rights.
+  the ground for; shipped in the next bullet); handing the person to module
+  code on `ctx` (the paperline station still has its own operator box);
+  per-person rights.
+- **Close the loop, floor side** (2026-09-19, `src/closeloop.js`, build order
+  item 6, first half; Brendan: floor side first, and "not quite" asks what is
+  still off and files it linked). Until this a request left the floor and
+  nothing came back, and the platform never learned whether a change fixed
+  anything. Three pieces, all on the feedback button. (1) My requests: the
+  signed-in person's own requests, each with one plain line from
+  `closeloop.stateOf` (on the board / the manager has a proposal / waiting on
+  data from the office / approved, being built / built, the manager is
+  checking it / live, did it fix it? / fixed / not quite / declined with the
+  manager's reason / taken back off). A stopped build is "being built" to the
+  floor; ERP words never appear. (2) What went live: `pipeline.deploy` stamps
+  `feedback.shipped_version` and `shipped_at` (`rollbackRun` clears them);
+  `GET /api/c/<slug>/who/news?module=` lists the last 14 days of shipped
+  requests by version with the plain summary and who asked. The widget turns
+  the reload after a deploy into "New here: <summary>. Maria G asked for
+  this." (once per device per version, `localStorage sos.seen.<co>.<mod>`; a
+  device that was never there is not told old news; a deploy with no request
+  behind it keeps the plain "updated" banner). The person who asked gets a
+  card instead: their words, what was built, "Did it fix it?" with Fixed it /
+  Not quite / Later. The card opens once per sitting; after that, or after
+  Later, it is a small amber pill beside the feedback button, so it never
+  sits on top of the work, and My requests carries a "1 to check" badge
+  until they answer. (3) The answer:
+  `POST /api/c/<slug>/who/requests/<id>/answer` `{ answer: fixed | not_quite,
+  what }`. Only the person who asked may answer; a request filed with nobody
+  signed in may be answered by any signed-in person (the record says who).
+  Fixed may later become not quite, once; not quite is final. Not quite needs
+  words and files them as a NEW feedback row (`follow_up_of` = the original,
+  same module, page, screen, the person's name and id), so it goes round the
+  same loop with the manager's gate intact; the original stays shipped with
+  `floor_answer`, `floor_answer_at`, `floor_answer_person`, `floor_answer_by`.
+  The proposer is told (`closeloop.followUpContext`, added to the prompt in
+  `generateProposal`): which request this follows, the first words, what was
+  built and is live, and to close the gap without starting over. The board:
+  a follow-up card carries an amber "Follow-up to #N: not quite" line with
+  the first words; a shipped card says "<name> says: fixed it" / "not quite.
+  The follow-up is #N" / "has not said yet" (single cards and inside a batch
+  tile). Record kinds: floor_fixed, floor_not_quite (before = "fixed" on a
+  change of mind, after = the words, detail.follow_up_id), and the
+  follow-up's own feedback_filed carries detail.follow_up_of. Loop health:
+  `answers` = fixed, not_quite, went_live, unanswered, unanswered_named,
+  fixed_share, follow_ups_open; a tile ("fixed it, says the floor") and a
+  line in the Shipped cell on /admin. A not quite is the miss signal; with
+  the quiet stretch it is what says a cheaper build model is or is not good
+  enough. All three routes sit under `/who/` because the widget calls them
+  from module pages; they do no more than `/api/feedback` already lets a page
+  do (read the signed-in person's own requests, file a request under their
+  name), and nothing they file reaches the floor without the manager. Fake
+  mode: the fake proposer's rationale says "Follow-up context received for
+  request #N." when the context arrived. Units: `scripts/test-closeloop.js`,
+  the `answers` cases in `scripts/test-health.js`. Not yet (manager side of
+  item 6): an email when something waits on the manager, a clarifying
+  question to the reporter, a manager answering for the floor; also nothing
+  proposes a follow-up on arrival (item 8).
 - **Connections, first push: spreadsheets and label printers** (2026-09-19,
   `src/connections.js`, `public/connections.html` at `/c/<slug>/connections`
   (manager), `public/assets/print-helper.js`, build order item 5, designed in

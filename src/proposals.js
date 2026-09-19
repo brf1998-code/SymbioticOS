@@ -65,10 +65,13 @@ async function generateProposal(feedbackId) {
   // the data check: a module with an ERP connection is asked what ERP data the change needs
   const erpLookups = Object.keys(await datacheck.erpState(fb.company, fb.module).catch(() => ({})));
   const erpAsk = erpLookups.length ? `\n\nThis module can read the company's ERP through these lookups: ${erpLookups.join(", ")}. ERP-FIELDS.md above lists every field each one can give. List under erp_data every piece of ERP data this change needs, naming the listed field that covers it; when no listed field covers it, leave its field empty and still write the proposal as it will work once the data is there. Do not tell the manager about lookups or fields.\nERP lookups available to this module: ${erpLookups.join(", ")}` : "";
+  // a follow-up ("not quite" on something that shipped): the proposer is told what was built before and that this is what is still off
+  const closeloop = require("./closeloop");
+  const followUp = closeloop.followUpContext(await closeloop.originalOf(fb).catch(() => null));
   const { data, costUsd } = await runStructured({
     model,
     system: "You draft improvement proposals for a factory operations platform. The reader is a production manager with no software background. Be concrete and short. Never mention code internals in the proposal text. Prefer the smallest change that removes the reported friction. The feedback was filed from a specific screen; the change belongs on that screen unless the feedback clearly says otherwise.\n\n" + guidance.text,
-    prompt: `Floor feedback (reported by ${fb.name || "anonymous"}, reported ${fb.recurrence} time(s))\n${screenLine}\n\n"${fb.message}"\n\nCurrent module for context:\n${ctx.text}\n\nDraft the proposal, classify it, and name the target file.${erpAsk}`,
+    prompt: `Floor feedback (reported by ${fb.name || "anonymous"}, reported ${fb.recurrence} time(s))\n${screenLine}\n\n"${fb.message}"${followUp}\n\nCurrent module for context:\n${ctx.text}\n\nDraft the proposal, classify it, and name the target file.${erpAsk}`,
     schema: proposalSchema(ctx.files.length ? ctx.files : ["routes.js"], erpLookups),
     toolName: "proposal",
   });

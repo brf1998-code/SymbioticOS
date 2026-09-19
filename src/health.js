@@ -125,6 +125,14 @@ function metrics(g, now, windowDays) {
     other_stop_days: round1(last((x) => x.t.stops.filter((s) => s.kind === "other").map((s) => s.t))),
   };
 
+  // what the floor said once a change was live (src/closeloop.js): fixed it, or not quite (a miss: the
+  // follow-up goes round the loop again). Unanswered = went live in the window, still live, nobody has said.
+  const answered = g.feedback.filter((f) => f.floor_answer && inWin(f.floor_answer_at));
+  const fixedN = answered.filter((f) => f.floor_answer === "fixed").length, notQuiteN = answered.filter((f) => f.floor_answer === "not_quite").length;
+  const wentLive = g.feedback.filter((f) => f.status === "done" && f.shipped_at && inWin(f.shipped_at));
+  const unanswered = wentLive.filter((f) => !f.floor_answer);
+  const followUpsOpen = g.feedback.filter((f) => f.follow_up_of && OPEN_FEEDBACK.has(f.status)).length;
+
   // intakes (new modules)
   const intakes = g.intakes.filter((i) => inWin(i.created_at));
   const spendWindow = Number(g.spend_window || 0), spendMonth = Number(g.spend_month || 0);
@@ -150,6 +158,12 @@ function metrics(g, now, windowDays) {
       deploy_wait_median_hours: round1(median(deployWaits)), deploy_wait_n: deployWaits.length,
     },
     quiet,
+    answers: {
+      fixed: fixedN, not_quite: notQuiteN, went_live: wentLive.length, unanswered: unanswered.length,
+      unanswered_named: unanswered.filter((f) => f.person_id).length,
+      fixed_share: fixedN + notQuiteN ? Math.round((fixedN / (fixedN + notQuiteN)) * 100) / 100 : null,
+      follow_ups_open: followUpsOpen,
+    },
     intakes: {
       started: intakes.length,
       confirmed: intakes.filter((i) => ["confirmed", "building", "done"].includes(i.status)).length,
@@ -198,7 +212,7 @@ async function load(windowDays) {
   const since = windowDays === 0 ? new Date(0) : new Date(now.getTime() - windowDays * DAY);
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const companies = (await q("SELECT slug, name, monthly_cap_usd FROM platform.companies ORDER BY created_at")).rows;
-  const feedback = (await q("SELECT id, company, status, created_at FROM platform.feedback")).rows;
+  const feedback = (await q("SELECT id, company, status, created_at, outcome, person_id, follow_up_of, shipped_at, floor_answer, floor_answer_at FROM platform.feedback")).rows;
   const proposals = (await q("SELECT p.id, p.feedback_id, f.company, p.status, p.created_at, p.data_check->>'status' AS data_status FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id")).rows;
   const runs = (await q("SELECT id, company, module, lane, status, step, model, proposal_id, proposal_ids, created_at, evidence, log FROM platform.build_runs ORDER BY id DESC LIMIT 5000")).rows;
   const record = (await q("SELECT company, kind, proposal_id, created_at FROM platform.record WHERE kind IN ('proposal_edited','proposal_approved','proposal_declined') ORDER BY id")).rows;

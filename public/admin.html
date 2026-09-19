@@ -115,6 +115,11 @@ function modelsCell(m) {
   if (!total) return "<small>none</small>";
   return Object.entries(m).sort((a, b) => b[1] - a[1]).map(([id, n]) => `${esc(D ? ml(id) : id)} ${Math.round(100 * n / total)}%`).join("<br>");
 }
+// what the floor said once a change was live (src/closeloop.js): fixed it, or not quite (a miss)
+function answersCell(a) {
+  if (!a || !(a.fixed + a.not_quite + a.unanswered_named)) return "";
+  return `<br><small>floor: ${a.fixed} fixed${a.not_quite ? ` · <span class="warn">${a.not_quite} not quite</span>` : ""}${a.unanswered_named ? ` · ${a.unanswered_named} not said yet` : ""}</small>`;
+}
 function healthRow(c) {
   const stops = c.builds.stops, nstops = stops.gate + stops.reviewer + stops.tests + stops.other;
   const waiting = c.decisions.waiting + c.builds.waiting_deploy + c.builds.waiting_confirm;
@@ -124,7 +129,7 @@ function healthRow(c) {
     <td>${c.feedback.filed}</td>
     <td>${c.feedback.open}${c.feedback.open ? `<br><small>oldest ${hrs(c.feedback.oldest_open_hours)}</small>` : ""}</td>
     <td class="${waiting || c.decisions.waiting_data ? "warn" : ""}">${waiting}${waiting ? `<br><small>${c.decisions.waiting} to decide${c.decisions.waiting ? ` (oldest ${hrs(c.decisions.oldest_waiting_hours)})` : ""}<br>${c.builds.waiting_confirm} to confirm, ${c.builds.waiting_deploy} to deploy</small>` : ""}${c.decisions.waiting_data ? `<br><small class="warn">${c.decisions.waiting_data} on us (ERP data, oldest ${hrs(c.decisions.oldest_waiting_data_hours)})</small>` : ""}</td>
-    <td><b>${c.builds.shipped}</b>${c.builds.rolled_back ? `<br><small class="warn">${c.builds.rolled_back} rolled back</small>` : ""}${c.builds.cancelled ? `<br><small>${c.builds.cancelled} cancelled</small>` : ""}</td>
+    <td><b>${c.builds.shipped}</b>${c.builds.rolled_back ? `<br><small class="warn">${c.builds.rolled_back} rolled back</small>` : ""}${c.builds.cancelled ? `<br><small>${c.builds.cancelled} cancelled</small>` : ""}${answersCell(c.answers)}</td>
     <td>${pct(c.floor.same_shift, c.floor.n)}${c.floor.n ? `<br><small>${c.floor.same_shift} of ${c.floor.n}</small>` : ""}</td>
     <td>${hrs(c.floor.median_hours)}${c.floor.n > 1 ? `<br><small>p90 ${hrs(c.floor.p90_hours)}</small>` : ""}</td>
     <td>${hrs(c.decisions.wait_median_hours)}${c.floor.deploy_wait_n ? `<br><small>then ${hrs(c.floor.deploy_wait_median_hours)} to deploy</small>` : ""}</td>
@@ -148,6 +153,7 @@ async function loadHealth() {
     [hrs(f.decisions.wait_median_hours), "manager wait", f.floor.deploy_wait_n ? `to decide · then ${hrs(f.floor.deploy_wait_median_hours)} to deploy` : "proposal to decision"],
     [waiting, "waiting on a manager", `${f.decisions.waiting} to decide, ${f.builds.waiting_confirm} to confirm, ${f.builds.waiting_deploy} to deploy`],
     [f.decisions.waiting_data, "waiting on us", f.decisions.waiting_data ? `ERP data to add · oldest ${hrs(f.decisions.oldest_waiting_data_hours)}` : "no data requests open"],
+    [f.answers.fixed_share == null ? "n/a" : Math.round(f.answers.fixed_share * 100) + "%", "fixed it, says the floor", f.answers.fixed + f.answers.not_quite ? `${f.answers.fixed} fixed · ${f.answers.not_quite} not quite · ${f.answers.unanswered_named} not said yet` : (f.answers.unanswered_named ? `${f.answers.unanswered_named} asked, none answered yet` : "nobody has been asked yet")],
     [nstops, "stops", `gate ${st.gate} · reviewer ${st.reviewer} · tests ${st.tests} · other ${st.other}`],
     [usd(f.spend.window_usd), "AI spend", f.spend.per_shipped_usd != null ? `${usd(f.spend.per_shipped_usd)} a shipped change` : "in the window"],
     [dys(f.quiet.check_stop_days), "since a check stop", `rollback ${dys(f.quiet.rollback_days)} · gate ${dys(f.quiet.gate_stop_days)}`],

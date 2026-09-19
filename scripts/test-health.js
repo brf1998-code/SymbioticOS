@@ -150,5 +150,27 @@ const demo = (out) => out.companies.find((c) => c.slug === "demo");
   t("the UI lane's ready line counts too", ui.ready === ago(3) && ui.deployed === ago(1), j(ui));
 }
 
+// what the floor said once a change was live (src/closeloop.js)
+{
+  const live = (hShip, extra = {}) => ({ ...fb("demo", hShip + 10, "done"), shipped_at: ago(hShip), person_id: 7, ...extra });
+  const a = live(50, { floor_answer: "fixed", floor_answer_at: ago(40) });
+  const b = live(30, { floor_answer: "not_quite", floor_answer_at: ago(20) });
+  const c = live(10);                                                             // live, named, nobody has said
+  const d = live(5, { person_id: null });                                         // live, filed with no name
+  const old = live(24 * 60, { floor_answer: "fixed", floor_answer_at: ago(24 * 59) });   // answered long before the window
+  const follow = { ...fb("demo", 20, "new"), follow_up_of: b.id };                // b's follow-up, still open
+  const closed = { ...fb("demo", 19, "done"), follow_up_of: a.id };               // a follow-up already shipped is not open
+  const other = { ...fb("acme", 12, "done"), shipped_at: ago(6), floor_answer: "not_quite", floor_answer_at: ago(1), person_id: 3 };
+  const out = go(bundle({ feedback: [a, b, c, d, old, follow, closed, other] }));
+  const x = demo(out).answers;
+  t("fixed and not quite count once each, inside the window", x.fixed === 1 && x.not_quite === 1, j(x));
+  t("fixed share is fixed over answered", x.fixed_share === 0.5);
+  t("went live and unanswered: what shipped in the window and nobody has spoken for", x.went_live === 4 && x.unanswered === 2 && x.unanswered_named === 1, j(x));
+  t("an open follow-up is counted as open work", x.follow_ups_open === 1);
+  t("another company's answer stays its own, and the fleet adds up", out.companies.find((k) => k.slug === "acme").answers.not_quite === 1 && out.fleet.answers.not_quite === 2 && out.fleet.answers.fixed === 1, j(out.fleet.answers));
+  t("with nothing answered the share is null, not zero", go(bundle({ feedback: [c] })).fleet.answers.fixed_share === null);
+  t("all time takes the old answer in", demo(go(bundle({ feedback: [a, old] }), 0)).answers.fixed === 2);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
