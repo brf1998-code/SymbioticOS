@@ -25,6 +25,7 @@ async function main() {
   await record.init();   // the interaction record: insert-only, what everyone said and decided
   await people.init();        // operator identity: names and PINs per company
   await require("./src/closeloop").init();   // close the loop: my requests, what went live, fixed it / not quite
+  await require("./src/acceptance").init();   // acceptance checks that accumulate: the promises a manager retired (the checks themselves live in the module's files)
   await connections.init();   // what modules reach outside through: spreadsheets, label printers (src/connections.js)
   await require("./src/datacheck").init();   // the review-time check that a change's ERP data is available, and the admin's data requests
 
@@ -94,6 +95,8 @@ async function main() {
   }
 
   app.listen(PORT, () => console.log(`Symbiotic OS instance on :${PORT} (auth ${auth.OPEN ? "OPEN: no passwords set" : "on"})`));
+  // does this instance have a browser for the page load every build gets (src/pageload.js)? say so in the deploy log
+  require("./src/pageload").selfTest().catch((e) => console.error("[pageload] self test:", e.message));
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

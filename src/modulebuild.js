@@ -181,6 +181,20 @@ setInterval(load, 5000);
       { path: "/", target: "#sos-fb-btn", title: "The feedback button", body: "Something in the way? Say it here, from the screen where it happened. It goes straight to the improvement board." },
     ],
   }, null, 2) + "\n";
+  // The first promise the module makes (src/acceptance.js): the list answers, a new one can be added and
+  // moved, the numbers count it, the screen opens. Every later build is held to this and to whatever checks
+  // later changes leave behind.
+  files["checks/001-the-list-answers.json"] = JSON.stringify({
+    title: `The ${thing} list answers, a new one can be added and moved, and the numbers count it`,
+    steps: [
+      { call: "GET /api/items", expect: { json: { stages: { $minLength: 2 }, items: { $type: "array" } } } },
+      { call: "POST /api/items", body: { name: `Check ${thing}` }, expect: { json: { id: { $type: "number" }, name: `Check ${thing}` } }, save: { id: "id" } },
+      { call: "POST /api/items/{id}/move", body: { stage: STAGES[1] }, expect: { json: { stage: STAGES[1] } } },
+      { call: "POST /api/items/{id}/move", body: { stage: "not a stage" }, expect: { status: 400 } },
+      { call: "GET /api/stats", expect: { json: { total: { $gte: 1 } } } },
+      { page: "/", expect: { status: 200 } },
+    ],
+  }, null, 2) + "\n";
   return files;
 }
 
@@ -316,7 +330,9 @@ async function advance(runId) {
       const rowsText = sheet ? `Starting data from "${sheet.filename}" (${sheet.parsed.row_count} rows; columns: ${sheet.parsed.headers.join(" | ")}):\n${sheet.parsed.rows.slice(0, 200).map((r) => r.join(" | ")).join("\n")}` : "No starting data was attached.";
       if (ev.fix_round && ev.gate && ev.gate.ok === false) ev.findings = gate.forAgent(ev.gate, []);
       const findings = ev.fix_round && ev.findings
-        ? (ev.gate && ev.gate.ok === false ? `\n\n${ev.findings}` : `\n\nAn independent reviewer looked at your previous attempt in this directory and found these problems. Fix exactly these, keep everything else as it is:\n${ev.findings}`)
+        ? (ev.gate && ev.gate.ok === false ? `\n\n${ev.findings}`
+          : ev.findings_from === "checks" ? `\n\nThe platform ran its checks against your previous attempt in this directory and these did not pass. Fix exactly these, keep everything else as it is:\n${ev.findings}`
+          : `\n\nAn independent reviewer looked at your previous attempt in this directory and found these problems. Fix exactly these, keep everything else as it is:\n${ev.findings}`)
         : "";
       const ctl = new AbortController();
       P.ACTIVE.set(runId, ctl);
@@ -349,6 +365,7 @@ Rules for this build:
 - Follow MODULE-CONTRACT.md exactly: module.json (keep "name": "${slug}"), routes.js exporting (ctx) => router, additive migrations, pages computing base from location.pathname, tour.json ending at the feedback button.
 - One screen per role the design names, each with its single prominent action, phone first for the floor. Add each screen to module.json "pages" with a label a manager would recognize, and its API to "smoke".
 - The rules in the design become checks in routes.js (refuse the action and say why in plain words).
+- checks/ holds what this module promises, as files the platform runs against every build from now on (MODULE-CONTRACT.md, "Checks"). checks/001-the-list-answers.json describes the skeleton's API: keep it true, and since nothing is on the floor yet you may edit it this once if you change that API. Add one check file per rule the design names (the next numbers), each proving the rule holds: make the rows it needs, try the thing the rule refuses, expect the refusal.
 - The numbers on the board come from /api/stats or your own endpoint and show at the top of the lead's or manager's screen.
 - Seed the starting data as INSERT rows in migrations/001.sql (mind the validator: no quoted identifiers, no schema prefixes, additive statements only).
 - Plain words on every visible string (PLAIN-WORDS.md). No em or en dashes anywhere.
@@ -427,12 +444,15 @@ Rules for this build:
     }
 
     if (run.step === "test_run") {
-      const ok = await P.smokeCheck(company, slug, true);
+      // the same checks every build gets (pipeline.runChecks, build order item 7): endpoints answer, the module's
+      // checks pass (a new module starts with the ones the skeleton and the builder wrote), every screen opens
+      const ok = await P.runChecks(company, slug, run);
       const cur = await P.getRun(runId);
-      await P.setRun(runId, { evidence: { ...cur.evidence, test_run: ok } });
-      if (!ok.ok) throw new Error(`internal tests failed: ${ok.detail}`);
+      await P.setRun(runId, { evidence: { ...cur.evidence, test_run: { ok: ok.ok, checked: ok.checked || [], detail: ok.detail || undefined }, checks: ok } });
+      if (!ok.ok) { await record("check_verdict", { company, module: slug, actor: "platform", run_id: runId, version: cur.to_version, after: ok.detail, detail: { by: "platform tests", verdict: "fail", kind: ok.kind } }); throw new Error(`internal tests failed: ${ok.detail}`); }
+      await P.recordAdded(cur, ok);
       await P.setRun(runId, { step: "await_deploy", status: "waiting" });
-      await P.log(runId, { step: "test_run", note: `smoke checks passed (${(ok.checked || []).length}); ready for the manager` });
+      await P.log(runId, { step: "test_run", note: `${P.checksLine(ok)}; ready for the manager` });
       return;
     }
   } catch (e) {

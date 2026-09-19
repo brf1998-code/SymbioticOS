@@ -220,6 +220,7 @@ const STEP_LABEL = {
 };
 let DATA = null;
 let EDITING = null;            // proposal id being adjusted, "req:<runId>" while a requirement is being edited, or "left:<feedbackId>" while the manager writes what is left; pauses the reload
+const OPEN_STOPS = new Set();   // stopped builds whose "and N more" is open; kept across the 4 s redraw
 const OPEN_BATCH = new Set();   // batch tiles whose "See the N changes" is open; kept across the 4 s redraw
 const CHECKED = new Set();     // "runId:i" boxes the manager has ticked at the requirement gate (survives the 4s reload)
 const MGR = () => DATA && (DATA.role === "manager" || DATA.role === "admin");
@@ -366,7 +367,7 @@ async function declineReview(id) {
 // Every button click is acknowledged at once: the card it belongs to greys out
 // with a "working" line until the server answers, and the header shows a pill.
 const PENDING = new Map(); // key ("fb:12" or "run:7") -> label
-const ACTION_LABELS = { closeout: "Closing it out", review: "Sending to the AI for a proposal", decide: "Recording your decision", confirm: "Confirming, the agent starts building", deploy: "Deploying to the floor", cancel: "Cancelling", retry: "Restarting the build", fix: "Sending the findings back to the agent", override: "Overriding the review, running tests", rollback: "Rolling back", plusone: "Counting it again", close: "Closing", batch: "Starting the batch build" };
+const ACTION_LABELS = { closeout: "Closing it out", retire: "Retiring the promise and checking the build again", review: "Sending to the AI for a proposal", decide: "Recording your decision", confirm: "Confirming, the agent starts building", deploy: "Deploying to the floor", cancel: "Cancelling", retry: "Restarting the build", fix: "Sending the findings back to the agent", override: "Overriding the review, running tests", rollback: "Rolling back", plusone: "Counting it again", close: "Closing", batch: "Starting the batch build" };
 function pendingKey(url) {
   let m;
   if ((m = /\/api\/feedback\/(\d+)\/(\w+)/.exec(url))) return ["fb:" + m[1], ACTION_LABELS[m[2]] || "Working"];
@@ -528,6 +529,7 @@ function failedHtml(run, cancelNote) {
   let html = "";
   if (platformStop) html += `<div class="findings"><b>The platform's own checks stopped it. Nothing from this build ran or reached the floor.</b>${esc(cc.summary || "")}</div>`;
   else if (cc) html += `<div class="findings"><b>Independent review (${esc(modelLabel(cc.model))}) failed it. Findings:</b>${esc(cc.summary || "")}</div>`;
+  else if (ev.checks && ev.checks.ok === false) html += checksStopHtml(run, ev.checks);
   else html += `<div class="fail-note">Stopped: ${esc(last ? last.note : "see log")}</div>`;
   if (failedCheck && !platformStop) html += `<a class="demo" href="/c/${SLUG}/staging/m/${esc(run.module)}/" target="_blank">Open preview of v${run.to_version} (not live)</a><br>`;
   if (!MGR()) return html;
@@ -538,6 +540,45 @@ function failedHtml(run, cancelNote) {
   }
   html += `<button class="quiet" onclick="act('/api/runs/${run.id}/retry')">Retry from scratch</button><button class="no" onclick="if(confirm('Cancel this build? ${esc(cancelNote)}'))act('/api/runs/${run.id}/cancel')">Cancel</button>`;
   return html;
+}
+
+// A build the platform's checks stopped before the deploy gate (build order item 7), in plain words: an endpoint
+// that does not answer, a check an EARLIER change left behind (a promise: the manager may send the build back to
+// keep it, or retire it because this change is what they want now), the check that came with THIS change, or a
+// screen that breaks when it opens.
+function checksStopHtml(run, ck) {
+  const a = ck.acceptance || { failed: [], invalid: [] };
+  const why = (r) => { const st = (r.steps || []).find(x => !x.ok); return st ? `${st.step}: ${st.problems.join("; ")}` : ""; };
+  // what the check saw is for whoever wants it (Brendan, in a pilot), folded away from the manager's first read
+  const saw = (text) => (text ? `<details style="margin-top:4px"><summary style="cursor:pointer;font-size:11.5px;opacity:.8">what the check saw</summary><div class="meta" style="color:inherit">${esc(text)}</div></details>` : "");
+  const blocks = [];
+  if (ck.kind === "smoke") blocks.push(`<div class="findings"><b>The build does not answer where it should.</b>${esc(ck.detail || "")}</div>`);
+  for (const r of a.failed.filter(x => !x.new)) {
+    const o = r.origin && r.origin.requests && r.origin.requests[0];
+    blocks.push(`<div class="findings"><b>This change breaks something an earlier change promised.</b>\u201c${esc(r.title)}\u201d${o ? ` It came with request #${o.id}${o.name ? ` from ${esc(o.name)}` : ""}: "${esc(o.words)}"` : ""}${saw(why(r))}`
+      + (MGR() ? `<button class="quiet small" data-retire="${esc(r.file)}" onclick="retirePromise(${run.id}, ${esc(JSON.stringify(r.file))}, ${esc(JSON.stringify(r.title))})">That promise no longer holds: retire it</button>` : "") + `</div>`);
+  }
+  const promises = blocks.length;
+  for (const r of a.failed.filter(x => x.new)) blocks.push(`<div class="findings"><b>The check that came with this change does not pass yet.</b>\u201c${esc(r.title)}\u201d${saw(why(r))}</div>`);
+  for (const i of a.invalid || []) blocks.push(`<div class="findings"><b>A check in this tool cannot be read.</b>${esc(i.file)}</div>`);
+  if (ck.pages && ck.pages.ok === false) for (const p of ck.pages.problems.slice(0, 4)) blocks.push(`<div class="findings"><b>The \u201c${esc(p.screen)}\u201d screen breaks when it opens.</b>${esc(p.what)}</div>`);
+  if (!blocks.length) return `<div class="fail-note">Stopped: ${esc(ck.detail || "a check did not pass")}</div>`;
+  // the manager reads what needs a decision first (the promises, or else the first finding); the rest folds under one line
+  const lead = Math.max(1, Math.min(promises, 3)), rest = blocks.slice(lead);
+  return blocks.slice(0, lead).join("") + (rest.length ? `<details ${OPEN_STOPS.has(run.id) ? "open" : ""} ontoggle="this.open?OPEN_STOPS.add(${run.id}):OPEN_STOPS.delete(${run.id})" style="margin-top:6px"><summary style="cursor:pointer;font-size:12.5px;font-weight:700;color:var(--red)" data-more="${rest.length}">and ${rest.length} more thing${rest.length === 1 ? "" : "s"} the checks found</summary>${rest.join("")}</details>` : "");
+}
+// Retiring a promise is the manager's call, with a confirm and a reason that stays on the record.
+function retirePromise(runId, file, title) {
+  if (!confirm(`Retire this promise?\n\n"${title}"\n\nFrom now on no build of this tool is held to it. Do this only when the change you asked for is meant to replace it. Otherwise send the build back to the agent, which keeps the promise.`)) return;
+  const reason = prompt("Why does it no longer hold? (kept on the record)") || "";
+  act(`/api/runs/${runId}/retire-check`, { file, reason });
+}
+// One quiet line at the deploy gate: what the platform checked on this build.
+function checksLineHtml(ev) {
+  const ck = ev.checks;
+  if (!ck || !ck.smoke) { const t = ev.test_run || ev.visual_check; return t ? `<div class="meta">tests: ${t.ok ? "passed" : "failed"} (${(t.checked || []).length} checks)</div>` : ""; }
+  const a = ck.acceptance || { total: 0, added: [], retired: 0 }, p = ck.pages || { screens: 0, mode: "static" };
+  return `<div class="meta" title="${esc((p.notes || []).join(" | "))}">checks passed: ${ck.smoke.checked.length} endpoints answer · ${a.total} promise${a.total === 1 ? "" : "s"} kept${a.added.length ? ` (${a.added.length} new)` : ""} · ${p.screens} screen${p.screens === 1 ? "" : "s"} opened${p.mode === "browser" ? "" : " (no browser on this instance)"}</div>`;
 }
 
 // One tile for a batch run (several proposals built as one change). Feedback
@@ -565,7 +606,7 @@ function batchCard(run) {
   if (run.status === "running" && MGR()) html += abortBtn(run);
   if (run.step === "await_deploy" && run.status === "waiting") {
     if (ev.what_changed || ev.build_summary) html += `<div class="prop">${esc(ev.what_changed || ev.build_summary)}</div>`;
-    if (ev.test_run) html += `<div class="meta">tests: ${ev.test_run.ok ? "passed" : "failed"} (${(ev.test_run.checked || []).length} checks)</div>`;
+    html += checksLineHtml(ev);
     if (ev.cross_check) html += `<div class="meta">cross-check (${esc(modelLabel(ev.cross_check.model))}): ${esc(ev.cross_check.verdict)}${ev.cross_check.overridden ? " (overridden by the manager)" : ""} · ${esc((ev.cross_check.summary || "").slice(0, 400))}</div>`;
     if (ev.fix_round) html += `<div class="meta">fixed by the agent in ${ev.fix_round} round(s) after a failed check</div>`;
     html += `<a class="demo" href="/c/${SLUG}/staging/m/${esc(run.module)}/" target="_blank">Open preview of v${run.to_version} (not live)</a><br>`;
@@ -654,7 +695,7 @@ function runBlock(fb, run) {
   if (run.step === "await_deploy" && run.status === "waiting") {
     const ev = run.evidence || {};
     if (ev.what_changed || ev.build_summary) html += `<div class="prop">${esc(ev.what_changed || ev.build_summary)}</div>`;
-    if (ev.test_run) html += `<div class="meta">tests: ${ev.test_run.ok ? "passed" : "failed"} (${(ev.test_run.checked || []).length} checks)</div>`;
+    html += checksLineHtml(ev);
     if (ev.cross_check) html += `<div class="meta">cross-check (${esc(modelLabel(ev.cross_check.model))}): ${esc(ev.cross_check.verdict)}${ev.cross_check.overridden ? " (overridden by the manager)" : ""} · ${esc((ev.cross_check.summary || "").slice(0, 400))}</div>`;
     if (ev.fix_round) html += `<div class="meta">fixed by the agent in ${ev.fix_round} round(s) after a failed check</div>`;
     if (ev.docs) html += `<div class="meta">guided by: ${esc(ev.docs.join(", "))}</div>`;
@@ -807,10 +848,17 @@ async function openVersions(mod) {
   const r = await fetch(`/api/c/${SLUG}/modules/${mod}/versions`);
   const j = await r.json();
   if (!r.ok) { alert(j.error || "failed"); return; }
+  // what the tool promises: the checks changes have left behind, in plain words (src/acceptance.js)
+  const pr = await fetch(`/api/c/${SLUG}/modules/${mod}/checks`).then(x => (x.ok ? x.json() : null)).catch(() => null);
+  const promises = pr && (pr.checks.length || pr.retired.length) ? `<details id="promises" style="margin:4px 0 10px"><summary style="cursor:pointer;color:var(--navy);font-weight:700;font-size:13px">What this tool promises (${pr.checks.length})</summary>
+      <p class="hint">Each line is a check an earlier change left behind. Every new build has to pass all of them before it can reach the floor.</p>
+      ${pr.checks.map(c => `<div class="meta" style="padding:3px 0">\u2713 ${esc(c.title)}</div>`).join("")}
+      ${pr.retired.map(c => `<div class="meta" style="padding:3px 0;color:var(--steel)"><s>${esc(c.title || c.file)}</s> · retired by ${esc(c.retired_by || "a manager")}${c.reason ? `: ${esc(c.reason)}` : ""}</div>`).join("")}</details>` : "";
   const title = (DATA.modules.find(m => m.name === mod) || {}).title || mod;
   document.getElementById("vpanel").innerHTML = `<div class="vpanel">
     <h3>${esc(title)}: every version <span class="x" onclick="closeVersions()">close</span></h3>
     <p class="hint"><b>Switch</b> puts that version's screens and logic on the floor and keeps today's data (nothing is lost, an older version just ignores what it never knew about). <b>Restore</b> also puts the data back to the moment that version was last live, for when a change corrupted something; it is only offered while that snapshot still exists (the newest ten are kept). Either way the current state is saved first, so a jump can be undone with Restore.</p>
+    ${promises}
     ${(() => { const past = (DATA.reviews || []).filter(r => r.module === mod && r.status !== "running" && !reviewCounts(r).open.length); return past.length ? `<details style="margin:4px 0 10px"><summary style="cursor:pointer;font-size:12.5px;font-weight:700;color:var(--navy)">Past system reviews (${past.length})</summary>${past.map(r => { const { counts } = reviewCounts(r); return `<div class="vrow"><span class="vn">#${r.id}</span><span class="vs">${r.status === "failed" ? "failed: " + esc((r.summary || "").slice(0, 120)) : `${r.item_count} recommendations on v${r.version} · ${esc(modelLabel(r.model))} · ${counts.done} done, ${counts.declined} declined, ${counts.in_progress} building`} · $${Number(r.cost_usd).toFixed(2)} · ${new Date(r.created_at).toLocaleString()}</span></div>`; }).join("")}</details>` : ""; })()}
     ${j.versions.map(v => `<div class="vrow">
       <span class="vn">v${v.version}</span>

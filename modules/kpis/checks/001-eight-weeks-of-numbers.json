@@ -1,0 +1,38 @@
+{
+  "title": "The KPI page gets eight weeks of daily numbers, the stations, and what stands out",
+  "steps": [
+    {
+      "call": "GET /api/kpis",
+      "expect": {
+        "json": {
+          "daily": {
+            "$minLength": 30
+          },
+          "byStation": {
+            "$minLength": 1
+          },
+          "flags": {
+            "$type": "array"
+          },
+          "thisWeek": {
+            "$type": "object"
+          },
+          "inventory": {
+            "paper": {
+              "$type": "array"
+            },
+            "clip": {
+              "$type": "array"
+            }
+          }
+        }
+      }
+    },
+    {
+      "page": "/",
+      "expect": {
+        "status": 200
+      }
+    }
+  ]
+}

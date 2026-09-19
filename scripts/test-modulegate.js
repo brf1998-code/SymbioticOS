@@ -1,6 +1,7 @@
 // Unit cases for src/modulegate.js. No database, no tokens: node scripts/test-modulegate.js
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const gate = require("../src/modulegate");
 
 let pass = 0, fail = 0;
@@ -166,6 +167,29 @@ t("ordinary headers are fine", gate.check({ files: mod(wrap(`  router.get("/x.cs
   const ui = gate.summarize(gate.check({ files: { ...from, "routes.js": from["routes.js"] + "//x\n" }, fromFiles: from, lane: "ui" }));
   t("a lane finding names the file once", (ui.match(/routes\.js/g) || []).length === 1, ui);
   t("no dashes in anything a manager reads", !/[–—]/.test(text)); }
+
+// 15. checks/: the promises a change leaves behind (src/acceptance.js, build order item 7)
+{ const chk = (title, steps) => JSON.stringify({ title, steps });
+  const okCheck = chk("The list of items answers with every item", [{ call: "GET /api/items", expect: { json: { items: { $type: "array" } } } }]);
+  const withCheck = { ...from, "checks/001-the-list-answers.json": okCheck };
+  t("a well formed check passes the gate in any lane", gate.check({ files: withCheck }).ok && gate.check({ files: { ...withCheck, "checks/002-next-one.json": okCheck }, fromFiles: withCheck, lane: "functionality" }).ok);
+  t("a check that does not read is refused before anything runs", has(gate.check({ files: { ...from, "checks/001-bad.json": "{ nope" } }), "check-format"));
+  t("a check that reaches outside the module is refused", has(gate.check({ files: { ...from, "checks/001-out.json": chk("Reads the platform's own backup file", [{ call: "GET /../../../api/admin/backup" }]) } }), "check-format"));
+  t("a stray file in checks/ is held to the same format", has(gate.check({ files: { ...from, "checks/notes.txt": "hello" } }), "check-format"));
+  t("any lane: an existing check edited is refused", has(gate.check({ files: { ...withCheck, "checks/001-the-list-answers.json": chk("The list of items answers with every item", [{ call: "GET /api/items" }]) }, fromFiles: withCheck, lane: "functionality" }), "lane-check-edited"));
+  { const to = { ...withCheck }; delete to["checks/001-the-list-answers.json"];
+    t("any lane: an existing check removed is refused", has(gate.check({ files: to, fromFiles: withCheck, lane: "functionality" }), "lane-check-edited") && has(gate.check({ files: to, fromFiles: withCheck, lane: "module" }), "lane-check-edited")); }
+  t("a UI build may not add a check (it touches the screens only)", has(gate.check({ files: { ...withCheck, "checks/002-ui.json": okCheck }, fromFiles: withCheck, lane: "ui" }), "lane-ui-file"));
+  t("a check the build itself added may be edited in a fix round (it is not in the version it started from)", gate.check({ files: { ...withCheck, "checks/002-mine.json": okCheck }, fromFiles: withCheck, lane: "functionality" }).ok);
+  { const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gate-chk-"));
+    for (const [rel, text] of Object.entries({ ...withCheck, "checks/001-the-list-answers.json": "{}" })) { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), text); }
+    const v = gate.checkDir(dir, { fromFiles: withCheck, lane: "functionality" });
+    const restored = gate.restoreLaneFiles(dir, withCheck, gate.record(v));
+    t("the fix round puts an edited check back itself and tells the agent", restored.includes("checks/001-the-list-answers.json") && fs.readFileSync(path.join(dir, "checks/001-the-list-answers.json"), "utf8") === okCheck && /check that already exists is never edited/.test(gate.forAgent(gate.record(v), restored)), JSON.stringify({ restored, v: v.violations.map((f) => f.rule) }));
+    fs.rmSync(dir, { recursive: true, force: true }); }
+  const text = gate.summarize(gate.check({ files: { ...from, "checks/001-bad.json": "{ nope" } }));
+  t("the card says what a check is, in plain words, with no dashes", /promise an earlier change made/.test(text) && !/[\u2013\u2014]/.test(text), text);
+  t("the library modules and their checks pass the gate", ["paperline", "kpis"].every((m) => gate.checkDir(path.join(__dirname, "..", "modules", m)).ok)); }
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

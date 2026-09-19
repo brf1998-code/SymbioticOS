@@ -1,0 +1,57 @@
+{
+  "title": "Anyone at a station can ask the stockroom for material, and the stockroom sees the request",
+  "steps": [
+    {
+      "call": "POST /api/requests",
+      "as": "floor",
+      "body": {
+        "item": "paper_white",
+        "requested_by": "Check"
+      },
+      "expect": {
+        "json": {
+          "id": {
+            "$type": "number"
+          },
+          "item": "paper_white",
+          "status": "open"
+        }
+      },
+      "save": {
+        "id": "id"
+      }
+    },
+    {
+      "call": "GET /api/stock",
+      "expect": {
+        "json": {
+          "inventory": {
+            "$minLength": 1
+          },
+          "requests": {
+            "$contains": {
+              "id": "{id}",
+              "item": "paper_white"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "POST /api/requests",
+      "as": "floor",
+      "body": {
+        "item": "gold_leaf"
+      },
+      "expect": {
+        "status": 400
+      }
+    },
+    {
+      "page": "/stock",
+      "expect": {
+        "status": 200
+      }
+    }
+  ]
+}

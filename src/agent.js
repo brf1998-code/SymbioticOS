@@ -146,7 +146,8 @@ function fakeRunAgent({ dir, prompt }) {
   const files = target && fs.existsSync(path.join(dir, target)) ? [path.join(dir, target)]
     : fs.existsSync(pages) ? fs.readdirSync(pages).map((f) => path.join(pages, f)) : [];
   // FAILCHECK in the feedback makes the first attempt fail the fake cross-check; a fix round clears it
-  const bad = /FAILCHECK/.test(prompt) && !/independent reviewer looked at your previous attempt|own checks refused the previous attempt/.test(prompt);
+  const fixRound = /independent reviewer looked at your previous attempt|own checks refused the previous attempt|platform ran its checks against your previous attempt/.test(prompt);
+  const bad = /FAILCHECK/.test(prompt) && !fixRound;
   fakeGateLine(dir, prompt, /functionality-class/i.test(prompt));
   const ver = (/data-changed="(v\d+)"/.exec(prompt) || [])[1] || "v0";
   for (const p of files) {
@@ -155,13 +156,54 @@ function fakeRunAgent({ dir, prompt }) {
     html = html.includes("</body>") ? html.replace("</body>", `${mark}\n</body>`) : html + mark;
     fs.writeFileSync(p, html + `\n<!-- revised by fake agent ${new Date().toISOString()} -->\n${bad ? "<!-- FAKE-BAD -->\n" : ""}`);
   }
-  if (/functionality-class/i.test(prompt)) {
+  // The checks of build order item 7, exercised without a key. Each marker breaks the FIRST attempt one way and
+  // a fix round clears it:
+  //   BREAKPAGE     a script on the target page throws when the page opens          (the page load stops it)
+  //   BREAKSYNTAX   a script on the target page does not parse                       (caught with or without a browser)
+  //   BREAKPROMISE  the first /api/ path of the smoke list answers a list, not an     (checks earlier changes
+  //                 object: it still answers, so only what was promised about it breaks  left behind stop it)
+  //   BADCHECK      the check left behind by this change expects the impossible      (its own check stops it)
+  //   BADSMOKE      module.json lists a path to check that is not there               (the endpoints stop it)
+  //   EDITCHECK     the build rewrites a check an earlier change left behind           (the module gate stops it)
+  //   NOCHECK       a functionality change that leaves no check behind                (passes; the run log says so)
+  for (const p of files) {
+    let html = fs.readFileSync(p, "utf8").replace(/\n<script data-fake-break>[\s\S]*?<\/script>\n/g, "");
+    if (/BREAKPAGE/.test(prompt) && !fixRound) html = html.replace("</body>", `\n<script data-fake-break>fakeAgentCalledSomethingThatIsNotThere();</script>\n</body>`);
+    if (/BREAKSYNTAX/.test(prompt) && !fixRound) html = html.replace("</body>", `\n<script data-fake-break>function fakeAgentLeftABraceOpen( {</script>\n</body>`);
+    fs.writeFileSync(p, html);
+  }
+  const manifestFile = path.join(dir, "module.json");
+  let manifest = {}; try { manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8")); } catch (e) { /* no manifest, no api path */ }
+  const apiPath = (manifest.smoke || []).find((x) => /^\/api\//.test(x) && !/fake-not-there/.test(x)) || null;
+  const routesFile = path.join(dir, "routes.js");
+  const FUNC = /functionality-class/i.test(prompt);
+  if (FUNC && apiPath && fs.existsSync(routesFile)) {
+    const brokenLine = `  router.get("${apiPath}", (req, res) => res.json(["fake broken promise"]));   // FAKE-BREAKPROMISE\n`;
+    let js = fs.readFileSync(routesFile, "utf8").split(brokenLine).join("");
+    if (/BREAKPROMISE/.test(prompt) && !fixRound) js = js.replace(/(const router = express\.Router\(\);\n)/, `$1${brokenLine}`);
+    fs.writeFileSync(routesFile, js);
+  }
+  if (FUNC && Array.isArray(manifest.smoke)) {
+    manifest.smoke = manifest.smoke.filter((x) => x !== "/api/fake-not-there");
+    if (/BADSMOKE/.test(prompt) && !fixRound) manifest.smoke.push("/api/fake-not-there");
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + "\n");
+  }
+  if (FUNC) {
     const migDir = path.join(dir, "migrations");
     fs.mkdirSync(migDir, { recursive: true });
     const next = String(fs.readdirSync(migDir).filter((f) => f.endsWith(".sql")).length + 1).padStart(3, "0");
     fs.writeFileSync(path.join(migDir, `${next}.sql`), "ALTER TABLE stations ADD COLUMN IF NOT EXISTS fake_note TEXT;\n");
+    const chkDir = path.join(dir, "checks");
+    const existing = fs.existsSync(chkDir) ? fs.readdirSync(chkDir).filter((f) => f.endsWith(".json")).sort() : [];
+    if (/EDITCHECK/.test(prompt) && !fixRound && existing.length) fs.writeFileSync(path.join(chkDir, existing[0]), JSON.stringify({ title: "The fake agent rewrote a promise it did not make", steps: [{ call: "GET /" }] }, null, 2) + "\n");
+    if (!/NOCHECK/.test(prompt) && apiPath) {
+      fs.mkdirSync(chkDir, { recursive: true });
+      const mine = existing.find((f) => f.endsWith(`-fake-change-${ver}.json`));
+      const name = mine || `${String(existing.length + 1).padStart(3, "0")}-fake-change-${ver}.json`;
+      fs.writeFileSync(path.join(chkDir, name), JSON.stringify({ title: `The fake change of ${ver} keeps ${apiPath} answering with an object`, steps: [{ call: `GET ${apiPath}`, expect: { status: /BADCHECK/.test(prompt) && !fixRound ? 418 : 200, json: { $type: "object" } } }] }, null, 2) + "\n");
+    }
   }
-  return { text: `- Fake agent applied a marker change to ${target || "every page"}\n- Added one additive migration (functionality lane only)\n- No real AI was involved (SOS_FAKE_AGENT=1)`, costUsd: 0 };
+  return { text: `- Fake agent applied a marker change to ${target || "every page"}\n- Added one additive migration and one check (functionality lane only)\n- No real AI was involved (SOS_FAKE_AGENT=1)`, costUsd: 0 };
 }
 
 function fakeStructured(toolName, prompt) {

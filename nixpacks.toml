@@ -1,0 +1,10 @@
+# Railway builds this repo with Nixpacks (railway.json). Chromium is here for the
+# page load every build gets before the deploy gate (src/pageload.js, build order
+# item 7): each screen of a staged build is opened in a headless browser and the
+# build stops on a script error. puppeteer-core (package.json) drives it and
+# downloads nothing; src/pageload.js finds the binary on the PATH ("chromium"),
+# or at SOS_CHROMIUM_PATH. If Chromium is ever missing or will not start, the
+# platform falls back to a check without a browser and says so in the run log;
+# SOS_BROWSER=off forces that. "..." keeps everything Nixpacks picks by itself.
+[phases.setup]
+nixPkgs = ["...", "chromium"]

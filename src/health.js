@@ -29,6 +29,15 @@ function p90(xs) { if (!xs.length) return null; const s = [...xs].sort((a, b) =>
 // What stopped a run, from the error line the run logged. Gate = the
 // platform's own checks (no override), reviewer = the model cross-check,
 // tests = smoke and visual checks, other = the agent or the platform erred.
+// A stop by the platform's tests, told apart (build order item 7): an earlier promise broken, the change's own
+// check failing, a screen that breaks when it opens, or an endpoint that does not answer.
+function testStopKind(note) {
+  const n = String(note || "");
+  if (/breaks something an earlier change promised/.test(n)) return "promise";
+  if (/check that came with this change|check file is not readable/.test(n)) return "own_check";
+  if (/a script error on the screen|the screen answered|did not finish loading|could not be opened|own call to|does not parse/.test(n)) return "page";
+  return "smoke";
+}
 function stopKind(note) {
   const n = String(note || "");
   if (/^platform checks failed/.test(n)) return "gate";
@@ -47,7 +56,7 @@ function runTimes(run) {
     ready: find((e) => (e.step === "test_run" && /^smoke checks passed/.test(e.note || "")) || (e.step === "visual_check" && /ready for manager review/.test(e.note || ""))),
     deployed: find((e) => e.step === "deploy"),
     rolledBack: find((e) => e.step === "rollback"),
-    stops: log.filter((e) => e.step === "error" && e.t).map((e) => ({ t: e.t, kind: stopKind(e.note) })),
+    stops: log.filter((e) => e.step === "error" && e.t).map((e) => ({ t: e.t, kind: stopKind(e.note), ...(stopKind(e.note) === "tests" ? { test: testStopKind(e.note) } : {}) })),
   };
 }
 
@@ -93,7 +102,11 @@ function metrics(g, now, windowDays) {
   const shipped = timed.filter((x) => inWin(x.t.deployed));
   const rolledBack = timed.filter((x) => inWin(x.t.rolledBack));
   const stops = { gate: 0, reviewer: 0, tests: 0, other: 0 };
-  for (const x of timed) for (const s of x.t.stops) if (inWin(s.t)) stops[s.kind]++;
+  const testStops = { promise: 0, own_check: 0, page: 0, smoke: 0 };
+  for (const x of timed) for (const s of x.t.stops) if (inWin(s.t)) { stops[s.kind]++; if (s.test) testStops[s.test]++; }
+  // the pile of promises: checks that changes left behind in the window, and the ones a manager retired
+  const checksAdded = g.record.filter((r) => r.kind === "check_added" && inWin(r.created_at)).length;
+  const promisesRetired = g.record.filter((r) => r.kind === "promise_retired" && inWin(r.created_at)).length;
   const fixRounds = started.reduce((n, x) => n + Number((x.r.evidence || {}).fix_round || 0), 0);
   const overrides = started.filter((x) => ((x.r.evidence || {}).cross_check || {}).overridden).length;
   const cancelled = started.filter((x) => x.r.status === "cancelled").length;
@@ -155,7 +168,7 @@ function metrics(g, now, windowDays) {
     },
     builds: {
       started: started.length, shipped: shipped.length, rolled_back: rolledBack.length, cancelled,
-      stops, fix_rounds: fixRounds, overrides,
+      stops, test_stops: testStops, checks_added: checksAdded, promises_retired: promisesRetired, fix_rounds: fixRounds, overrides,
       in_flight: inFlight, waiting_deploy: waitingDeploy, waiting_confirm: waitingConfirm,
       models,
     },
@@ -224,7 +237,7 @@ async function load(windowDays) {
   const feedback = (await q("SELECT id, company, status, created_at, outcome, person_id, follow_up_of, shipped_at, floor_answer, floor_answer_at, manager_answer, manager_answer_at FROM platform.feedback")).rows;
   const proposals = (await q("SELECT p.id, p.feedback_id, f.company, p.status, p.created_at, p.data_check->>'status' AS data_status FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id")).rows;
   const runs = (await q("SELECT id, company, module, lane, status, step, model, proposal_id, proposal_ids, created_at, evidence, log FROM platform.build_runs ORDER BY id DESC LIMIT 5000")).rows;
-  const record = (await q("SELECT company, kind, proposal_id, created_at FROM platform.record WHERE kind IN ('proposal_edited','proposal_approved','proposal_declined') ORDER BY id")).rows;
+  const record = (await q("SELECT company, kind, proposal_id, created_at FROM platform.record WHERE kind IN ('proposal_edited','proposal_approved','proposal_declined','check_added','promise_retired') ORDER BY id")).rows;
   const intakes = (await q("SELECT company, status, created_at FROM platform.module_intakes")).rows;
   const [w, m] = await Promise.all([spendSince(since), spendSince(monthStart)]);
   const spend = {}; for (const c of companies) spend[c.slug] = { window: w[c.slug] || 0, month: m[c.slug] || 0 };
@@ -237,4 +250,4 @@ async function forAdmin(days) {
   return compute(bundle, { now: bundle.now, windowDays });
 }
 
-module.exports = { compute, metrics, runTimes, stopKind, forAdmin, load, SAME_SHIFT_HOURS };
+module.exports = { compute, metrics, runTimes, stopKind, testStopKind, forAdmin, load, SAME_SHIFT_HOURS };

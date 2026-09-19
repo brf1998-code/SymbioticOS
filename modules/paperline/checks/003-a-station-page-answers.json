@@ -1,0 +1,36 @@
+{
+  "title": "Station 1 has its own page with its queue and instructions, and a station that does not exist says so",
+  "steps": [
+    {
+      "call": "GET /api/station/1",
+      "as": "floor",
+      "expect": {
+        "json": {
+          "station": {
+            "seq": 1
+          },
+          "queue": {
+            "$type": "array"
+          },
+          "requests": {
+            "$type": "array"
+          }
+        }
+      }
+    },
+    {
+      "call": "GET /api/station/999",
+      "as": "floor",
+      "expect": {
+        "status": 404
+      }
+    },
+    {
+      "page": "/station/1",
+      "as": "floor",
+      "expect": {
+        "status": 200
+      }
+    }
+  ]
+}

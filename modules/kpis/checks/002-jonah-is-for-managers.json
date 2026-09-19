@@ -1,0 +1,26 @@
+{
+  "title": "Jonah's conversations are for managers: a floor device cannot read them",
+  "steps": [
+    {
+      "call": "GET /api/chats",
+      "as": "manager",
+      "expect": {
+        "json": {
+          "chats": {
+            "$type": "array"
+          }
+        }
+      }
+    },
+    {
+      "call": "GET /api/chats",
+      "as": "floor",
+      "expect": {
+        "status": [
+          401,
+          403
+        ]
+      }
+    }
+  ]
+}

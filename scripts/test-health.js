@@ -184,5 +184,15 @@ const demo = (out) => out.companies.find((c) => c.slug === "demo");
   t("with nobody having spoken the met share is null", go(bundle({ feedback: [c] })).fleet.answers.met_share === null && go(bundle({ feedback: [c] })).fleet.answers.manager_done === 0);
 }
 
+// what the platform's tests stopped, told apart (build order item 7)
+{
+  const h = health;
+  t("an earlier promise broken", h.testStopKind('internal tests failed: this change breaks something an earlier change promised: "The stockroom sees every request"') === "promise");
+  t("its own check", h.testStopKind('internal tests failed: the check that came with this change does not pass: "x" (GET /a: answered 404, expected a 2xx)') === "own_check");
+  t("a screen that breaks", h.testStopKind("visual check failed: Stockroom page: a script error on the screen: y is not a function") === "page" && h.testStopKind("visual check failed: Line board: the screen answered 404") === "page");
+  t("an endpoint that does not answer", h.testStopKind("internal tests failed: /api/state answered 404") === "smoke");
+  t("all four are still tests to the stop counter", ["internal tests failed: x", "visual check failed: y"].every((n) => h.stopKind(n) === "tests"));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

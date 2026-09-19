@@ -31,6 +31,8 @@ function reasonFor(run) {
   if (cc.verdict === "fail" && cc.model === "platform checks") return "platform checks";
   if (cc.verdict === "fail") return "reviewer failed it";
   if (/migration .* (rejected|failed)/i.test(last) || /migration/i.test(last) && /reject/i.test(last)) return "migration rejected";
+  // the platform's tests, told apart since build order item 7 (src/acceptance.js, src/pageload.js)
+  if (ev.checks && ev.checks.ok === false && ev.checks.kind) return { promise: "broke an earlier promise", own_check: "its own check failed", page: "a screen broke on opening", smoke: "an endpoint did not answer" }[ev.checks.kind] || "tests failed";
   if (/^internal tests failed/i.test(last) || run.step === "test_run") return "tests failed";
   if (/^visual check failed/i.test(last)) return "visual check failed";
   if (/cost passed|safety budget|monthly AI cap/i.test(last)) return "cost cap";

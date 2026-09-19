@@ -1,0 +1,36 @@
+{
+  "title": "The line board shows the stations, the travelers on the line and the room's settings",
+  "steps": [
+    {
+      "call": "GET /api/state",
+      "expect": {
+        "json": {
+          "stations": {
+            "$minLength": 1
+          },
+          "travelers": {
+            "$type": "array"
+          },
+          "history": {
+            "$type": "array"
+          },
+          "openRequests": {
+            "$type": "number"
+          },
+          "settings": {
+            "$type": "object"
+          }
+        }
+      }
+    },
+    {
+      "page": "/",
+      "expect": {
+        "status": 200,
+        "selector": [
+          "body"
+        ]
+      }
+    }
+  ]
+}

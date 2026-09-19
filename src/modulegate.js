@@ -270,6 +270,13 @@ function checkLayout(files) {
     else if (/^package(-lock)?\.json$/i.test(parts[parts.length - 1])) add("layout-package", rel, "adds a package file", "a module is plain files; it cannot change how its code is loaded");
     else if (REFUSED_FILE.test(rel)) add("layout-file-kind", rel, "is a kind of file the platform does not load", "a module is .js, .json, .sql, .html and .md files");
   }
+  // checks/ holds the promises earlier changes made (src/acceptance.js): small "call this, expect that" files the
+  // platform runs against every later build. One that does not read is refused here, before anything runs.
+  const acceptance = require("./acceptance");
+  for (const rel of Object.keys(files).filter((r) => r.startsWith(acceptance.DIR))) {
+    const parsed = acceptance.parse(rel, String(files[rel] || ""));
+    if (!parsed.ok) add("check-format", rel, "is not a check the platform can run", parsed.problems.slice(0, 4).join("; "));
+  }
   let manifest = null;
   if (files["module.json"] != null) { try { manifest = JSON.parse(files["module.json"]); } catch (e) { add("layout-manifest", "module.json", "does not parse", e.message); } }
   else add("layout-manifest", "module.json", "is missing", "every module carries a module.json");
@@ -301,6 +308,7 @@ function manifestCore(text) {
 function describe(rel) {
   if (rel === "routes.js" || SERVER_FILE.test(rel)) return `${rel} (how the tool works)`;
   if (rel.startsWith("migrations/")) return `${rel} (what the tool keeps)`;
+  if (rel.startsWith("checks/")) return `${rel} (a promise an earlier change made)`;
   if (rel === "module.json") return "module.json (the tool's screens, entry or checks list)";
   return rel;
 }
@@ -313,6 +321,12 @@ function checkLane(files, fromFiles, lane) {
     if (before === after) continue;
     if (rel.startsWith("migrations/") && before != null) {
       found.push({ rule: "lane-migration-edited", file: rel, label: describe(rel), line: 0, what: after == null ? "was removed" : "was edited", why: "a migration that already exists is never changed; add the next numbered file instead", evidence: "" });
+      continue;
+    }
+    // a check that is already there is a promise the floor relies on: a build adds the next one, it never edits or
+    // removes one (retiring a promise is the manager's call, kept in platform.check_retirements, not in the file)
+    if (rel.startsWith("checks/") && before != null) {
+      found.push({ rule: "lane-check-edited", file: rel, label: describe(rel), line: 0, what: after == null ? "was removed" : "was edited", why: "a check that already exists is never changed; if your change breaks it, change your work, and add your own check as the next numbered file", evidence: "" });
       continue;
     }
     if (lane !== "ui" || UI_MAY_CHANGE(rel)) continue;
@@ -371,7 +385,9 @@ function capitalize(s) { s = String(s || ""); return s.charAt(0).toUpperCase() +
 function summarize(v) {
   const head = v.violations.some((f) => f.rule === "lane-ui-file")
     ? "It was approved as a look-and-feel change, but the build changed more than the screens. Send it back to be fixed, or cancel and approve it again as a functionality change so it gets the full review."
-    : "Module code may only work with its own tables and the services the platform lends it.";
+    : v.violations.every((f) => f.rule === "check-format" || f.rule === "lane-check-edited")
+      ? "A check is a promise an earlier change made to the floor. A build adds its own check and never changes an older one."
+      : "Module code may only work with its own tables and the services the platform lends it.";
   return `${head}\n${v.violations.map((f) => `- ${line(f)}`).join("\n")}`;
 }
 
@@ -384,7 +400,7 @@ function restoreLaneFiles(dir, fromFiles, rec) {
   const restored = [];
   if (!fromFiles || !rec || !Array.isArray(rec.violations)) return restored;
   for (const f of rec.violations) {
-    if (f.rule !== "lane-ui-file" && f.rule !== "lane-migration-edited") continue;
+    if (f.rule !== "lane-ui-file" && f.rule !== "lane-migration-edited" && f.rule !== "lane-check-edited") continue;
     const rel = path.posix.normalize(String(f.file || ""));
     if (!rel || rel.startsWith("..") || path.posix.isAbsolute(rel)) continue;
     const p = path.join(dir, rel);
@@ -395,9 +411,9 @@ function restoreLaneFiles(dir, fromFiles, rec) {
 }
 // What the agent is told in the fix round.
 function forAgent(rec, restored) {
-  const rest = (rec.violations || []).filter((f) => f.rule !== "lane-ui-file" && f.rule !== "lane-migration-edited");
+  const rest = (rec.violations || []).filter((f) => f.rule !== "lane-ui-file" && f.rule !== "lane-migration-edited" && f.rule !== "lane-check-edited");
   let text = "The platform's own checks refused the previous attempt before any of it ran.";
-  if (restored && restored.length) text += `\nThe platform has put these files back exactly as they were before that attempt: ${restored.join(", ")}. Do not touch them again. ${rec.lane === "ui" ? "This is a look-and-feel change: make it work in pages/ only. If it cannot work without server logic, change nothing more and say so in your summary." : "A migration that already exists is never edited; put the change in the next numbered migration file."}`;
+  if (restored && restored.length) text += `\nThe platform has put these files back exactly as they were before that attempt: ${restored.join(", ")}. Do not touch them again. ${rec.lane === "ui" ? "This is a look-and-feel change: make it work in pages/ only. If it cannot work without server logic, change nothing more and say so in your summary." : "A migration or a check that already exists is never edited; put the change in the next numbered file. If an older check no longer passes, change your work so it does."}`;
   if (rest.length) text += `\nFix exactly these, and keep everything else as it is:\n${rest.map((f) => `- ${line(f)}${f.evidence ? ` The line: ${f.evidence}` : ""}`).join("\n")}`;
   return text;
 }

@@ -126,6 +126,13 @@ function sign(role, company, gen) {
   return `${payload}.${mac}`;
 }
 
+// A session the PLATFORM opens for itself as one role of one company: the acceptance checks and the page load
+// (src/acceptance.js, src/pageload.js) call a staged build the way that company's own devices would. Never the
+// internal token for those: the pages are agent-written, and that token is an admin of every company.
+async function serviceCookie(company, role) {
+  return `${COOKIE}=${sign(role === "floor" ? "floor" : "manager", company, await generationOf(company))}`;
+}
+
 function verify(token) {
   if (!token) return null;
   const parts = token.split(".");
@@ -302,5 +309,5 @@ function logoutHandler(_req, res) {
 
 module.exports = {
   middleware, companyGuard, ownsCompany, requireManager, requireAdmin, loginHandler, logoutHandler, checkAdminPassword,
-  setPasswords, generatePassword, ensureAccessRows, accessRow, accessPublic, hashPassword, checkHash, sign, verify, OPEN, ALL, hmac, parseCookies,
+  setPasswords, generatePassword, serviceCookie, ensureAccessRows, accessRow, accessPublic, hashPassword, checkHash, sign, verify, OPEN, ALL, hmac, parseCookies,
 };

@@ -117,6 +117,19 @@ router.get("/api/c/:slug/modules/:name/versions", requireManager, async (req, re
   try { res.json(await registry.versionHistory(req.params.slug, req.params.name)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
+// What a tool promises: every check its live version carries, in plain words, and the ones a manager retired.
+router.get("/api/c/:slug/modules/:name/checks", requireManager, async (req, res) => {
+  try {
+    const row = await registry.getModule(req.params.slug, req.params.name);
+    if (!row) return res.status(404).json({ error: "unknown module" });
+    const acceptance = require("./acceptance");
+    const files = row.live_version ? (await registry.versionFiles(req.params.slug, req.params.name, row.live_version)) || {} : {};
+    const retired = await acceptance.listRetired(req.params.slug, req.params.name);
+    const gone = new Set(retired.map((r) => r.file));
+    res.json({ version: row.live_version, checks: acceptance.collect(files).checks.filter((c) => !gone.has(c.file)).map((c) => ({ file: c.file, title: c.title, steps: c.steps.length })), retired });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.post("/api/c/:slug/modules/:name/goto", requireManager, async (req, res) => {
   const { version, restore_data } = req.body || {};
   const row = await registry.getModule(req.params.slug, req.params.name);
@@ -388,6 +401,12 @@ router.post("/api/runs/:id/fix", requireManager, async (req, res) => {
 router.post("/api/runs/:id/override", requireManager, async (req, res) => {
   try { const x = await runIds(req.params.id); await pipeline.override(Number(req.params.id)); if (x) await record("run_overridden", { ...x.ids, actor: actor(req), before: ((x.run.evidence || {}).cross_check || {}).summary || null }); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
+});
+// An earlier promise no longer holds (src/acceptance.js, build order item 7): the manager retires the check this
+// build broke, with a reason, and the same build is checked again. On the record with who and why.
+router.post("/api/runs/:id/retire-check", requireManager, async (req, res) => {
+  try { res.json({ ok: true, ...(await pipeline.retirePromise(Number(req.params.id), String((req.body || {}).file || ""), (req.body || {}).reason, actor(req))) }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 router.post("/api/runs/:id/rollback", requireManager, async (req, res) => {
   try { const x = await runIds(req.params.id); const out = await pipeline.rollbackRun(Number(req.params.id)); if (x) await record("rolled_back", { ...x.ids, actor: actor(req), version: out.to, detail: { to: out.to } }); res.json(out); }
@@ -803,6 +822,7 @@ router.post("/api/admin/companies/:slug/delete", requireAdmin, async (req, res) 
     await connections.deleteCompany(co.slug);
     await datacheck.deleteCompany(co.slug);
     await people.deleteCompany(co.slug);
+    await require("./acceptance").deleteCompany(co.slug);
     counts.record = await require("./record").deleteCompany(co.slug);
     await q("DELETE FROM platform.companies WHERE slug=$1", [co.slug]);
     await logEvent("company_deleted", co.slug, { name: co.name, modules: mods, counts });

@@ -468,6 +468,13 @@ async function stageVersion(company, mod, version) {
   await logEvent("version_staged", `${company}/${mod}`, { version });
 }
 
+// Put the staged build's data back to a fresh copy of the floor's. The acceptance checks (src/acceptance.js)
+// may write rows while they prove a change; the manager's preview must not show them.
+async function resetStagedData(company, mod, version) {
+  await rebuildStagingClone(company, mod);
+  await mountStaged(company, mod, version);
+}
+
 // Drop a staged version without deploying it (cancel at the deploy gate).
 async function unstage(company, mod) {
   unmountStaged(company, mod);
@@ -648,5 +655,5 @@ function attach(app) {
 module.exports = {
   MODULES_DIR, REPO_MODULES_DIR, versionDir, readManifest, pageEntries, screenFor, loadAll, attach,
   createDraftVersion, stageVersion, deployVersion, rollback, goToVersion, versionHistory, versionFiles, persistVersion, importFromRepo,
-  unstage, getModule, libraryModules, tourFor, mountLiveIfNeeded: mountLive, hooks, materialize, dropDraftVersion, unmountCompany,
+  unstage, resetStagedData, getModule, libraryModules, tourFor, mountLiveIfNeeded: mountLive, hooks, materialize, dropDraftVersion, unmountCompany,
 };

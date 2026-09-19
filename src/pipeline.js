@@ -4,6 +4,12 @@
 //   Functionality lane: confirm_requirement (manager gate) -> build
 //                       -> cross_check (independent agent) -> test_run -> await_deploy
 //
+// visual_check and test_run are the same thing since 2026-09-19 (runChecks,
+// build order item 7): the declared endpoints answer, EVERY acceptance check
+// the module has collected passes (src/acceptance.js), and every screen opens
+// without a script error (src/pageload.js). Before that both were "the page
+// answers below 500", so a 404 passed.
+//
 // State lives in platform.build_runs (step/status). Steps run async; the board
 // polls. Failures stop the run in place with a plain-language log entry.
 //
@@ -15,6 +21,9 @@ const { runAgent, runStructured, haveKey, assertUnderCap, modelFor, buildModelFo
 const registry = require("./registry");
 const gate = require("./modulegate");
 const { record } = require("./record");
+const acceptance = require("./acceptance");
+const pageload = require("./pageload");
+const auth = require("./auth");
 
 const CROSS_CHECK_SCHEMA = {
   type: "object",
@@ -230,7 +239,9 @@ async function advance(runId) {
       const capUsd = runCapUsd(nChanges);
       const req = (run.requirement ? `\n\nConfirmed requirement:\n${run.requirement}` : "")
         + (ev0.fix_round && ev0.findings
-          ? (ev0.gate && ev0.gate.ok === false ? `\n\n${ev0.findings}` : `\n\nAn independent reviewer looked at your previous attempt in this directory and found these problems. Fix exactly these, keep everything else as it is:\n${ev0.findings}`)
+          ? (ev0.gate && ev0.gate.ok === false ? `\n\n${ev0.findings}`
+            : ev0.findings_from === "checks" ? `\n\nThe platform ran its checks against your previous attempt in this directory and these did not pass. Fix exactly these, keep everything else as it is:\n${ev0.findings}`
+            : `\n\nAn independent reviewer looked at your previous attempt in this directory and found these problems. Fix exactly these, keep everything else as it is:\n${ev0.findings}`)
           : "");
       const guidance = await guidanceFor(company, mod);
       const { model, substituted } = await buildModelFor(company, run.model);
@@ -254,7 +265,7 @@ ${req}
 Rules:
 - Each change names a Target file, which is the screen the feedback came from. Make the change in that file. Touch another file only if the change cannot work otherwise, and say so in your summary.
 - ${run.lane === "ui" ? "This is a UI-class change. Do NOT modify routes.js, the module.json smoke list or entry, or migrations. Touch pages/ and presentation only. The platform compares the files after you finish and stops a UI-class build that changed anything else; if the change cannot work without server logic, leave the server files alone and say so in your summary." : "This is a functionality-class change. If the data model must change, add a NEW migrations/NNN.sql file (additive only: CREATE TABLE / ALTER TABLE ADD COLUMN / CREATE INDEX / INSERT seed rows; bare table names, no schema prefixes). Never edit an existing migration file."}
-${isBatch ? "- Implement every change in the batch. Keep them independent where you can so one can be understood without the others.\n" : ""}- Keep the module's existing style and structure. Plain HTML/JS, no frameworks.
+${run.lane === "ui" ? "" : `- Leave a check behind: add ONE new file checks/NNN-short-name.json (the next number) that proves ${isBatch ? "these changes work" : "this change works"}, built from "how we will know it works" in the confirmed requirement. GUARDRAILS.md ("Checks") has the format. Read the files already in checks/ first: each is a promise an earlier change made, the platform runs all of them against your build, and you never edit or remove one. If one of them would fail because of your change, change your work, not the check.\n`}${isBatch ? "- Implement every change in the batch. Keep them independent where you can so one can be understood without the others.\n" : ""}- Keep the module's existing style and structure. Plain HTML/JS, no frameworks.
 - Make the smallest change that removes the reported friction.
 - Mark what you touched so the preview can highlight it: put data-changed="v${draft.version}" on every HTML element you add or visibly change (the element itself, not its parent). One attribute per element, nothing else; it costs nothing at runtime and the preview outlines those elements.
 - Your final message must be ONLY a short bullet list of what changed (one bullet per change, naming the screen), in plain language for a production manager. No preamble, no headings, no code talk.`,
@@ -314,11 +325,12 @@ ${isBatch ? "- Implement every change in the batch. Keep them independent where 
     }
 
     if (run.step === "visual_check") {
-      const ok = await smokeCheck(company, mod, true);
-      if (!ok.ok) throw new Error(`visual check failed: ${ok.detail}`);
+      const ok = await runChecks(company, mod, run);
       const cur = await getRun(runId);
-      await setRun(runId, { step: "await_deploy", status: "waiting", evidence: { ...cur.evidence, visual_check: ok } });
-      await log(runId, { step: "visual_check", note: "staged pages render; ready for manager review" });
+      await setRun(runId, { evidence: { ...cur.evidence, visual_check: { ok: ok.ok, checked: ok.checked || [], detail: ok.detail || undefined }, checks: ok } });
+      if (!ok.ok) { await record("check_verdict", { company, module: mod, actor: "platform", run_id: runId, version: cur.to_version, after: ok.detail, detail: { by: "platform tests", verdict: "fail", kind: ok.kind } }); throw new Error(`visual check failed: ${ok.detail}`); }
+      await setRun(runId, { step: "await_deploy", status: "waiting" });
+      await log(runId, { step: "visual_check", note: `${checksLine(ok)}; ready for manager review` });
       return;
     }
 
@@ -346,12 +358,14 @@ ${isBatch ? "- Implement every change in the batch. Keep them independent where 
     }
 
     if (run.step === "test_run") {
-      const ok = await smokeCheck(company, mod, true);
+      const ok = await runChecks(company, mod, run);
       const cur = await getRun(runId);
-      await setRun(runId, { evidence: { ...cur.evidence, test_run: ok } });
-      if (!ok.ok) { await record("check_verdict", { company, module: mod, actor: "platform", run_id: runId, version: cur.to_version, after: ok.detail, detail: { by: "platform tests", verdict: "fail", checked: ok.checked } }); throw new Error(`internal tests failed: ${ok.detail}`); }
+      await setRun(runId, { evidence: { ...cur.evidence, test_run: { ok: ok.ok, checked: ok.checked || [], detail: ok.detail || undefined }, checks: ok } });
+      if (!ok.ok) { await record("check_verdict", { company, module: mod, actor: "platform", run_id: runId, version: cur.to_version, after: ok.detail, detail: { by: "platform tests", verdict: "fail", kind: ok.kind, checked: ok.checked } }); throw new Error(`internal tests failed: ${ok.detail}`); }
+      await recordAdded(cur, ok);
+      if (!ok.acceptance.added.length) await log(runId, { step: "test_run", note: "this change left no check behind; nothing will hold a later build to it" });
       await setRun(runId, { step: "await_deploy", status: "waiting" });
-      await log(runId, { step: "test_run", note: `smoke checks passed (${ok.checked.length} endpoints)` });
+      await log(runId, { step: "test_run", note: checksLine(ok) });
       return;
     }
   } catch (e) {
@@ -455,6 +469,7 @@ Mark a finding BLOCKING only when one of these is true:
 Everything else is at most MINOR. In particular these are NOT violations and never block:
 - Supporting edits the change needs to work: server logic in routes.js for a functionality change, helper functions, styles, a NEW additive migration file, additions to the module.json smoke list or pages map.
 - Housekeeping the platform requires: tour.json steps kept true, reference.md updated, data-changed="vN" attributes on touched elements.
+- A NEW file under checks/ (the check this change leaves behind). The platform runs every check itself after you, so whether one passes is not yours to judge and a missing one never blocks. It is BLOCKING only if a check file that already existed was edited or removed, and worth a MINOR note if the new check plainly does not test what the requirement asks.
 - Small tidy-ups inside lines the change had to touch anyway, and wording changes that keep the meaning.
 - The requirement's "what stays the same" describes what the floor sees, not which files may be touched. Touching a file is fine if that behavior is unchanged.
 - Anything you cannot verify from the diff. Do not fail for what you cannot see or cannot run.
@@ -466,22 +481,98 @@ When in doubt between blocking and minor, choose minor. A blocking finding must 
 ${rules}`;
 }
 
-// Hit the module's declared smoke endpoints on the staged (or live) mount.
-// Runs as an internal request with a manager session so auth does not block it.
+// Ask the module's declared endpoints for an answer on the staged (or live) mount, as that company's own
+// manager (never the internal token: the list is in module.json, which a build may have written). Since
+// 2026-09-19 anything from 400 up is a failure (a 404 used to pass), unless the floor's version answers that
+// same path the same way, which means this build did not cause it.
 async function smokeCheck(company, mod, staged) {
   const row = await registry.getModule(company, mod);
   const version = staged ? row.staged_version : row.live_version;
   const manifest = registry.readManifest(company, mod, version);
-  const base = `http://127.0.0.1:${process.env.PORT || 3000}/c/${company}${staged ? "/staging" : ""}/m/${mod}`;
+  const origin = `http://127.0.0.1:${process.env.PORT || 3000}`;
+  const base = `${origin}/c/${company}${staged ? "/staging" : ""}/m/${mod}`;
+  const floorBase = staged && row.live_version ? `${origin}/c/${company}/m/${mod}` : null;
+  // only a path the floor's version ALSO lists can be "already like that on the floor"; one this build added has to answer
+  const floorLists = new Set(["/"]);
+  if (floorBase) { try { for (const t of registry.readManifest(company, mod, row.live_version).smoke || []) floorLists.add(String(t)); } catch (e) { /* no floor manifest: nothing is inherited */ } }
   const targets = ["/", ...(manifest.smoke || [])];
   const checked = [];
-  const headers = { "x-sos-internal": process.env.SOS_INTERNAL_TOKEN || "" };
+  const headers = { Cookie: await auth.serviceCookie(company, "manager") };
+  const ask = async (url) => { const res = await fetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(15000) }).catch((e) => ({ status: 0, err: e.message })); return res; };
   for (const t of targets) {
-    const res = await fetch(base + t, { headers }).catch((e) => ({ status: 0, err: e.message }));
+    const bad = acceptance.pathProblem(String(t));
+    if (bad) return { ok: false, detail: `module.json lists "${t}" to check, but a path ${bad}`, checked };
+    const res = await ask(base + t);
     checked.push({ url: t, status: res.status });
-    if (!res.status || res.status >= 500) return { ok: false, detail: `${t} returned ${res.status || res.err}`, checked };
+    // sent to the login page: the platform's own session was not taken, so nothing would really be checked.
+    // Better a loud stop that names the platform than a quiet pass.
+    if (res.status >= 300 && res.status < 400 && /\/login/.test((res.headers && res.headers.get && res.headers.get("location")) || "")) return { ok: false, detail: `the platform could not sign itself in to check this build (it was sent to the login page), so nothing was checked. That is the platform's fault, not the build's: retry, and tell Anetix if it happens again`, checked };
+    if (!res.status || res.status >= 400) {
+      const floor = floorBase && floorLists.has(String(t)) ? await ask(floorBase + t) : null;
+      if (floor && floor.status === res.status && res.status) { checked[checked.length - 1].inherited = true; continue; }   // the floor answers the same: not this build's doing
+      return { ok: false, detail: `${t} answered ${res.status || `nothing (${res.err || "no answer"})`}`, checked };
+    }
   }
   return { ok: true, checked };
+}
+
+// Everything the platform checks on a staged build before the deploy gate (build order item 7):
+//   1. the declared endpoints answer (smokeCheck)
+//   2. every acceptance check the module has collected passes, the new one included (src/acceptance.js)
+//   3. every screen opens without a script error that is not already on the floor (src/pageload.js)
+// Then the staged data goes back to a fresh copy of the floor's, because checks may write rows and the
+// manager's preview must not show them. Never throws for a failed check: returns { ok, detail, kind, ... }
+// and the caller fails the run. kind: smoke | own_check | promise | page.
+async function runChecks(company, mod, run) {
+  const row = await registry.getModule(company, mod);
+  const version = row.staged_version;
+  const files = (await registry.versionFiles(company, mod, version)) || {};
+  const fromFiles = run.from_version ? await registry.versionFiles(company, mod, run.from_version) : null;
+  const liveFiles = row.live_version ? await registry.versionFiles(company, mod, row.live_version) : null;
+  const manifest = JSON.parse(files["module.json"] || "{}");
+  const origin = `http://127.0.0.1:${process.env.PORT || 3000}`;
+  const mounts = { staged: `/c/${company}/staging/m/${mod}`, live: row.live_version ? `/c/${company}/m/${mod}` : null };
+  const cookies = { manager: await auth.serviceCookie(company, "manager"), floor: await auth.serviceCookie(company, "floor") };
+  const out = { ok: true, kind: null, detail: "", version };
+
+  out.smoke = await smokeCheck(company, mod, true);
+  if (!out.smoke.ok) return { ...out, ok: false, kind: "smoke", detail: out.smoke.detail, checked: out.smoke.checked };
+
+  // one browser for the whole look, when the instance has one; a browser that will not start never decides a build
+  let browser = null, launchNote = null;
+  try { browser = await pageload.session(origin); } catch (e) { launchNote = String(e.message).split("\n")[0].slice(0, 160); console.error("[pageload] browser launch failed:", e.message); }
+  try {
+    out.pages = await pageload.look({ origin, mounts, manifest, files, liveManifest: liveFiles ? JSON.parse(liveFiles["module.json"] || "{}") : null, liveFiles, cookie: cookies.manager, browser });
+    if (launchNote && !out.pages.fell_back) out.pages.fell_back = `the browser would not start (${launchNote})`;
+    out.acceptance = await acceptance.runAll({ files, fromFiles, retired: await acceptance.retiredSet(company, mod), base: origin + mounts.staged, cookies, browser });
+  } finally {
+    if (browser) await browser.close();
+    // checks may have written rows: the preview starts from the floor's data again, pass or fail
+    if (!out.acceptance || out.acceptance.wrote) await registry.resetStagedData(company, mod, version).catch((e) => console.error("[checks] could not reset the staged data:", e.message));
+  }
+  for (const r of out.acceptance.failed.filter((x) => !x.new)) r.origin = await acceptance.originOf(company, mod, r.file).catch(() => null);
+  out.checked = [...out.smoke.checked, ...Array.from({ length: out.acceptance.total }, (_, i) => ({ check: i + 1 })), ...Array.from({ length: out.pages.screens }, (_, i) => ({ screen: i + 1 }))];
+  if (!out.acceptance.ok) return { ...out, ok: false, kind: out.acceptance.failed.some((r) => !r.new) ? "promise" : "own_check", detail: acceptance.oneLine(out.acceptance) };
+  if (!out.pages.ok) return { ...out, ok: false, kind: "page", detail: pageload.oneLine(out.pages) };
+  return out;
+}
+// One line for the run log when everything passed.
+function checksLine(c) {
+  const a = c.acceptance || { total: 0, added: [], retired: 0 }, p = c.pages || { screens: 0, mode: "static" };
+  return `${c.smoke.checked.length} endpoints answered; ${a.total} check${a.total === 1 ? "" : "s"} passed${a.added.length ? ` (${a.added.length} new with this change)` : ""}${a.retired ? `, ${a.retired} retired` : ""}; ${p.screens} screen${p.screens === 1 ? "" : "s"} opened ${p.mode === "browser" ? "in a browser" : "without a browser"} with no new script errors${p.inherited ? ` (${p.inherited} already on the floor)` : ""}${p.fell_back ? `; ${p.fell_back}, so the screens were checked without it` : ""}`;
+}
+// What a fix round tells the agent about failed checks (a new session: it sees only this).
+function checksForAgent(c) {
+  if (!c) return "";
+  if (c.kind === "smoke") return `The platform asked the staged build for ${c.detail}. Every path in module.json's smoke list, and the module's first screen, has to answer.`;
+  const parts = [];
+  if (c.acceptance && !c.acceptance.ok) parts.push(acceptance.forAgent(c.acceptance));
+  if (c.pages && !c.pages.ok) parts.push(pageload.forAgent(c.pages));
+  return parts.join("\n");
+}
+// After a build leaves a new check behind and passes: on the record, once.
+async function recordAdded(run, c) {
+  for (const a of (c.acceptance && c.acceptance.added) || []) await record("check_added", { company: run.company, module: run.module, actor: "agent", run_id: run.id, version: c.version, after: a.title, detail: { file: a.file } });
 }
 
 // ---- manager actions -------------------------------------------------------
@@ -550,9 +641,10 @@ async function fix(runId) {
   const round = (ev.fix_round || 0) + 1;
   if (round > MAX_FIX_ROUNDS) throw new Error(`already tried ${MAX_FIX_ROUNDS} fix rounds; retry from scratch, adjust the proposals, or override`);
   const lastErr = (run.log || []).filter((l) => l.step === "error").slice(-1)[0];
-  const findings = (ev.cross_check && ev.cross_check.verdict === "fail" && ev.cross_check.summary) || (lastErr ? lastErr.note : "the previous attempt failed its checks");
+  const fromChecks = ev.checks && ev.checks.ok === false ? checksForAgent(ev.checks) : "";
+  const findings = (ev.cross_check && ev.cross_check.verdict === "fail" && ev.cross_check.summary) || fromChecks || (lastErr ? lastErr.note : "the previous attempt failed its checks");
   const busy = await activeRun(run.company, run.module);
-  await setRun(runId, { step: "build", status: busy ? "queued" : "running", evidence: { ...ev, fix_round: round, findings, cross_check: undefined, test_run: undefined, visual_check: undefined } });
+  await setRun(runId, { step: "build", status: busy ? "queued" : "running", evidence: { ...ev, fix_round: round, findings, findings_from: fromChecks && !(ev.cross_check && ev.cross_check.verdict === "fail") ? "checks" : "reviewer", cross_check: undefined, test_run: undefined, visual_check: undefined, checks: undefined } });
   await log(runId, { step: "build", note: busy ? `fix round ${round} queued behind run #${busy.id}` : `manager sent the reviewer's findings back to the agent (fix round ${round} of ${MAX_FIX_ROUNDS})` });
   if (!busy) advance(runId).catch((e) => failRun(runId, e));
 }
@@ -571,6 +663,21 @@ async function override(runId) {
   await setRun(runId, { step: "test_run", status: "running", evidence: { ...ev, cross_check: { ...(ev.cross_check || {}), overridden: true } } });
   await log(runId, { step: "cross_check", note: "manager overrode the failed cross-check; findings stay on the record" });
   advance(runId).catch((e) => failRun(runId, e));
+}
+
+// The manager says an earlier promise no longer holds (src/acceptance.js): the check is retired for this
+// company's module, on the record with who and why, and the same build is checked again. Only a promise THIS
+// build broke can be retired here, and only while this build still has the preview.
+async function retirePromise(runId, file, reason, actor) {
+  const run = await getRun(runId);
+  if (!run || run.status !== "failed" || !["test_run", "visual_check"].includes(run.step) || !run.to_version) throw Object.assign(new Error("only a build that was stopped by an earlier promise can retire one"), { status: 409 });
+  const modRow = await registry.getModule(run.company, run.module);
+  if (!modRow || modRow.staged_version !== run.to_version || (await activeRun(run.company, run.module))) throw Object.assign(new Error("another build has the preview now; retry this one from scratch instead"), { status: 409 });
+  const out = await acceptance.retire({ run, file, reason, actor });
+  await setRun(runId, { status: "running" });
+  await log(runId, { step: run.step, note: `${(actor && actor.name) || "the manager"} retired an earlier promise ("${out.title}"); checking the build again` });
+  advance(runId).catch((e) => failRun(runId, e));
+  return out;
 }
 
 // Cancel a queued, failed, or gate-waiting run, or ABORT one that is running
@@ -616,7 +723,7 @@ async function sweepOrphans() {
 }
 
 module.exports = {
-  startRun, confirmRequirement, deploy, rollbackRun, retry, cancel, fix, override, getRun, smokeCheck, kickQueue, sweepOrphans, MAX_FIX_ROUNDS,
+  startRun, confirmRequirement, deploy, rollbackRun, retry, cancel, fix, override, retirePromise, getRun, smokeCheck, runChecks, checksLine, checksForAgent, recordAdded, kickQueue, sweepOrphans, MAX_FIX_ROUNDS,
   // shared with modulebuild.js (a brand-new module goes through the same runs table and the same gates)
   setRun, log, addCost, failRun, activeRun, runStructuredCrossCheck, plainSummary, ACTIVE, advance,
   // the cross-check brief, for the replay harness

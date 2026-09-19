@@ -123,6 +123,16 @@ function answersCell(a) {
   const mgr = (a.manager_done || 0) + (a.manager_little_left || 0) ? `<br><small>manager: ${a.manager_done || 0} done${a.manager_little_left ? ` · <span class="warn">${a.manager_little_left} a little left</span>` : ""}</small>` : "";
   return floor + mgr;
 }
+// what the platform's tests stopped, told apart, and how the pile of promises moved (build order item 7)
+function testStopsLine(b) {
+  const t = b.test_stops || {}, parts = [];
+  if (t.promise) parts.push(`${t.promise} broke a promise`);
+  if (t.own_check) parts.push(`${t.own_check} own check`);
+  if (t.page) parts.push(`${t.page} screen`);
+  if (t.smoke) parts.push(`${t.smoke} no answer`);
+  const pile = (b.checks_added || b.promises_retired) ? `<br><small>promises: ${b.checks_added || 0} added${b.promises_retired ? ` · <span class="warn">${b.promises_retired} retired</span>` : ""}</small>` : "";
+  return (parts.length ? `<br><small>tests: ${parts.join(" · ")}</small>` : "") + pile;
+}
 function healthRow(c) {
   const stops = c.builds.stops, nstops = stops.gate + stops.reviewer + stops.tests + stops.other;
   const waiting = c.decisions.waiting + c.builds.waiting_deploy + c.builds.waiting_confirm;
@@ -137,7 +147,7 @@ function healthRow(c) {
     <td>${hrs(c.floor.median_hours)}${c.floor.n > 1 ? `<br><small>p90 ${hrs(c.floor.p90_hours)}</small>` : ""}</td>
     <td>${hrs(c.decisions.wait_median_hours)}${c.floor.deploy_wait_n ? `<br><small>then ${hrs(c.floor.deploy_wait_median_hours)} to deploy</small>` : ""}</td>
     <td>${decided ? `${c.decisions.approved} approved<br><small>${c.decisions.edited} edited first · ${c.decisions.declined} declined</small>` : "<small>none</small>"}</td>
-    <td class="${nstops ? "warn" : ""}">${nstops}${nstops ? `<br><small>gate ${stops.gate} · reviewer ${stops.reviewer} · tests ${stops.tests}${stops.other ? ` · other ${stops.other}` : ""}</small>` : ""}${c.builds.fix_rounds || c.builds.overrides ? `<br><small>${c.builds.fix_rounds} fix round${c.builds.fix_rounds === 1 ? "" : "s"}${c.builds.overrides ? `, ${c.builds.overrides} overridden` : ""}</small>` : ""}</td>
+    <td class="${nstops ? "warn" : ""}">${nstops}${nstops ? `<br><small>gate ${stops.gate} · reviewer ${stops.reviewer} · tests ${stops.tests}${stops.other ? ` · other ${stops.other}` : ""}</small>` : ""}${testStopsLine(c.builds)}${c.builds.fix_rounds || c.builds.overrides ? `<br><small>${c.builds.fix_rounds} fix round${c.builds.fix_rounds === 1 ? "" : "s"}${c.builds.overrides ? `, ${c.builds.overrides} overridden` : ""}</small>` : ""}</td>
     <td>${usd(c.spend.window_usd)}${c.spend.per_shipped_usd != null ? `<br><small>${usd(c.spend.per_shipped_usd)} a change</small>` : ""}<br><small>${usd(c.spend.month_usd)} this month${c.spend.cap_usd ? ` of ${usd(c.spend.cap_usd)}` : ""}</small></td>
     <td>${quietCell(c.quiet, c.builds.shipped)}</td>
   </tr>`;
@@ -157,7 +167,7 @@ async function loadHealth() {
     [waiting, "waiting on a manager", `${f.decisions.waiting} to decide, ${f.builds.waiting_confirm} to confirm, ${f.builds.waiting_deploy} to deploy`],
     [f.decisions.waiting_data, "waiting on us", f.decisions.waiting_data ? `ERP data to add · oldest ${hrs(f.decisions.oldest_waiting_data_hours)}` : "no data requests open"],
     [f.answers.fixed_share == null ? "n/a" : Math.round(f.answers.fixed_share * 100) + "%", "fixed it, says the floor", (f.answers.fixed + f.answers.not_quite ? `${f.answers.fixed} fixed · ${f.answers.not_quite} not quite · ${f.answers.unanswered_named} not said yet` : (f.answers.unanswered_named ? `${f.answers.unanswered_named} asked, none answered yet` : "nobody has been asked yet")) + ((f.answers.manager_done || 0) + (f.answers.manager_little_left || 0) ? ` · manager: ${f.answers.manager_done || 0} done, ${f.answers.manager_little_left || 0} a little left` : "")],
-    [nstops, "stops", `gate ${st.gate} · reviewer ${st.reviewer} · tests ${st.tests} · other ${st.other}`],
+    [nstops, "stops", `gate ${st.gate} · reviewer ${st.reviewer} · tests ${st.tests} · other ${st.other}` + ((f.builds.checks_added || f.builds.promises_retired) ? ` · promises +${f.builds.checks_added || 0}${f.builds.promises_retired ? `, ${f.builds.promises_retired} retired` : ""}` : "")],
     [usd(f.spend.window_usd), "AI spend", f.spend.per_shipped_usd != null ? `${usd(f.spend.per_shipped_usd)} a shipped change` : "in the window"],
     [dys(f.quiet.check_stop_days), "since a check stop", `rollback ${dys(f.quiet.rollback_days)} · gate ${dys(f.quiet.gate_stop_days)}`],
   ].map(([v, l, s]) => `<div class="kpi"><b>${v}</b><span>${l}</span><small>${s}</small></div>`).join("");

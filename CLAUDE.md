@@ -1,4 +1,4 @@
-# Symbiotic OS: Workspace Guide (current as of 2026-09-19, late evening)
+# Symbiotic OS: Workspace Guide (current as of 2026-09-19, night)
 
 **This file is the single source of truth for how this repo and the live
 instance are worked on.** Repo: `brf1998-code/SymbioticOS` (private). Live:
@@ -533,6 +533,111 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   server already up in fake mode on a fresh database (header of closeout.js
   has the one command; `scripts/e2e/lib.js` is the cookie-keeping client,
   `person()` and `ship()`).
+- **Checks that accumulate, and a page load for every build** (2026-09-19,
+  `src/acceptance.js`, `src/pageload.js`, `pipeline.runChecks`, build order
+  item 7; Brendan: a real browser with a fallback; the manager may retire a
+  promise, with a confirm). Found in the review: `test_run` and `visual_check`
+  were "the page answers below 500", so a 404 passed, the UI lane had no check
+  past the module gate, and nothing a build promised was ever checked again.
+  Now both steps (and the module lane's test step) are `runChecks`:
+  (1) `smokeCheck`: `/` and module.json's `smoke` paths answer BELOW 400,
+  asked as that company's own manager (`auth.serviceCookie`), never with the
+  internal token (the list is in module.json, which a build may have written;
+  the paths go through `acceptance.pathProblem`). A path the floor's version
+  ALSO lists and answers the same way is not held against the build; a path
+  the build added has to answer. A redirect to /login is a loud platform
+  fault, never a pass. (2) Acceptance checks: `checks/NNN-short-name.json` in
+  the module's own files, "call this, expect that" (GUARDRAILS.md "Checks" is
+  the format and the builder's rules: 1 to 12 steps, `call` or `page`, `as`
+  manager or floor, `expect` status / json as a SUBSET with `$type $gte $lte
+  $gt $lt $in $regex $exists $length $minLength $contains $every $not` /
+  contains / lacks, on a page also visible / selector, `save` and `{name}`).
+  A functionality build is told to leave ONE new check built from "how we
+  will know it works"; a UI build adds none; a new module's skeleton carries
+  `checks/001-the-list-answers.json`. EVERY check of the staged version runs
+  against the staged mount on every build of every lane. A check is a promise:
+  the module gate refuses a build that edits or removes an existing one
+  (`lane-check-edited`, put back by the platform in a fix round, like
+  migrations) and refuses an unreadable one (`check-format`). The check that
+  came with THIS change failing (`kind: own_check`) goes back to the agent,
+  which may edit it; one an EARLIER change left behind failing (`kind:
+  promise`) is the manager's call: send it back (the agent is told never to
+  touch that file) or retire it, `POST /api/runs/:id/retire-check { file,
+  reason }` (`pipeline.retirePromise`: only a promise this build broke, only
+  while this build still has the preview; row in `platform.check_retirements`,
+  never in the file, so an agent cannot retire anything; record kind
+  `promise_retired`; the same build is checked again at once). A retired check
+  is skipped for that company's module from then on. `acceptance.originOf`
+  finds the request a promise came with (first version carrying the file, the
+  run that built it). Checks may write rows: they run on the staging copy and
+  `registry.resetStagedData` puts the preview back to a fresh copy of the
+  floor's data afterwards, pass or fail. (3) The page load: every screen in
+  the manifest (a `:param` takes its value from a smoke path that fits, else
+  1) is opened in headless Chromium through `puppeteer-core` with a MANAGER
+  session for that one company, requests to anything but this instance
+  refused. Stops: the screen answers 400 or more, an uncaught script error or
+  unhandled rejection, one of the module's own calls answering 500 or more.
+  Notes only: a 4xx on a call, console.error, an error thrown from the
+  platform's own `/assets/` scripts. When a staged screen shows a problem the
+  same screen is opened on the LIVE version and a problem already on the floor
+  word for word (mount, line numbers, versions and timestamps taken out) is
+  not held against the build. No browser (`SOS_BROWSER=off`, none found, will
+  not start, dies halfway, or is sent to /login): the static look instead
+  (every inline script parsed with `vm.Script`, every screen asked for); the
+  run log and the gate line say which way it looked. Boot logs one
+  `[pageload]` line saying whether the browser starts. Chromium comes from
+  `nixpacks.toml` (`nixPkgs = ["...", "chromium"]`; Railway builds this repo
+  with Nixpacks because railway.json says so, whatever the service settings
+  show); found on the PATH or at `SOS_CHROMIUM_PATH`; it runs `--no-sandbox`
+  because the container is root (agent-written page code in an unsandboxed
+  renderer: no wider than routes.js in our own process, one more reason for
+  option C). Evidence: `evidence.checks = { ok, kind, detail, smoke,
+  acceptance: { total, passed, added, retired, wrote, failed: [{ file, title,
+  new, steps, origin }] }, pages: { mode, screens, problems, inherited, notes,
+  fell_back } }`; `test_run` / `visual_check` keep `{ ok, checked }`. Errors
+  keep their prefixes ("internal tests failed:", "visual check failed:") so
+  health counts them as tests; `health.testStopKind` and `checks.reasonFor`
+  tell them apart (broke an earlier promise / its own check failed / a screen
+  broke on opening / an endpoint did not answer). Fix rounds: `fix()` builds
+  the agent's findings from the checks (`checksForAgent`,
+  `evidence.findings_from = "checks"`, worded as the platform, not as a
+  reviewer); override stays for a reviewer's opinion only. Board: a stopped
+  build leads with the promises in their own words and the request each came
+  with, a Retire button per promise (confirm, then a reason), everything else
+  folded under "and N more things the checks found" and the detail under
+  "what the check saw" (do not overload the manager); the gate shows one line,
+  "checks passed: N endpoints answer · N promises kept (N new) · N screens
+  opened"; the Versions panel has "What this tool promises"
+  (`GET /api/c/<slug>/modules/<m>/checks`, manager). A functionality build
+  that leaves no check is NOT stopped; the run log says so. Record kinds:
+  check_added, promise_retired, check_verdict with `detail.kind`. Loop health:
+  `builds.test_stops`, `checks_added`, `promises_retired`. `check_retirements`
+  is in the backup and in company delete. The library modules carry their own
+  checks (paperline 3, kpis 2), so their repo hash changed: a company whose
+  live version is repo-sourced gets them at boot, one whose live version is
+  agent-built sees "FROM REPO, NOT LIVE" in Versions (existing behavior).
+  Fake mode markers, first attempt only, cleared by a fix round: BREAKPAGE,
+  BREAKSYNTAX, BREAKPROMISE, BADCHECK, BADSMOKE, EDITCHECK, NOCHECK. Units:
+  `scripts/test-acceptance.js`, `test-pageload.js`, gate and health cases.
+  End to end in `scripts/e2e/`: `checks.js` (48), `checks-browser.js` (18,
+  playwright), `checks-nobrowser.js` (7, run twice: browser off, browser that
+  will not start). Known limits: a check is as good as the agent that wrote
+  it (read the first live ones, S1-14); staging sequences are the floor's
+  (`LIKE ... INCLUDING ALL`), so a check that inserts rows leaves gaps in the
+  floor's ids; a check must not call a route that prints or asks an AI
+  persona (guidance only, nothing enforces it); UI builds cannot add checks;
+  with no browser an error that only happens when a script runs gets through.
+- **Staging is a copy of the floor's data, on purpose** (decided 2026-09-19,
+  closing the 2026-09-18 review finding "previews show real rows").
+  `migrate.cloneSchema` copies structure AND rows from the live schema into
+  `stg_<company>_<module>` for every build. Kept because: the copy never
+  leaves the company's own database; the build agent has no database access
+  (its tools are Read, Write, Edit, Glob, Grep on files); a preview with real
+  rows is what lets a manager judge a change; and the acceptance checks run
+  against realistic data. What does leave the instance is separate and
+  smaller: a system review sends a snapshot of the smoke endpoints' answers
+  to the model (`review.js`). Revisit for a tenant whose contract forbids
+  even that, not before.
 - **A model reads a module's files whole** (2026-09-19, `src/modulesource.js`
   `sourceText`, used by `proposals.moduleContext` and so by the proposer AND
   the system review, and by `diagrams.js`). Found in the verification pass
@@ -1076,7 +1181,12 @@ and lives in `platform.companies.monthly_cap_usd`. `SOS_PAGE_LOCK` (default
 (violations show in the browser console, nothing breaks), `off` sends none;
 the escape hatch if module pages ever stop after a deploy. Optional: `SOS_AGENT_EFFORT` (build agent reasoning
 effort, default `high`), `SOS_PERSON_HOURS` (default 12: how long a name and
-PIN sign-in lasts on a device), `SOS_CONTEXT_CHARS` (default 400000: the most
+PIN sign-in lasts on a device), `SOS_BROWSER` (default `auto`; `off` makes
+every build's page load go without a browser), `SOS_CHROMIUM_PATH` (where
+Chromium is, when it is not on the PATH as `chromium`), `SOS_PAGE_SETTLE_MS`
+(default 1500: how long a screen is given to load its data before it is
+judged), `SOS_CHECK_TIMEOUT_MS` (default 10000, per check step),
+`SOS_CONTEXT_CHARS` (default 400000: the most
 module source a proposal, system review or diagram call is given; files are
 whole below it, see "A model reads a module's files whole"), `SOS_SESSION_DAYS` (default 30; sessions
 expire server-side, not just via cookie Max-Age), `SOS_LOGIN_MAX_FAILS`
@@ -1118,6 +1228,12 @@ Passwords live only in Railway; never commit them.
   `registry.moduleServices`; never `require` it inside the module. Run
   `node scripts/test-modulegate.js` before pushing a change to `modules/` or
   to the gate.
+- A file in `checks/` is a promise to the floor. No build, repo edit or agent
+  ever edits or removes one that has shipped; a change adds the next number.
+  The only way a promise ends is a manager retiring it on the board
+  (`platform.check_retirements`). The platform's own checks of a staged build
+  run as that company's manager (`auth.serviceCookie`), never with the
+  internal token: the pages and the smoke list are agent-written.
 - Outside systems are connections (`src/connections.js`): declared in
   module.json, set up on the connections page, lent as
   `ctx.connections.<name>`. A new kind gets a surface there, its settings and

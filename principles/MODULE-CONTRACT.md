@@ -13,6 +13,7 @@ routes.js            module.exports = (ctx) => express.Router
 migrations/001.sql   additive SQL, applied once per schema, in file order
 pages/*.html         one file per screen, plain HTML and vanilla JS
 tour.json            the guided walk through the screens (PRINCIPLES rule 8)
+checks/NNN-name.json what the module promises, run against every later build (below)
 labels/<name>.zpl    label layouts, only when the module prints labels (below)
 ```
 
@@ -190,6 +191,23 @@ before a connection is set up (say "not connected yet" where it matters,
 A barcode or QR scanner in keyboard mode needs nothing to connect: give the
 page a scan field that keeps focus, treats Enter as the end of a scan, and
 looks the code up. Say in the tour what to scan and where labels print.
+
+## checks
+
+`checks/` holds what the module promises to the floor, as small "call this,
+expect that" files. The platform runs every one of them against every build
+before the manager's deploy gate, and opens every screen to catch script
+errors. GUARDRAILS.md ("Checks") has the file format and the rules; read it
+before writing one.
+
+A new module starts with `checks/001-the-list-answers.json`, written by the
+platform for the skeleton's API. Keep it true: if you change that API in the
+first build, edit that one file to match (nothing is on the floor yet, so this
+once it is allowed). Then add one check per rule the design names, the next
+numbers, each proving the rule holds: make the rows it needs, try what the rule
+refuses, expect the refusal in plain words. After the first version is on the
+floor no check file is ever edited or removed by a build; a later change adds
+its own.
 
 ## tour.json
 

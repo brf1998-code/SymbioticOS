@@ -31,7 +31,7 @@ function rank(name, first) {
   if (/\.js$/.test(name)) return 3;
   if (name.startsWith("pages/")) return 4;
   if (name === "reference.md") return 5;
-  if (name.startsWith("migrations/")) return 6;
+  if (name.startsWith("migrations/") || name.startsWith("checks/")) return 6;   // what the tool keeps, and what it has promised
   if (/\.md$/.test(name)) return 7;
   if (name === "tour.json") return 8;
   return 9;
