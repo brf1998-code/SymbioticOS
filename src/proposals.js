@@ -53,7 +53,7 @@ async function generateProposal(feedbackId) {
     await q("UPDATE platform.feedback SET status='reviewing', updated_at=now() WHERE id=$1", [feedbackId]);
     return r.rows[0];
   }
-  await assertUnderCap();
+  await assertUnderCap(fb.company);
 
   const model = await modelFor(fb.company, "propose");
   const guidance = await guidanceFor(fb.company, fb.module);

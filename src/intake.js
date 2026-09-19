@@ -293,7 +293,7 @@ async function generateRound(it) {
   const roundNo = (it.rounds || []).length + 2;
   const cost = { usd: 0 };
   if (agent.fakeMode()) return fakeRound(roundNo, it);
-  await agent.assertUnderCap();
+  await agent.assertUnderCap(it.company);
   const ctx = await contextFor(it);
   const model = it.model || INTAKE_MODEL;
   const { data, costUsd } = await agent.runStructured({
@@ -347,7 +347,7 @@ function estimateUsd(d) {
 async function generateDesign(it, adjustedText) {
   const cost = { usd: 0 };
   if (agent.fakeMode()) return fakeDesign(it, adjustedText);
-  await agent.assertUnderCap();
+  await agent.assertUnderCap(it.company);
   const ctx = await contextFor(it);
   const model = it.model || INTAKE_MODEL;
   const { data, costUsd } = await agent.runStructured({

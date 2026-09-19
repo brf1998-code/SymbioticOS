@@ -282,6 +282,18 @@ const UPGRADES = [
   "ALTER TABLE platform.schema_snapshots ADD COLUMN IF NOT EXISTS company TEXT NOT NULL DEFAULT 'demo'",
   "ALTER TABLE platform.feedback ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'feedback'",   // 'feedback' | 'module_request'
   "ALTER TABLE platform.feedback ADD COLUMN IF NOT EXISTS intake_id INTEGER",
+  // tenancy option B (2026-09-19): a spend cap per company, and the login rows.
+  // Password hashes live in their own table on purpose: platform.companies is
+  // read with SELECT * and handed to pages, so nothing secret may ever sit in it.
+  "ALTER TABLE platform.companies ADD COLUMN IF NOT EXISTS monthly_cap_usd NUMERIC(10,2)",
+  `CREATE TABLE IF NOT EXISTS platform.company_access (
+     company      TEXT PRIMARY KEY,
+     floor_hash   TEXT,
+     manager_hash TEXT,
+     legacy_login BOOLEAN NOT NULL DEFAULT false,   -- true: the instance-wide passwords from the environment still open this company
+     generation   INTEGER NOT NULL DEFAULT 1,       -- goes up when a password changes; sessions signed under an older one stop working
+     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
   "INSERT INTO platform.companies (slug, name) VALUES ('demo', 'Demo Company') ON CONFLICT DO NOTHING",
 ];
 

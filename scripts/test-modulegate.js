@@ -140,6 +140,25 @@ t("native file refused", has(gate.check({ files: mod(wrap(""), { "lib/x.node": "
   const text = gate.forAgent(gate.record(v), []);
   t("fix round: a code finding quotes the line for the agent", /Fix exactly these/.test(text) && /process\.env\.X/.test(text), text); }
 
+// 13c. pages, and headers
+const page = (html) => gate.check({ files: { ...mod(wrap("")), "pages/board.html": `<html><body><div id="board"></div>${html}</body></html>` } });
+t("page naming the platform's controls refused", has(page(`<script>fetch("/api/proposals/4/decide", { method: "POST" })</script>`), "page-platform"));
+t("page naming a company API refused", has(page(`<script>fetch("/api/c/demo/board")</script>`), "page-platform"));
+t("page calling its own API is fine", page(`<script>const base = location.pathname.match(/^.*?\\/(?:staging\\/)?m\\/[^/]+/)[0]; fetch(base + "/api/runs").then(r => r.json()); fetch(base + "/api/items/4/move", { method: "POST" });</script>`).ok, JSON.stringify(page(`<script>fetch(base + "/api/runs")</script>`).violations));
+t("page opening a popup refused", has(page(`<script>window.open("/c/demo/")</script>`), "page-popup"));
+t("page with target _blank refused", has(page(`<a href="/x" target="_blank">x</a>`), "page-popup"));
+t("page with an iframe refused", has(page(`<iframe src="/c/demo/"></iframe>`), "page-frame"));
+t("page registering a service worker refused", has(page(`<script>navigator.serviceWorker.register("sw.js")</script>`), "page-worker"));
+t("page loading an outside script refused", has(page(`<script src="https://cdn.example.com/x.js"></script>`), "page-external"));
+t("page with an inline data image and a plain link is fine", page(`<img src="data:image/png;base64,AAAA"><a href="https://example.com/help">help</a>`).ok);
+t("module code setting the page policy refused", has(gate.check({ files: mod(wrap(`  router.use((q, s, n) => { s.set("Content-Security-Policy", "default-src *"); n(); });`)) }), "header-policy"));
+t("module code widening a service worker refused", has(gate.check({ files: mod(wrap(`  router.get("/sw.js", (q, s) => s.set("Service-Worker-Allowed", "/").type("js").send(""));`)) }), "header-policy"));
+t("removeHeader refused", has(gate.check({ files: mod(wrap(`  router.use((q, s, n) => { s.removeHeader("X-Anything"); n(); });`)) }), "call-removeHeader"));
+t("ordinary headers are fine", gate.check({ files: mod(wrap(`  router.get("/x.csv", (q, s) => s.set("Content-Disposition", "attachment; filename=x.csv").type("csv").send("a,b"));`)) }).ok);
+{ const old = { ...from, "pages/board.html": from["pages/board.html"] + `<a href="/x" target="_blank">old</a>` };
+  const v = gate.check({ files: { ...old, "tour.json": '{"steps":[1]}' }, fromFiles: old, lane: "ui" });
+  t("an inherited page finding is reported, not blocking", v.ok && v.inherited.some((f) => f.rule === "page-popup"), JSON.stringify(v)); }
+
 // 14. wording
 { const v = gate.check({ files: mod(`const k = process.env.ANTHROPIC_API_KEY;\n` + wrap("")) });
   const text = gate.summarize(v);

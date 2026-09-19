@@ -21,6 +21,13 @@ S0-77 | 2026-09-18 | PASS | sandbox: functionality build reading process.env sto
 S0-78 | 2026-09-18 | PASS | sandbox: override refused on a gate stop, run stayed failed | pilot | n/a
 S0-79 | 2026-09-18 | PASS | sandbox: goto the refused draft refused (also the draft a retry left behind); goto v1 and forward to a once-live version both worked | pilot | n/a
 S0-80 | 2026-09-18 | PASS | sandbox: new module build stopped before validateModule loaded it; fix round built, passed, went live | pilot | n/a
+S0-81 | 2026-09-19 | PASS | sandbox: reviewer-failed cancelled draft marked NEVER APPROVED, goto refused, floor unchanged | pilot | n/a
+S0-82 | 2026-09-19 | PASS | module gate unit cases 87 of 87 (adds page rules and header rules) | pilot | n/a
+S3-06 | 2026-09-19 | PASS | headless browser: live and staged module pages, kpis charts and chat, the amber bar all clean under CSP; fetch of board, deploy API, admin API and a service worker all blocked by the browser | pilot | n/a
+S3-07 | 2026-09-19 | PASS | sandbox two-company matrix, 60 checks: every cross-company path and id-addressed route refused; board answer carries no hash | pilot | n/a
+S3-08 | 2026-09-19 | PASS | sandbox: setting a company's passwords signed its people out, left the other company signed in | pilot | n/a
+S3-09 | 2026-09-19 | PASS | sandbox: acme at $5 of a $2 budget refused with a plain reason; demo unaffected; board showed acme's own budget | pilot | n/a
+S3-10 | 2026-09-19 | PASS | sandbox: backup round trip identical incl. logins, intakes, attachment bytes, check labels; old-format backup fell back to shared passwords | pilot | n/a
 
 ## Stage 1
 

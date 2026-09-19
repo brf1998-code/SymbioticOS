@@ -19,19 +19,35 @@
 <body>
   <form class="card" id="f">
     <h1>Symbiotic OS</h1>
-    <div class="sub">Enter the password you were given. Floor and manager passwords both work here.</div>
+    <div class="sub" id="sub">Enter the password you were given. Floor and manager passwords both work here.</div>
+    <input id="co" type="text" placeholder="Company code" autocomplete="organization" autocapitalize="none" spellcheck="false" style="display:none;margin-bottom:10px">
     <input id="pw" type="password" placeholder="Password" autofocus autocomplete="current-password">
     <button type="submit">Sign in</button>
     <div class="err" id="err">That password did not match.</div>
   </form>
 <script>
+// A login belongs to one company. The link or the wall code that brought the
+// person here names it (/c/<company>/...); the box only shows when nothing does.
+const params = new URLSearchParams(location.search);
+const next = params.get("next");
+const fromNext = /^\/c\/([a-z0-9][a-z0-9-]{1,40})(?:\/|$)/.exec(next || "");
+let company = (params.get("c") || (fromNext && fromNext[1]) || "").toLowerCase();
+const co = document.getElementById("co"), err = document.getElementById("err");
+if (company) document.getElementById("sub").textContent = "Signing in to " + company + ". Enter the password you were given. Floor and manager passwords both work here.";
 document.getElementById("f").onsubmit = async (e) => {
   e.preventDefault();
+  if (co.style.display !== "none") company = co.value.trim().toLowerCase();
   const res = await fetch("/login", { method:"POST", headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify({ password: document.getElementById("pw").value }) });
-  if (!res.ok) { document.getElementById("err").style.display = "block"; return; }
-  const next = new URLSearchParams(location.search).get("next");
-  location.href = next && next.startsWith("/") ? next : "/";
+    body: JSON.stringify({ password: document.getElementById("pw").value, company }) });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (j.need_company) { co.style.display = "block"; co.focus(); }
+    err.textContent = res.status === 429 ? (j.error || "Too many tries. Wait a few minutes.") : j.need_company ? "Which company is this login for? Type its code, the word after /c/ in its address." : "That password did not match.";
+    err.style.display = "block"; return;
+  }
+  // a company login lands on its own board unless the link asked for a page inside that company
+  const own = j.company ? "/c/" + j.company + "/" : "/";
+  location.href = next && next.startsWith("/") && !next.startsWith("//") && (!j.company || next.startsWith(own)) ? next : own;
 };
 </script>
 </body>

@@ -747,7 +747,8 @@ async function openVersions(mod) {
       <span class="vn">v${v.version}</span>
       ${v.version === j.live_version ? '<span class="live">LIVE</span>' : ""}${v.version === j.staged_version ? '<span class="live" style="background:var(--amber)">STAGED</span>' : ""}${v.source === "repo" && v.version > j.live_version ? '<span class="live" style="background:var(--steel)" title="A newer copy from the repo library, held because the floor is on an in-app build. Switch to it when you want it.">FROM REPO, NOT LIVE</span>' : ""}
       <span class="vs">${esc(v.notes && v.source !== "repo" ? v.notes : String(v.summary || v.notes || "Agent build").split(/\n|(?:^|\s)- /).map(x => x.trim()).filter(Boolean)[0] || "")} · ${new Date(v.created_at).toLocaleString()}</span>
-      <button ${v.version === j.live_version ? "disabled" : ""} onclick="gotoVersion(${v.version}, false)">Switch to v${v.version}</button>
+      ${v.never_approved && v.version !== j.staged_version ? '<span class="live" style="background:var(--red)" title="The build agent wrote this draft and it never reached the floor: a check stopped it, or it was cancelled at the gate. It can only go live through its own build.">NEVER APPROVED</span>' : ""}
+      <button ${v.version === j.live_version || v.never_approved ? "disabled" : ""} ${v.never_approved ? 'title="Never approved for the floor. It can only go live through its own build."' : ""} onclick="gotoVersion(${v.version}, false)">Switch to v${v.version}</button>
       <button ${v.version === j.live_version || !v.has_snapshot ? "disabled" : ""} title="${v.has_snapshot ? "" : "no data snapshot left for this version"}" onclick="gotoVersion(${v.version}, true)">Restore v${v.version} with its data</button>
     </div>`).join("")}
   </div>`;
@@ -854,7 +855,7 @@ function render() {
   document.getElementById("kpis").innerHTML = [
     [openFb, "new feedback"], [fbs.filter(f => f.status === "reviewing").length, "awaiting decision"],
     [active, "building now"], [deployed, "deployed this week"],
-    [`$${DATA.spend.usd.toFixed(2)}`, DATA.spend.cap ? `AI spend of $${DATA.spend.cap.toFixed(0)} monthly cap · $${Number(DATA.maxRunUsd).toFixed(2)} per change, $${Number(DATA.maxBatchUsd || 6).toFixed(0)} per run` : `AI spend this month · no caps set`], [modelLabel(DATA.models.build), "build model"],
+    [`$${DATA.spend.usd.toFixed(2)}`, DATA.spend.capKind === "company" ? `AI spend of this company's $${DATA.spend.cap.toFixed(0)} monthly budget` : DATA.spend.cap ? `AI spend of $${DATA.spend.cap.toFixed(0)} monthly cap · $${Number(DATA.maxRunUsd).toFixed(2)} per change, $${Number(DATA.maxBatchUsd || 6).toFixed(0)} per run` : `AI spend this month · no caps set`], [modelLabel(DATA.models.build), "build model"],
   ].map(([v, l]) => `<div class="kpi"><b>${esc(v)}</b><span>${l}</span></div>`).join("");
   const buckets = { new: [], reviewing: [], in_progress: [], done: [], platform: [] };
   // batch runs render as one tile; their feedback items are folded into it

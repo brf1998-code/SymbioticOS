@@ -36,13 +36,15 @@ async function main() {
   app.post("/login", express.json(), auth.loginHandler);
   app.get("/logout", auth.logoutHandler);
 
-  app.use(auth.middleware);  // everything below needs a floor, manager, or admin session
+  app.use(auth.middleware);    // everything below needs a floor, manager, or admin session
+  app.use(auth.companyGuard);  // and a floor or manager session reaches its own company only
 
   // Landing: admins go to the admin view; everyone else to their company board
   // (the only company, or a chooser when there are several).
   app.get("/", async (req, res) => {
     const companies = (await q("SELECT slug, name FROM platform.companies ORDER BY created_at")).rows;
-    if (req.sosRole === "admin" && companies.length !== 1) return res.redirect("/admin");
+    if (req.sosRole !== "admin") return res.redirect(`/c/${req.sosCompany}/`);   // a floor or manager login belongs to one company
+    if (companies.length !== 1) return res.redirect("/admin");
     if (companies.length === 1) return res.redirect(`/c/${companies[0].slug}/`);
     res.type("html").send(`<!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Symbiotic OS</title>
       <body style="font-family:system-ui,sans-serif;background:#f2f4f7;color:#1c242e;padding:24px"><h1 style="font-size:20px">Pick a company</h1>
@@ -63,6 +65,8 @@ async function main() {
   // every deploy redraws the module's diagrams for the new version
   registry.hooks.deployed = (company, mod, version) => diagrams.generate(company, mod, version);
   await registry.loadAll();
+  // companies from before per-company passwords keep the shared ones until the admin sets their own
+  await auth.ensureAccessRows();
   // builds that were running when the previous process died get a failed
   // status (retry/cancel on the board) instead of a spinner forever
   const orphaned = await pipeline.sweepOrphans();

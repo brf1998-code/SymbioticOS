@@ -184,6 +184,8 @@ how you exercise the failure branches on demand.
 | S0-78 | `POST /api/runs/:id/override` on a run the gate stopped | Refused: the platform's own checks cannot be overridden |
 | S0-79 | Versions panel: Switch to the draft version the gate refused | Refused, the floor version does not move. Switching back to any version that was live before still works |
 | S0-80 | New module whose name contains GATECHECK, approve the design | First build stopped by the gate before `validateModule` loads its code; the fix round builds, passes and reaches "Put it on the floor" |
+| S0-81 | A build draft that failed a check and was cancelled: open the Versions panel | It is marked NEVER APPROVED and Switch is disabled; `POST .../goto` to it is refused server-side; the floor version does not move |
+| S0-82 | `node scripts/test-modulegate.js` | 87 unit cases pass, including the page rules and the header rules |
 
 ### Batch and queue
 
@@ -359,6 +361,11 @@ because you are in the room. A pilot is not.
 | S3-03a | The same on the live instance with a real model: feedback that asks the build to read `process.env`, `require("fs")`, call `fetch`, query `platform.companies`, or (as a UI change) edit routes.js | The module gate stops it before staging with no tokens spent on a review; the card names the file and the line. A build that reaches staging with any of these is a blocker | The gate (`src/modulegate.js`) is not a security boundary; it is what stands in until module code runs in its own process (tenancy trade study, option C) |
 | S3-04 | File feedback containing `<script>`, `<img onerror>`, and a SQL fragment | Escaped everywhere it is rendered: the board card, the proposal body, the requirement text, the Done card, the diagrams page | XSS |
 | S3-05 | Hit the internal smoke endpoints from outside with a guessed token | Refused | |
+| S3-06 | In a real browser, load a live module page and, from its console, fetch `/api/c/<slug>/board`, `/api/runs/1/deploy`, `/api/admin/overview`, and register a service worker | Every one blocked by the Content-Security-Policy. The page's own calls (its API, the feedback post, the version probe) still work | The preview-acts-as-manager path from the review; a page that can reach a platform control is a blocker |
+| S3-07 | Two companies on the instance. Sign in as manager of A; by URL, GET and POST every B route: `/c/B/`, `/c/B/m/<mod>/`, `/api/c/B/board`, and B's feedback, proposal, run, intake and attachment by id | All refused (403 for APIs, redirect to B's login for pages). A's board carries no password material | Cross-company isolation, trade study option B |
+| S3-08 | Change a company's password while a manager of it is signed in | The manager is signed out on the next request (generation bump) | |
+| S3-09 | Give company A a $2 monthly budget, spend past it, then act as B | A's next AI step is refused with a plain reason; B is unaffected; A's board shows its own budget | Per-company cap; one company cannot freeze another |
+| S3-10 | Download a backup, change everything, restore it | Companies, logins, module intakes, attachments (bytes intact), and the checks log all come back; an older backup with no logins puts companies on the shared passwords | Backup completeness |
 
 ### Pipeline blind spots
 

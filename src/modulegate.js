@@ -14,11 +14,16 @@
 // turns the lane rules from a line in a prompt into something the platform
 // enforces.
 //
-// Three rule sets:
+// Four rule sets:
 //   server files  every .js file in the module. Only relative requires; no
 //                 process / global / eval / network / file serving; no SQL
 //                 that reaches outside the module's own tables or changes the
 //                 data model at run time.
+//   pages         every .html file: no naming the platform's own controls, no
+//                 popups, frames, workers or anything loaded from outside. The
+//                 platform also serves module pages under a browser policy
+//                 that enforces this (registry.modulePagePolicy); the rule
+//                 here says so at build time.
 //   layout        no package.json, node_modules, native or wasm files, links;
 //                 module.json "entry" stays a .js file inside the module.
 //   lane          ui lane: only pages/, tour.json, reference.md and the labels
@@ -155,7 +160,10 @@ const FORBIDDEN_NAMES = [
 const FORBIDDEN_CALLS = [
   [/\.\s*(static|sendFile|sendfile|download|render)\s*\(/g, (m) => `.${m[1]}(`, "serves files from the platform's own disk; pages are served by the platform from module.json"],
   [/\.\s*(constructor|__proto__)\b/g, (m) => `.${m[1]}`, "reaches for the language's internals"],
+  [/\.\s*(removeHeader|writeHead)\s*\(/g, (m) => `.${m[1]}(`, "rewrites the answer's headers; the platform sets the rules a module's screens run under"],
 ];
+// Headers only the platform sets on a module's answers (registry.lockDown).
+const LOCKED_HEADER_TEXT = /content-security-policy|service-worker-allowed/i;
 // SQL that leaves the module's own tables or changes the data model at run time.
 const SQL_RULES = [
   ["sql-platform", /\bplatform\s*\.\s*\w/i, "reads or writes the platform's own records"],
@@ -220,7 +228,31 @@ function checkServerFile(rel, src, files) {
   }
   for (const str of s.strings) {
     if (str.text === "constructor" || str.text === "__proto__" || str.text === "prototype") add("name-internals", str.index, `reaches for \`${str.text}\` by name`, "reaches for the language's internals");
+    if (LOCKED_HEADER_TEXT.test(str.text)) add("header-policy", str.index, "sets the rules its own screens run under", "the platform sets those rules for every module; a module cannot loosen them");
     for (const [rule, re, why] of SQL_RULES) if (re.test(str.text)) add(rule, str.index, "a query that leaves the module's own tables or reshapes them", why);
+  }
+  return found;
+}
+
+// ---- page rules ----------------------------------------------------------------------
+// A module's screens run in the manager's browser. The platform serves them
+// with a policy that ties the browser to the module (registry.modulePagePolicy),
+// so these would not work anyway; saying so at build time beats a screen that
+// fails quietly on the floor, and a screen that names the platform's own
+// controls is worth stopping on sight.
+const PAGE_FILE = /\.html?$/i;
+const PAGE_RULES = [
+  ["page-platform", /\/api\/(?:admin|proposals|intakes|attachments)\b|\/api\/c\//i, "names the platform's own controls", "a screen talks only to its own module, through paths built from its own address (base + \"/api/...\")"],
+  ["page-popup", /window\s*\.\s*open\s*\(|target\s*=\s*["']?_blank/i, "opens another window or tab", "screens stay in one window; print with window.print() and a print stylesheet"],
+  ["page-frame", /<\s*(?:iframe|frame|object|embed)\b/i, "puts another page inside the screen", "screens do not frame other pages"],
+  ["page-worker", /serviceWorker|new\s+(?:Shared)?Worker\s*\(/i, "installs code that keeps running behind the screen", "screens do not install workers"],
+  ["page-external", /<\s*(?:script|link|img|video|audio|source)\b[^>]*\b(?:src|href)\s*=\s*["']?\s*(?:https?:)?\/\//i, "loads something from outside the platform", "everything a screen needs is inline or inside the module; the floor may have no internet"],
+];
+function checkPageFile(rel, src) {
+  const found = [];
+  for (const [rule, re, what, why] of PAGE_RULES) {
+    const m = re.exec(src);
+    if (m) found.push({ rule, file: rel, line: lineOf(src, m.index), what, why, evidence: lineText(src, m.index) });
   }
   return found;
 }
@@ -288,10 +320,16 @@ function checkLane(files, fromFiles, lane) {
 // lane: "ui" | "functionality" | "module" | null (null = server and layout rules only)
 function check({ files, fromFiles = null, lane = null }) {
   files = files || {};
-  const server = [];
-  for (const [rel, text] of Object.entries(files)) if (SERVER_FILE.test(rel)) server.push(...checkServerFile(rel, String(text || ""), files));
-  const inheritedKeys = new Set();
-  if (fromFiles) for (const [rel, text] of Object.entries(fromFiles)) if (SERVER_FILE.test(rel)) for (const f of checkServerFile(rel, String(text || ""), fromFiles)) inheritedKeys.add(keyOf(f));
+  const read = (set) => {
+    const out = [];
+    for (const [rel, text] of Object.entries(set)) {
+      if (SERVER_FILE.test(rel)) out.push(...checkServerFile(rel, String(text || ""), set));
+      else if (PAGE_FILE.test(rel)) out.push(...checkPageFile(rel, String(text || "")));
+    }
+    return out;
+  };
+  const server = read(files);
+  const inheritedKeys = new Set(fromFiles ? read(fromFiles).map(keyOf) : []);
   const inherited = server.filter((f) => inheritedKeys.has(keyOf(f)));
   const violations = [...checkLayout(files), ...server.filter((f) => !inheritedKeys.has(keyOf(f))), ...checkLane(files, fromFiles, lane)];
   return { ok: violations.length === 0, violations, inherited, lane, checked: Object.keys(files).filter((r) => SERVER_FILE.test(r)) };
@@ -362,4 +400,4 @@ function asFindings(v) { return v.violations.map((f) => ({ severity: "blocking",
 // What goes on the run's evidence.
 function record(v) { return { ok: v.ok, lane: v.lane, checked: v.checked, violations: v.violations, inherited: v.inherited }; }
 
-module.exports = { check, checkDir, summarize, oneLine, asFindings, record, restoreLaneFiles, forAgent, scan, checkServerFile };
+module.exports = { check, checkDir, summarize, oneLine, asFindings, record, restoreLaneFiles, forAgent, scan, checkServerFile, checkPageFile };

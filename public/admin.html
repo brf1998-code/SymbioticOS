@@ -83,7 +83,7 @@ async function load() {
   D = await r.json();
   const fable = D.models.find(m => m.id === "claude-fable-5-1") ? "claude-fable-5-1" : D.defaults.propose;
   document.getElementById("c-model").innerHTML = D.models.filter(m => m.agent !== false || m.id === fable).map(m => `<option value="${m.id}" ${m.id === fable ? "selected" : ""}>guide by ${m.label} ($${m.in}/$${m.out} per M tokens)</option>`).join("");
-  document.getElementById("top").textContent = `${D.companies.length} compan${D.companies.length === 1 ? "y" : "ies"} · AI spend this month $${D.totalSpend.toFixed(2)} of $${D.monthlyCap.toFixed(2)} cap · defaults: propose ${ml(D.defaults.propose)}, build ${ml(D.defaults.build)}, review ${ml(D.defaults.review)}`;
+  document.getElementById("top").textContent = `${D.companies.length} compan${D.companies.length === 1 ? "y" : "ies"} · AI spend this month $${D.totalSpend.toFixed(2)}${D.monthlyCap ? ` of $${D.monthlyCap.toFixed(2)} cap` : " (no instance-wide cap)"} · defaults: propose ${ml(D.defaults.propose)}, build ${ml(D.defaults.build)}, review ${ml(D.defaults.review)}`;
   document.getElementById("library").innerHTML = D.library.map(l => `<div class="mod">
     <h3>${esc(l.title)} <small class="sub">(${l.name})</small></h3>
     <div class="desc">${esc(l.description || "No description in module.json yet.")}</div>
@@ -102,7 +102,10 @@ async function load() {
       <div class="kpi"><b>${c.runs.deployed} / ${c.runs.n}</b><span>builds deployed / started</span></div>
       <div class="kpi"><b>$${c.spend_usd.toFixed(2)}</b><span>AI spend this month</span></div>
     </div>
-    <div class="sub"><b>Models:</b> propose ${ml(c.models.propose)}, build ${ml(c.models.build)}, review ${ml(c.models.review)}</div>
+    <div class="sub"><b>Login:</b> ${accessText(c)} <button class="quiet" style="margin-top:0" onclick="openAccess('${c.slug}', '${esc(c.name)}')">Set passwords</button></div>
+    <div class="sub" style="margin-top:6px"><b>AI budget:</b> ${c.monthly_cap_usd ? `$${Number(c.monthly_cap_usd).toFixed(2)} a month, its own` : "none of its own"}${D.monthlyCap ? ` · the whole instance stops at $${D.monthlyCap.toFixed(2)}` : ""}
+      <input id="cap-${c.slug}" type="number" min="0" step="1" placeholder="dollars a month" value="${c.monthly_cap_usd || ""}" style="max-width:150px;display:inline-block"> <button class="quiet" style="margin-top:0" onclick="setCap('${c.slug}')">Save</button></div>
+    <div class="sub" style="margin-top:6px"><b>Models:</b> propose ${ml(c.models.propose)}, build ${ml(c.models.build)}, review ${ml(c.models.review)}</div>
     <div class="sub" style="margin-top:6px"><b>Agent docs:</b>${c.docs.length ? "<ul>" + c.docs.map(d => `<li>${esc(d.name)} <span class="sub">(${d.module ? "module " + esc(d.module) : "company-wide"}, ${d.bytes} bytes, ${d.source === "repo" ? "seeded" : "edited"})</span></li>`).join("") + "</ul>" : " none"}</div>
     <div class="sub" style="margin-top:6px"><b>Modules:</b>${c.modules.length ? "<ul>" + c.modules.map(m => `<li>${esc(m.title)} (${m.name}) v${m.live_version}${m.staged_version ? `, v${m.staged_version} staged` : ""}</li>`).join("") + "</ul>" : " none"}</div>
     ${brandHtml(c)}
@@ -140,7 +143,42 @@ async function restyle(slug, mod) {
 async function addCompany() {
   const slug = document.getElementById("c-slug").value.trim().toLowerCase(), name = document.getElementById("c-name").value.trim();
   const brand_url = document.getElementById("c-url").value.trim(), brand_model = document.getElementById("c-model").value;
-  await post("/api/admin/companies", { slug, name, brand_url, brand_model }); load();
+  const j = await post("/api/admin/companies", { slug, name, brand_url, brand_model });
+  if (j.passwords) showPasswords(slug, name, j.passwords);
+  load();
+}
+// ---- a company's own login: floor and manager passwords, kept as hashes; shown once when the platform makes them up
+function accessText(c) {
+  const a = c.access || {};
+  if (a.legacy_login) return '<span class="fail">still on the shared floor and manager passwords from before 2026-09-19. Anyone holding those can sign in here.</span>';
+  if (a.own_floor && a.own_manager) return "its own floor and manager passwords" + (a.updated_at ? ", set " + new Date(a.updated_at).toLocaleDateString() : "");
+  return `<span class="fail">${a.own_floor ? "no manager password yet (only an admin can manage it)" : a.own_manager ? "no floor password yet (the floor cannot sign in)" : "no passwords yet"}</span>`;
+}
+function openAccess(slug, name) {
+  openModal(`<h2>Passwords for ${esc(name)}</h2>
+    <p class="sub">The floor password is for everyone on the floor, the manager password for the people who approve changes. They are kept scrambled: nobody can read them back later, so hand them over now. Setting them here ends this company's use of the shared passwords. Leave a box empty to keep that password as it is.</p>
+    <input id="ac-floor" placeholder="floor password (8 or more characters)" autocomplete="off">
+    <input id="ac-manager" placeholder="manager password (8 or more characters)" autocomplete="off">
+    <div><button class="go" onclick="saveAccess('${slug}', '${esc(name)}', false)">Save these</button><button class="quiet" onclick="saveAccess('${slug}', '${esc(name)}', true)">Make up both for me</button><button class="quiet" onclick="closeModal()">Cancel</button></div>`);
+  setTimeout(() => document.getElementById("ac-floor").focus(), 50);
+}
+async function saveAccess(slug, name, generate) {
+  const body = generate ? { generate: true } : { floor_password: document.getElementById("ac-floor").value.trim(), manager_password: document.getElementById("ac-manager").value.trim() };
+  const r = await fetch(`/api/admin/companies/${slug}/access`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return alert(j.error || "failed");
+  if (j.passwords) showPasswords(slug, name, j.passwords); else closeModal();
+  load();
+}
+function showPasswords(slug, name, p) {
+  openModal(`<h2>${esc(name)}: write these down now</h2>
+    <p class="sub">They are shown this once and kept scrambled from here on. People sign in at <b>${esc(location.origin)}/c/${esc(slug)}/</b> (the wall code on the board points there).</p>
+    <p style="font-size:16px;line-height:1.9">Floor: <b style="font-family:ui-monospace,monospace">${esc(p.floor)}</b><br>Manager: <b style="font-family:ui-monospace,monospace">${esc(p.manager)}</b></p>
+    <div><button class="go" onclick="closeModal()">I have them</button></div>`);
+}
+async function setCap(slug) {
+  await post(`/api/admin/companies/${slug}/cap`, { usd: document.getElementById("cap-" + slug).value });
+  load();
 }
 async function addModule(slug) {
   const mod = document.getElementById("lib-" + slug).value; if (!mod) return;

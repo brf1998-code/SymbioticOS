@@ -390,15 +390,38 @@ async function monthlySpend(company) {
          + COALESCE((SELECT SUM((brand->>'cost_usd')::numeric) FROM platform.companies WHERE brand IS NOT NULL AND (brand->>'built_at')::timestamptz >= date_trunc('month', now()) AND ($1::text IS NULL OR slug=$1)),0)
          + COALESCE((SELECT SUM(cost_usd) FROM platform.ai_usage WHERE created_at >= date_trunc('month', now()) AND ($1::text IS NULL OR company=$1)),0) AS usd`, [company || null])).rows[0];
   const usd = Number(r.usd || 0);
-  return { usd, cap: MONTHLY_CAP_USD, capped: MONTHLY_CAP_USD > 0 && usd >= MONTHLY_CAP_USD };
+  // For one company the cap that counts is its own (set on the admin page);
+  // the instance-wide cap is only shown when the company has none.
+  const own = company ? await companyCap(company) : 0;
+  const cap = own || MONTHLY_CAP_USD;
+  return { usd, cap, capKind: own ? "company" : MONTHLY_CAP_USD ? "instance" : null, capped: own ? usd >= own : (!company && MONTHLY_CAP_USD > 0 && usd >= MONTHLY_CAP_USD) };
 }
 
-async function assertUnderCap() {
-  const s = await monthlySpend(null);
-  if (s.capped) throw new Error(`monthly AI cap reached ($${s.usd.toFixed(2)} of $${s.cap.toFixed(2)}). Raise SOS_MONTHLY_CAP_USD to continue.`);
+// A company's own monthly AI budget (platform.companies.monthly_cap_usd); 0 = none.
+async function companyCap(company) {
+  if (!company) return 0;
+  const row = (await q("SELECT monthly_cap_usd FROM platform.companies WHERE slug=$1", [company])).rows[0];
+  const v = row ? Number(row.monthly_cap_usd) : 0;
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+// Two budgets, checked separately: the company's own, against the company's
+// own spend, so one company running out never stops another (until
+// 2026-09-19 the only cap was instance-wide and did exactly that); and the
+// instance-wide one from the environment, when it is set at all.
+async function assertUnderCap(company) {
+  const own = await companyCap(company);
+  if (own) {
+    const mine = await monthlySpend(company);
+    if (mine.usd >= own) throw new Error(`this company's AI budget for the month is used up ($${mine.usd.toFixed(2)} of $${own.toFixed(2)}). The platform's admin can raise it on the admin page.`);
+  }
+  if (MONTHLY_CAP_USD > 0) {
+    const all = await monthlySpend(null);
+    if (all.usd >= MONTHLY_CAP_USD) throw new Error(`monthly AI cap for the whole instance reached ($${all.usd.toFixed(2)} of $${MONTHLY_CAP_USD.toFixed(2)}). Raise SOS_MONTHLY_CAP_USD to continue.`);
+  }
 }
 
 module.exports = {
   runAgent, runStructured, runChat, recordUsage, haveKey, fakeMode, guidanceFor, platformDocs, modelFor, modelInfo, buildModelFor, canBuild,
-  MODELS, DEFAULT_MODELS, MAX_RUN_USD, MAX_BATCH_USD, runCapUsd, MONTHLY_CAP_USD, monthlySpend, assertUnderCap, AGENT_EFFORT,
+  MODELS, DEFAULT_MODELS, MAX_RUN_USD, MAX_BATCH_USD, runCapUsd, MONTHLY_CAP_USD, monthlySpend, assertUnderCap, companyCap, AGENT_EFFORT,
 };

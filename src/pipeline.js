@@ -75,7 +75,7 @@ async function startRun(proposalIds, opts = {}) {
   if (ps.some((p) => p.module !== mod || p.company !== company)) throw new Error("a batch must be for one module");
   const modRow = await registry.getModule(company, mod);
   if (!modRow) throw new Error(`feedback has no valid module (${company}/${mod})`);
-  await assertUnderCap();
+  await assertUnderCap(company);
 
   const lane = ps.every((p) => p.class === "ui") ? "ui" : "functionality";
   const step = lane === "ui" ? "build" : "confirm_requirement";
@@ -203,7 +203,7 @@ async function advance(runId) {
     }
 
     if (run.step === "build") {
-      await assertUnderCap();
+      await assertUnderCap(company);
       const ev0 = run.evidence || {};
       let draft;
       if (ev0.fix_round && run.to_version) {

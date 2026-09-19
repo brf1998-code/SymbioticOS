@@ -11,9 +11,14 @@
 // and boot re-materializes versions and mounts from the restored rows.
 const { q, pool } = require("./db");
 
+// Every platform table a restore refills. The dump takes all of them on its
+// own; until 2026-09-19 this list had fallen behind it, so a restore brought
+// back feedback and runs but left the module intakes, their attachments, the
+// checks log labels and replays as they were. Keep it in step with db.js.
 const PLATFORM_TABLES = [
-  "companies", "settings", "modules", "module_versions", "feedback", "proposals", "build_runs",
+  "companies", "company_access", "settings", "modules", "module_versions", "feedback", "proposals", "build_runs",
   "agent_docs", "reviews", "diagrams", "events", "schema_snapshots", "batches", "ai_usage",
+  "module_intakes", "attachments", "check_labels", "check_replays",
 ];
 
 async function columnInfo(schema, table) {
@@ -61,15 +66,18 @@ async function dump() {
 }
 
 function jsonbColumns(cols) { return new Set(cols.filter((c) => c.data_type === "jsonb" || c.data_type === "json").map((c) => c.column_name)); }
+// A binary column (an attachment's bytes) arrives from JSON as { type: "Buffer", data: [...] }.
+function byteaColumns(cols) { return new Set(cols.filter((c) => c.data_type === "bytea").map((c) => c.column_name)); }
+function toBytes(v) { return v && v.type === "Buffer" && Array.isArray(v.data) ? Buffer.from(v.data) : typeof v === "string" ? Buffer.from(v, "base64") : v; }
 
 async function insertRows(client, schema, table, rows, cols) {
   if (!rows.length) return;
   const names = cols.map((c) => c.column_name).filter((n) => Object.prototype.hasOwnProperty.call(rows[0], n));
-  const jb = jsonbColumns(cols);
+  const jb = jsonbColumns(cols), bin = byteaColumns(cols);
   const casts = names.map((n, i) => (jb.has(n) ? `$${i + 1}::jsonb` : `$${i + 1}`));
   const sql = `INSERT INTO ${schema}.${table} (${names.join(",")}) VALUES (${casts.join(",")})`;
   for (const r of rows) {
-    await client.query(sql, names.map((n) => (jb.has(n) && r[n] != null ? JSON.stringify(r[n]) : r[n])));
+    await client.query(sql, names.map((n) => (jb.has(n) && r[n] != null ? JSON.stringify(r[n]) : bin.has(n) && r[n] != null ? toBytes(r[n]) : r[n])));
   }
 }
 
@@ -110,7 +118,9 @@ async function restore(doc) {
     // backup lacks keep their defaults, columns it has that we lack are skipped)
     await client.query(`TRUNCATE ${PLATFORM_TABLES.map((t) => "platform." + t).join(", ")}`);
     for (const t of PLATFORM_TABLES) {
-      const rows = doc.platform[t] || [];
+      let rows = doc.platform[t] || [];
+      // a backup from before per-company passwords has no login rows: its companies go back on the shared passwords
+      if (t === "company_access" && !doc.platform[t]) rows = (doc.platform.companies || []).map((c) => ({ company: c.slug, legacy_login: true }));
       const cols = (await client.query(
         "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema='platform' AND table_name=$1 ORDER BY ordinal_position", [t])).rows;
       await insertRows(client, "platform", t, rows, cols);

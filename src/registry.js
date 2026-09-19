@@ -193,7 +193,7 @@ function moduleServices(company, mod, manifest) {
       models: agent.MODELS,
       modelFor: (role) => agent.modelFor(company, role),
       async chat({ model, system, messages, maxTokens, kind, detail }) {
-        await agent.assertUnderCap();
+        await agent.assertUnderCap(company);
         const m = model && agent.MODELS.some((x) => x.id === model) ? model : await agent.modelFor(company, "propose");
         const out = await agent.runChat({ model: m, system, messages, maxTokens });
         await agent.recordUsage(company, mod, kind || "chat", m, out.costUsd, detail);
@@ -416,10 +416,16 @@ function unmountCompany(company) {
 async function wasEverLive(company, mod, version) {
   const row = await getModule(company, mod);
   if (row && Number(row.live_version) === Number(version)) return true;
+  // Three records can show it: the event log (refs were the bare module name
+  // before the instance held several companies), a build run that deployed
+  // it, or a data snapshot taken while it was live.
   const r = await q(
-    `SELECT 1 FROM platform.events WHERE ref=$1 AND (
-        (kind IN ('version_deployed','version_switched') AND detail->>'to' = $2)
-     OR (kind = 'module_imported' AND detail->>'version' = $2)) LIMIT 1`, [`${company}/${mod}`, String(version)]);
+    `SELECT 1 WHERE EXISTS (SELECT 1 FROM platform.events WHERE ref IN ($1, $4) AND (
+                (kind IN ('version_deployed','version_switched') AND detail->>'to' = $2)
+             OR (kind = 'module_imported' AND detail->>'version' = $2)))
+        OR EXISTS (SELECT 1 FROM platform.build_runs WHERE company=$3 AND module=$4 AND to_version=$5 AND status IN ('deployed','rolled_back'))
+        OR EXISTS (SELECT 1 FROM platform.schema_snapshots WHERE company=$3 AND module=$4 AND version=$5)`,
+    [`${company}/${mod}`, String(version), company, mod, Number(version)]);
   return r.rows.length > 0;
 }
 async function assertGate(company, mod, version) {
@@ -494,6 +500,14 @@ async function versionHistory(company, mod) {
             (SELECT r.evidence->>'build_summary' FROM platform.build_runs r WHERE r.company=v.company AND r.module=v.module AND r.to_version=v.version ORDER BY r.id DESC LIMIT 1) AS summary,
             EXISTS (SELECT 1 FROM platform.schema_snapshots s WHERE s.company=v.company AND s.module=v.module AND s.version=v.version) AS has_snapshot
        FROM platform.module_versions v WHERE v.company=$1 AND v.module=$2 ORDER BY v.version DESC`, [company, mod])).rows;
+  // A draft the build agent wrote that never reached the floor was never
+  // approved by anyone: it failed a check, was cancelled at the gate, or is
+  // still waiting at it. The panel says so and offers no Switch (goToVersion
+  // refuses it as well); the way onto the floor is its build's deploy gate.
+  for (const v of versions) {
+    v.ever_live = await wasEverLive(company, mod, v.version);
+    v.never_approved = v.source === "build" && !v.ever_live;
+  }
   return { live_version: row.live_version, staged_version: row.staged_version, versions };
 }
 
@@ -503,6 +517,14 @@ async function goToVersion(company, mod, version, { restoreData = false } = {}) 
   version = Number(version);
   if (!(await versionFiles(company, mod, version))) throw new Error(`version ${version} does not exist`);
   if (version === row.live_version) throw new Error(`version ${version} is already live`);
+  // Switch is for going back, and for a held copy from the library. A draft
+  // the build agent wrote that was never on the floor has never been through
+  // a manager's deploy gate; switching to it would walk around the review
+  // that stopped it (or is still waiting on it).
+  const src = (await q("SELECT source FROM platform.module_versions WHERE company=$1 AND module=$2 AND version=$3", [company, mod, version])).rows[0];
+  if (src && src.source === "build" && !(await wasEverLive(company, mod, version))) {
+    throw new Error(`version ${version} was never approved for the floor; it can only go live through its own build's deploy gate`);
+  }
   await assertGate(company, mod, version);
   let target = null;
   if (restoreData) {
@@ -526,15 +548,65 @@ async function goToVersion(company, mod, version, { restoreData = false } = {}) 
 }
 
 // ---- express wiring -------------------------------------------------------
+// ---- what a module's pages may do in the browser ----------------------------------
+// A module's pages are written by the build agent and open in the manager's
+// browser with the manager's session, on the same origin as the board. Left
+// alone, a staged preview could call the platform's own controls as the
+// manager (approve, deploy) and walk around the structural manager gate. So
+// everything served under a module mount, the pages the platform serves AND
+// whatever the module's own routes answer, carries a Content-Security-Policy
+// that ties the browser to that module: requests and form posts only to the
+// module's own live and staged paths plus the three things the feedback widget
+// needs; no popups (a popup of the board is same-origin and scriptable), no
+// frames, no service workers, nothing loaded from outside. Navigation is not
+// restricted: a link to the board leaves the page, and the new page is the
+// platform's own. Like the module gate, this narrows what careless or steered
+// code can do; the real fix is module pages on an origin of their own.
+function modulePagePolicy(req, company, mod) {
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  const safeHost = /^[a-z0-9.-]+(:\d+)?$/i.test(host) ? host : null;
+  const at = (p) => (safeHost ? `${safeHost}${p}` : "'self'");
+  const own = [`/c/${company}/m/${mod}/`, `/c/${company}/staging/m/${mod}/`];
+  const connect = [...own, "/api/feedback", `/api/c/${company}/modules/${mod}/`].map(at);
+  return [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "media-src 'self' data: blob:",
+    `connect-src ${[...new Set(connect)].join(" ")}`,
+    `form-action ${[...new Set(own.map(at))].join(" ")}`,
+    "frame-src 'none'", "child-src 'none'", "worker-src 'none'", "object-src 'none'", "base-uri 'none'",
+    "frame-ancestors 'self'",
+    "sandbox allow-scripts allow-same-origin allow-forms allow-modals allow-downloads",
+  ].join("; ");
+}
+const LOCKED_HEADER = /^(content-security-policy|content-security-policy-report-only|service-worker-allowed)$/i;
+function lockDown(req, res) {
+  res.setHeader("Content-Security-Policy", modulePagePolicy(req, req.params.company, req.params.module));
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  // module code answers on this same response object; keep it from dropping or widening the policy
+  const set = res.setHeader.bind(res), remove = res.removeHeader.bind(res), head = res.writeHead.bind(res);
+  res.setHeader = (name, value) => (LOCKED_HEADER.test(String(name)) ? res : set(name, value));
+  res.removeHeader = (name) => (LOCKED_HEADER.test(String(name)) ? undefined : remove(name));
+  res.writeHead = (status, ...rest) => {
+    for (const h of rest) if (h && typeof h === "object" && !Array.isArray(h)) for (const k of Object.keys(h)) if (LOCKED_HEADER.test(k)) delete h[k];
+    return head(status, ...rest);
+  };
+}
+
 function attach(app) {
   app.use("/c/:company/m/:module", (req, res, next) => {
     const entry = mounts.get(key(req.params.company, req.params.module));
     if (!entry || !entry.live) return res.status(404).send("module not found");
+    lockDown(req, res);
     entry.live(req, res, next);
   });
   app.use("/c/:company/staging/m/:module", (req, res, next) => {
     const entry = mounts.get(key(req.params.company, req.params.module));
     if (!entry || !entry.staged) return res.status(404).send("no staged version");
+    lockDown(req, res);
     entry.staged(req, res, next);
   });
   // old single-company URLs

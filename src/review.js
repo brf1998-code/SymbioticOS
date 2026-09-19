@@ -105,7 +105,7 @@ async function startReview(company, mod, model, requestedBy) {
   const running = (await q("SELECT id FROM platform.reviews WHERE company=$1 AND module=$2 AND status='running'", [company, mod])).rows[0];
   if (running) throw new Error(`review #${running.id} is still running`);
   if (!haveKey()) throw new Error("ANTHROPIC_API_KEY not configured on this instance");
-  await assertUnderCap();
+  await assertUnderCap(company);
   const r = await q(
     "INSERT INTO platform.reviews (company, module, model, version, requested_by) VALUES ($1,$2,$3,$4,$5) RETURNING *",
     [company, mod, model, row.live_version, requestedBy || null]);

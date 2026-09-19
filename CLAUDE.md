@@ -1,4 +1,4 @@
-# Symbiotic OS — Workspace Guide (current as of 2026-09-18)
+# Symbiotic OS — Workspace Guide (current as of 2026-09-19)
 
 **This file is the single source of truth for how this repo and the live
 instance are worked on.** Repo: `brf1998-code/SymbioticOS` (private). Live:
@@ -282,7 +282,80 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   manager's browser with the manager's session, so a staged preview could
   call the platform's own APIs (approve, deploy) as the manager; the fix is
   a Content-Security-Policy on module pages (`connect-src` and `form-action`
-  limited to the module's own base path and the widget's endpoints).
+  limited to the module's own base path and the widget's endpoints). **Built
+  2026-09-19, see the next bullet.**
+- **Module pages are locked to their own module in the browser** (2026-09-19,
+  `registry.lockDown` / `modulePagePolicy`, the page half of the 2026-09-18
+  review's item 1). A module's pages are agent-written and open in the
+  manager's browser with the manager's session, same origin as the board, so a
+  staged preview could call the platform's own controls (approve, deploy) as
+  the manager and walk around the structural gate. Everything served under a
+  module mount now carries a Content-Security-Policy: `connect-src` and
+  `form-action` limited to the module's own live and staged paths plus
+  `/api/feedback` and `/api/c/<company>/modules/<module>/` (the widget's
+  endpoints); `frame-src`/`worker-src`/`object-src` none; no popups usable as a
+  scriptable same-origin window. It is set on BOTH the pages the platform
+  serves and whatever the module's routes answer: `lockDown` wraps the
+  response so module code cannot drop or widen `Content-Security-Policy` /
+  `Service-Worker-Allowed` (and the gate refuses code that tries, rules
+  `header-policy`, `call-removeHeader`). The module gate also has page rules
+  now (`checkPageFile`, `PAGE_RULES`): a screen naming `/api/admin`,
+  `/api/proposals`, `/api/intakes` or `/api/c/`, opening a popup, framing
+  another page, installing a worker, or loading anything from off the platform
+  is stopped at build time with a plain reason. Proven in a real headless
+  browser (`scripts/../browser-csp*.js` in the test run): the paperline and
+  kpis pages, their charts, the chat and the staged amber bar all run clean,
+  while a page trying to fetch the board, a deploy API, an admin API or a
+  service worker is blocked by the browser. Not a wall on its own (a link off
+  the page still navigates); the origin-per-module split is the real fix.
+- **A never-approved draft cannot be switched onto the floor** (2026-09-19,
+  `registry.goToVersion` + `wasEverLive`, the Versions panel). A build draft
+  the agent wrote that never reached the floor (a check stopped it, or it was
+  cancelled at the gate) can only go live through its own build's deploy gate;
+  the panel marks it "NEVER APPROVED" and disables Switch, and `goToVersion`
+  refuses it server-side. A version that was ever live (deploy, switch, import
+  event, a deployed run, or a data snapshot) is always switchable, so rollback
+  is never blocked. This closes the one path left open when the module gate
+  went in: the gate stopped switching to a gate-refused draft; this stops
+  switching to a reviewer-refused one too.
+- **One company per session, per-company passwords** (2026-09-19, `src/auth.js`
+  rewrite, trade study option B). Found in the review: the login cookie carried
+  a role and no company, so any authenticated login reached every `/c/<slug>/`.
+  Now the signed cookie carries role, company, a password generation and the
+  issue time. `auth.companyGuard` (mounted in server.js right after
+  `auth.middleware`) is the one gate: a `/c/<slug>/` or `/api/c/<slug>/` path
+  must match the session's company, and an id-addressed route (`/api/feedback/:id`,
+  `/api/proposals/:id`, `/api/runs/:id`, `/api/intakes/:id`,
+  `/api/attachments/:id`) is looked up and must belong to it; admin passes
+  everywhere; a floor or manager landing on `/` goes to its own board. The two
+  body-addressed routes (`/api/feedback`, `/api/runs/batch`) scope themselves.
+  Passwords: each company has its own floor and manager passwords, scrypt
+  hashes in `platform.company_access` (never in `platform.companies`, which is
+  read with SELECT * and handed to pages), set on the admin page (typed, or
+  the platform makes up word-word-number ones and shows them once). A company
+  made from the admin page gets its own at birth. `SOS_FLOOR_PASSWORD` /
+  `SOS_MANAGER_PASSWORD` are now only a fallback: they open a company solely
+  while its access row is `legacy_login=true`, which `ensureAccessRows()` sets
+  at boot for companies that predate this change, until the admin gives them
+  their own. Changing a password raises the company's `generation` and signs
+  its people out. `SOS_ADMIN_PASSWORD` is unchanged (manager password doubles
+  as admin when unset). Cookies from before this change (no company) are
+  rejected, so everyone signs in once after the deploy.
+- **Per-company AI budget** (2026-09-19). `assertUnderCap(company)` now checks
+  the company's own monthly cap (`platform.companies.monthly_cap_usd`, set on
+  the admin page) against that company's own spend AND the instance cap, so one
+  company running out never blocks another. Before this, `assertUnderCap` read
+  `monthlySpend(null)` (the whole instance), so any company hitting
+  `SOS_MONTHLY_CAP_USD` froze builds for all of them. `monthlySpend(company)`
+  returns `capKind` ("company"/"instance"/null) and the board KPI shows the
+  company's own budget.
+- **Backup keeps up with the schema** (2026-09-19, `src/backup.js`
+  `PLATFORM_TABLES`). The dump always took every table; the restore list had
+  fallen behind it and skipped module intakes, attachments and the checks-log
+  labels and replays. It now restores all of them, decodes bytea columns
+  (attachment bytes), and includes `company_access`; an older backup with no
+  `company_access` brings its companies back on the shared passwords rather
+  than locking anyone out. Round-tripped in the test run.
 - **Board tiles fold** (2026-09-17): each of the four columns shows
   `TILES_PER_COLUMN` (3) tiles and a "Show the other N" button; `EXPANDED`
   keeps opened columns across the 4s reload. The header count is the total.
@@ -588,7 +661,12 @@ tool list, 401 from the API) proves the CLI itself starts.
 (instance defaults: claude-sonnet-5 / claude-sonnet-5 / claude-opus-5;
 companies override on their Agent settings page), `SOS_MAX_RUN_USD` (per
 build run, default 1.50), `SOS_MONTHLY_CAP_USD` (default 25),
-`SOS_FAKE_AGENT` (0/1). Optional: `SOS_AGENT_EFFORT` (build agent reasoning
+`SOS_FAKE_AGENT` (0/1). `SOS_FLOOR_PASSWORD` and `SOS_MANAGER_PASSWORD` are
+now only the fallback for companies created before 2026-09-19 that have not
+been given their own passwords (see the "one company per session" bullet);
+`SOS_ADMIN_PASSWORD` is still the admin password. `SOS_MONTHLY_CAP_USD` is now
+the instance-wide ceiling only; a company's own budget is set on the admin page
+and lives in `platform.companies.monthly_cap_usd`. Optional: `SOS_AGENT_EFFORT` (build agent reasoning
 effort, default `high`), `SOS_SESSION_DAYS` (default 30; sessions
 expire server-side, not just via cookie Max-Age), `SOS_LOGIN_MAX_FAILS`
 (default 10) and `SOS_LOGIN_WINDOW_MIN` (default 15) for the per-IP login
@@ -605,6 +683,18 @@ Passwords live only in Railway; never commit them.
   `/m/paperline`, the same files serve at `/staging/m/paperline`.
 - The manager gate is structural: nothing reaches a live module without a
   human approval. Do not add auto-deploy paths.
+- A module's pages run under a Content-Security-Policy the platform sets
+  (`registry.modulePagePolicy`), so a screen may only talk to its own module
+  plus the feedback endpoint. When a module legitimately needs to reach
+  something else, widen the policy there and add it to the gate's page rules;
+  never let module code set its own security headers.
+- Every request below `auth.companyGuard` belongs to one company. A new route
+  under `/c/:slug/` is scoped for free; a new route addressed by an id must be
+  added to the `OWNERS` table in `src/auth.js` (its owning-company lookup) or
+  it will be reachable across companies. A new route that names its company in
+  the body scopes itself with `auth.ownsCompany(req, slug)`.
+- A new platform table that belongs to a company goes in `backup.js`
+  `PLATFORM_TABLES` and, if it holds secrets, stays out of `platform.companies`.
 - Module code reaches nothing but `ctx`. The module gate holds agent builds
   and repo imports to the same rule. If a library module needs something new
   (hashing, a clock, an outside system), lend it on `ctx` in

@@ -9,7 +9,8 @@ const registry = require("./registry");
 const agent = require("./agent");
 const review = require("./review");
 const diagrams = require("./diagrams");
-const { requireManager, requireAdmin, checkAdminPassword } = require("./auth");
+const auth = require("./auth");
+const { requireManager, requireAdmin, checkAdminPassword } = auth;
 const qrcode = require("./qrcode");
 const brand = require("./brand");
 const backup = require("./backup");
@@ -32,7 +33,9 @@ const SLUG = /^[a-z0-9][a-z0-9-]{1,40}$/;
 router.post("/api/feedback", async (req, res) => {
   const { company: slug, module: mod, page, message, name } = req.body || {};
   if (!message || !message.trim()) return res.status(400).json({ error: "message required" });
-  const co = (await company(slug || "demo")) || (await company("demo"));
+  // a floor or manager session files into its own company, whatever the body says
+  const co = req.sosRole === "admin" ? ((await company(slug || "demo")) || (await company("demo"))) : await company(req.sosCompany);
+  if (!co) return res.status(404).json({ error: "unknown company" });
   let screen = null, target = null;
   if (mod && mod !== "platform") {
     const row = await registry.getModule(co.slug, mod);
@@ -299,6 +302,9 @@ router.post("/api/runs/batch", requireManager, async (req, res) => {
   const ids = ((req.body || {}).proposal_ids || []).map(Number).filter(Boolean);
   if (!ids.length) return res.status(400).json({ error: "pick at least one proposal" });
   try {
+    // this route names its proposals in the body, so the company guard cannot see them
+    const owners = (await q("SELECT DISTINCT f.company FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id WHERE p.id = ANY($1::int[])", [ids])).rows.map((r) => r.company);
+    if (owners.some((c) => !auth.ownsCompany(req, c))) return res.status(403).json({ error: "this login is for another company" });
     await q("UPDATE platform.proposals SET status='approved' WHERE id = ANY($1::int[]) AND status='draft'", [ids]);
     const run = await pipeline.startRun(ids, { model: (req.body || {}).model });
     res.json({ ok: true, run });
@@ -425,6 +431,7 @@ router.get("/api/admin/overview", requireAdmin, async (_req, res) => {
     + COALESCE((SELECT SUM(p.cost_usd) FROM platform.proposals p JOIN platform.feedback f ON f.id=p.feedback_id WHERE f.company=c.slug AND p.created_at >= date_trunc('month', now())),0) AS usd
     FROM platform.companies c`)).rows;
   const runs = (await q("SELECT company, count(*)::int AS n, count(*) FILTER (WHERE status='deployed')::int AS deployed FROM platform.build_runs GROUP BY company")).rows;
+  const access = (await q("SELECT * FROM platform.company_access")).rows;
   res.json({
     companies: companies.map((c) => ({
       ...c,
@@ -434,6 +441,8 @@ router.get("/api/admin/overview", requireAdmin, async (_req, res) => {
       feedback: counts.find((x) => x.company === c.slug) || { open: 0, total: 0 },
       runs: runs.find((x) => x.company === c.slug) || { n: 0, deployed: 0 },
       spend_usd: Number((spend.find((x) => x.slug === c.slug) || {}).usd || 0),
+      monthly_cap_usd: c.monthly_cap_usd == null ? null : Number(c.monthly_cap_usd),
+      access: auth.accessPublic(access.find((a) => a.company === c.slug)),
       brand: brandPublic(c.brand),
     })),
     library: registry.libraryModules().map((m) => ({
@@ -453,6 +462,18 @@ router.post("/api/admin/companies", requireAdmin, async (req, res) => {
   const { slug, name, brand_url, brand_model } = req.body || {};
   if (!SLUG.test(slug || "")) return res.status(400).json({ error: "slug: lowercase letters, digits, dashes" });
   if (!name) return res.status(400).json({ error: "name required" });
+  const existed = Boolean(await company(slug));
+  // A new company never rides on the shared passwords: it gets its own at
+  // birth, the ones given or ones made up here and shown to the admin once.
+  let made = null;
+  if (!existed) {
+    const floor = String((req.body || {}).floor_password || "").trim() || auth.generatePassword();
+    let manager = String((req.body || {}).manager_password || "").trim() || auth.generatePassword();
+    while (manager === floor) manager = auth.generatePassword();
+    try { await q("INSERT INTO platform.companies (slug, name) VALUES ($1,$2)", [slug, name]); await auth.setPasswords(slug, { floor, manager }); }
+    catch (e) { await q("DELETE FROM platform.companies WHERE slug=$1", [slug]).catch(() => {}); return res.status(400).json({ error: e.message }); }
+    made = { floor, manager };
+  }
   await q("INSERT INTO platform.companies (slug, name) VALUES ($1,$2) ON CONFLICT (slug) DO UPDATE SET name=EXCLUDED.name", [slug, name]);
   if (brand_url && String(brand_url).trim()) {
     const url = String(brand_url).trim();
@@ -460,8 +481,36 @@ router.post("/api/admin/companies", requireAdmin, async (req, res) => {
     brand.buildGuide(slug, url, brand_model).catch((e) => console.error(`[brand] ${slug}:`, e.message));
   }
   await upsertDoc(slug, null, "COMPANY.md", `# ${name}\n\nWhat the agents should know about this company: what it makes, who is on the floor, what matters most (safety, throughput, quality), vocabulary the floor uses, anything to avoid.\n`, "repo", true);
-  await logEvent("company_created", slug, { name });
-  res.json({ ok: true });
+  await logEvent(existed ? "company_renamed" : "company_created", slug, { name });
+  res.json({ ok: true, passwords: made });
+});
+
+// Set or rotate a company's floor and manager passwords. Giving a company its
+// own passwords ends its use of the shared ones from the environment.
+router.post("/api/admin/companies/:slug/access", requireAdmin, async (req, res) => {
+  const co = await company(req.params.slug);
+  if (!co) return res.status(404).json({ error: "unknown company" });
+  const b = req.body || {};
+  const floor = b.generate ? auth.generatePassword() : String(b.floor_password || "").trim();
+  let manager = b.generate ? auth.generatePassword() : String(b.manager_password || "").trim();
+  while (b.generate && manager === floor) manager = auth.generatePassword();
+  try {
+    await auth.setPasswords(co.slug, { floor: floor || null, manager: manager || null });
+    await logEvent("company_passwords_set", co.slug, { floor: Boolean(floor), manager: Boolean(manager), generated: Boolean(b.generate) });
+    res.json({ ok: true, passwords: b.generate ? { floor, manager } : null, access: auth.accessPublic(await auth.accessRow(co.slug)) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// A company's own monthly AI budget; blank or 0 takes it off.
+router.post("/api/admin/companies/:slug/cap", requireAdmin, async (req, res) => {
+  const co = await company(req.params.slug);
+  if (!co) return res.status(404).json({ error: "unknown company" });
+  const raw = (req.body || {}).usd;
+  const usd = raw === "" || raw == null ? null : Number(raw);
+  if (usd != null && (!Number.isFinite(usd) || usd < 0 || usd > 100000)) return res.status(400).json({ error: "give a dollar amount, or leave it blank for no cap" });
+  await q("UPDATE platform.companies SET monthly_cap_usd=$2 WHERE slug=$1", [co.slug, usd || null]);
+  await logEvent("company_cap_set", co.slug, { usd: usd || null });
+  res.json({ ok: true, monthly_cap_usd: usd || null });
 });
 
 router.post("/api/admin/companies/:slug/modules", requireAdmin, async (req, res) => {
@@ -525,7 +574,7 @@ router.post("/api/admin/companies/:slug/delete", requireAdmin, async (req, res) 
     counts.runs = (await q("DELETE FROM platform.build_runs WHERE company=$1", [co.slug])).rowCount;
     counts.proposals = (await q("DELETE FROM platform.proposals WHERE feedback_id = ANY($1::int[])", [fbIds])).rowCount;
     counts.feedback = (await q("DELETE FROM platform.feedback WHERE company=$1", [co.slug])).rowCount;
-    for (const t of ["batches", "agent_docs", "reviews", "diagrams", "module_versions", "modules", "schema_snapshots"]) {
+    for (const t of ["batches", "agent_docs", "reviews", "diagrams", "module_versions", "modules", "schema_snapshots", "attachments", "module_intakes", "company_access"]) {
       counts[t] = (await q(`DELETE FROM platform.${t} WHERE company=$1`, [co.slug])).rowCount;
     }
     await q("DELETE FROM platform.companies WHERE slug=$1", [co.slug]);
