@@ -666,7 +666,10 @@ now only the fallback for companies created before 2026-09-19 that have not
 been given their own passwords (see the "one company per session" bullet);
 `SOS_ADMIN_PASSWORD` is still the admin password. `SOS_MONTHLY_CAP_USD` is now
 the instance-wide ceiling only; a company's own budget is set on the admin page
-and lives in `platform.companies.monthly_cap_usd`. Optional: `SOS_AGENT_EFFORT` (build agent reasoning
+and lives in `platform.companies.monthly_cap_usd`. `SOS_PAGE_LOCK` (default
+`on`) is the browser policy on module pages: `report` sends it report-only
+(violations show in the browser console, nothing breaks), `off` sends none;
+the escape hatch if module pages ever stop after a deploy. Optional: `SOS_AGENT_EFFORT` (build agent reasoning
 effort, default `high`), `SOS_SESSION_DAYS` (default 30; sessions
 expire server-side, not just via cookie Max-Age), `SOS_LOGIN_MAX_FAILS`
 (default 10) and `SOS_LOGIN_WINDOW_MIN` (default 15) for the per-IP login

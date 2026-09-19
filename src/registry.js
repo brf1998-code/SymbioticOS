@@ -583,8 +583,14 @@ function modulePagePolicy(req, company, mod) {
   ].join("; ");
 }
 const LOCKED_HEADER = /^(content-security-policy|content-security-policy-report-only|service-worker-allowed)$/i;
+// SOS_PAGE_LOCK: "on" (default) enforces the policy; "report" sends it as
+// report-only so a mismatch shows in the browser console without breaking a
+// page; "off" sends nothing. The escape hatch for the first live deploy: the
+// policy names the request's host, and if that ever differed from what the
+// browser sees, every floor page would stop at once.
+const PAGE_LOCK = String(process.env.SOS_PAGE_LOCK || "on").toLowerCase();
 function lockDown(req, res) {
-  res.setHeader("Content-Security-Policy", modulePagePolicy(req, req.params.company, req.params.module));
+  if (PAGE_LOCK !== "off") res.setHeader(PAGE_LOCK === "report" ? "Content-Security-Policy-Report-Only" : "Content-Security-Policy", modulePagePolicy(req, req.params.company, req.params.module));
   res.setHeader("X-Content-Type-Options", "nosniff");
   // module code answers on this same response object; keep it from dropping or widening the policy
   const set = res.setHeader.bind(res), remove = res.removeHeader.bind(res), head = res.writeHead.bind(res);
