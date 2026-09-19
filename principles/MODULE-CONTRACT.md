@@ -13,6 +13,7 @@ routes.js            module.exports = (ctx) => express.Router
 migrations/001.sql   additive SQL, applied once per schema, in file order
 pages/*.html         one file per screen, plain HTML and vanilla JS
 tour.json            the guided walk through the screens (PRINCIPLES rule 8)
+labels/<name>.zpl    label layouts, only when the module prints labels (below)
 ```
 
 ## module.json
@@ -28,7 +29,12 @@ tour.json            the guided walk through the screens (PRINCIPLES rule 8)
     "/me":          { "file": "pages/mine.html",    "label": "My tools (operator, on a phone)" },
     "/item/:id":    { "file": "pages/item.html",    "label": "One tool" }
   },
-  "smoke": ["/api/items", "/me"]        paths the platform requests after every build; each must answer below 500
+  "smoke": ["/api/items", "/me"],       paths the platform requests after every build; each must answer below 500
+  "connections": {                      only what the design's Connections section names (below)
+    "stock":  { "kind": "files", "label": "Stock count spreadsheet", "table": "items", "key": "sku",
+                "columns": { "qty": ["Qty", "On hand"] } },
+    "labels": { "kind": "printer", "label": "Bin labels", "templates": ["bin"] }
+  }
 }
 ```
 
@@ -62,6 +68,9 @@ module.exports = function makeRouter(ctx) {
 - `ctx.ai.chat({ system, messages })` is a plain assistant call for a module
   that has a chat persona. Not needed for a first version.
 - `ctx.manifest` is the parsed module.json.
+- `ctx.connections.<name>` is each connection module.json declares, with a
+  small fixed surface per kind (see Connections below). This is the only way
+  a module reaches anything outside itself.
 - No `require` of anything outside the directory. `express` comes from `ctx`.
   No network calls of any kind from routes.js: outside systems are reached
   only through services the platform lends on `ctx` (a first version usually
@@ -122,13 +131,41 @@ tour points at. Mark every element you add or visibly change with
 Plain words on every visible string: the words in PLAIN-WORDS.md never appear
 on a screen. The thing, its stages, the names the company uses.
 
-## Scanners and labels (when the design calls for them)
+## Connections (when the design calls for them)
+
+The platform owns every connection; the module only uses it. Declare what the
+module needs in module.json under `connections` and reach it only through
+`ctx.connections.<name>`. The manager sets each one up once on the company's
+connections page (`/c/<company>/connections`) and tests it there; module
+pages never ask for settings, printers or files, and a module still works
+before a connection is set up (say "not connected yet" where it matters,
+`await ctx.connections.<name>.status()` tells you). Kinds:
+
+- `files`: a spreadsheet the company keeps, loaded by the platform into ONE
+  of the module's own tables. Declare `table` (the module table), `key` (the
+  column, or list of columns, that identifies a row, so a reload replaces
+  rather than duplicates) and optionally `columns` (other header names the
+  spreadsheet may use for a column). The platform parses the file, matches
+  the headers to the table's columns, previews, then loads in one
+  transaction. The module just reads its table. Surface: `status()` returns
+  `{ connected, table, last_loaded_at, rows, filename }`.
+- `printer`: labels on a Zebra printer. Keep each label as `labels/<name>.zpl`
+  (ZPL with `{{field}}` placeholders; the platform fills them and strips ZPL
+  control characters from the data) and list the names in `templates`. In a
+  route, `await ctx.connections.<name>.print(req, "traveler", { job: "S1-01" })`
+  renders the label and queues it for the device the request came from; the
+  platform's own helper on that device sends it to the printer chosen there.
+  Pass the request so the label goes to the screen that asked. It returns
+  `{ job_id, queued, device }`; tell the person the label is on its way, and
+  when `device` is false, that this browser is not paired with a printer yet.
+  `preview(name, data)` returns `{ zpl, png }` (png null when the renderer is
+  not reachable) for a "what the label looks like" image. `status()` returns
+  `{ connected, printers, last_printed_at, error }`. Never write `^XA` to a
+  socket, a file or a fetch: module code cannot reach a printer, only this.
 
 A barcode or QR scanner in keyboard mode needs nothing to connect: give the
 page a scan field that keeps focus, treats Enter as the end of a scan, and
-looks the code up. A label is a plain HTML block sized for the label, printed
-from the page with `window.print()` and a print stylesheet; the platform's
-printing helper comes later. Say in the tour what to scan and where to print.
+looks the code up. Say in the tour what to scan and where labels print.
 
 ## tour.json
 

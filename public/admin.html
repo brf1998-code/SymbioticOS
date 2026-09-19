@@ -7,7 +7,7 @@
 <style>
   :root { --ink:#1c242e; --steel:#51606f; --line:#d5dbe3; --fog:#f2f4f7; --navy:#1f3a5f; --green:#2e7d4f; --red:#b3261e; }
   * { box-sizing:border-box; margin:0; }
-  body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); padding:18px; padding-bottom:56px; max-width:1100px; margin:0 auto; }
+  body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); padding:18px; padding-bottom:56px; max-width:1240px; margin:0 auto; }
   h1 { font-size:21px; margin-bottom:4px; }
   .sub { color:var(--steel); font-size:13px; line-height:1.5; }
   a { color:var(--navy); }
@@ -39,11 +39,31 @@
   .mcard { background:#fff; border-radius:14px; padding:20px; width:100%; max-width:440px; }
   .mcard h2 { font-size:17px; margin-bottom:6px; } .mcard input { width:100%; margin-top:8px; }
   .fail { color:var(--red); }
+  .hwrap { overflow-x:auto; margin-top:8px; }
+  table.health { border-collapse:collapse; font-size:12px; min-width:100%; }
+  table.health th, table.health td { padding:5px 6px; border-bottom:1px solid var(--line); text-align:right; vertical-align:top; line-height:1.35; }
+  table.health th { font-weight:600; color:var(--steel); font-size:11px; text-transform:uppercase; letter-spacing:.04em; white-space:nowrap; }
+  table.health td small { white-space:normal; }
+  table.health th:first-child, table.health td:first-child { text-align:left; }
+  table.health td:last-child { text-align:left; }
+  table.health td.co { font-weight:700; white-space:nowrap; }
+  table.health td:last-child span { white-space:nowrap; display:inline-block; }
+  table.health small { color:var(--steel); font-weight:400; }
+  .ok { color:var(--green); font-weight:700; } .warn { color:#c2620a; font-weight:700; }
+  #h-days { float:right; font-size:12px; padding:5px 7px; margin-top:-3px; }
+  .kpi small { display:block; font-size:11px; color:var(--steel); text-transform:none; letter-spacing:0; margin-top:1px; }
 </style>
 </head>
 <body>
   <h1>Admin</h1>
   <p class="sub" id="top"></p>
+  <div class="card" id="health-card">
+    <h2>Loop health <small>the platform's own numbers: is the loop turning, how fast, where it stops</small>
+      <select id="h-days" onchange="loadHealth()"><option value="7">last 7 days</option><option value="30" selected>last 30 days</option><option value="90">last 90 days</option><option value="365">last year</option><option value="0">all time</option></select></h2>
+    <div class="grid" id="h-fleet"></div>
+    <div class="hwrap"><table class="health" id="h-table"></table></div>
+    <p class="sub" id="h-note" style="margin-top:8px">Counts are for the window; open items, what is waiting, and the quiet stretch are as of now. Same shift means feedback to floor within 8 hours. To floor runs from the feedback item to the deploy (the oldest item in a batch). Manager wait is proposal drafted to decided, then ready to deployed. Stops are where builds stopped: the platform's own checks (gate), the reviewer, the tests, or something else. Quiet is days since the last reviewer or test stop, gate stop, and rollback; a long quiet stretch is the signal to try a cheaper build model. Edited is how many approved proposals the manager changed first (on the record since Sept 19). Decision times before the record use the run's start.</p>
+  </div>
   <div class="card" id="library-card">
     <h2>Module library <small>what ships in the repo, before any company changes it</small></h2>
     <p class="sub">Every module starts here as version 1. Start tour opens the module on a company's floor and walks a new operator through its screens, step by step, with the feedback button as the last stop. The tour is <code>tour.json</code> inside the module; agents can keep it current as the screens change.</p>
@@ -76,11 +96,66 @@ async function post(url, body) {
   if (!r.ok) alert(j.error || "failed");
   return j;
 }
+// ---- loop health (src/health.js) ----
+const hrs = (h) => h == null ? "<small>none</small>" : h < 1 ? `${Math.round(h * 60)} min` : h < 48 ? `${Math.round(h * 10) / 10}h` : `${Math.round(h / 24 * 10) / 10}d`;
+const dys = (d) => d == null ? "never" : d < 1 ? `${Math.round(d * 24)}h` : `${Math.round(d)}d`;
+const usd = (x) => x == null ? "<small>none</small>" : `$${Number(x).toFixed(2)}`;
+const pct = (n, of) => of ? `${Math.round(100 * n / of)}%` : "<small>none</small>";
+function quietCell(qt, shipped) {
+  const parts = [`check ${dys(qt.check_stop_days)}`, `gate ${dys(qt.gate_stop_days)}`, `rollback ${dys(qt.rollback_days)}`];
+  const calm = (qt.check_stop_days == null || qt.check_stop_days >= 14) && (qt.rollback_days == null || qt.rollback_days >= 14);
+  return `<span class="${calm && shipped ? "ok" : ""}" title="days since the last reviewer or test stop, gate stop, and rollback">${parts.join("<br>")}</span>`;
+}
+function modelsCell(m) {
+  const total = Object.values(m).reduce((a, b) => a + b, 0);
+  if (!total) return "<small>none</small>";
+  return Object.entries(m).sort((a, b) => b[1] - a[1]).map(([id, n]) => `${esc(D ? ml(id) : id)} ${Math.round(100 * n / total)}%`).join("<br>");
+}
+function healthRow(c) {
+  const stops = c.builds.stops, nstops = stops.gate + stops.reviewer + stops.tests + stops.other;
+  const waiting = c.decisions.waiting + c.builds.waiting_deploy + c.builds.waiting_confirm;
+  const decided = c.decisions.approved + c.decisions.declined;
+  return `<tr>
+    <td class="co">${esc(c.name)}${c.builds.in_flight ? ` <small>· ${c.builds.in_flight} building</small>` : ""}<br><small>${modelsCell(c.builds.models)}</small></td>
+    <td>${c.feedback.filed}</td>
+    <td>${c.feedback.open}${c.feedback.open ? `<br><small>oldest ${hrs(c.feedback.oldest_open_hours)}</small>` : ""}</td>
+    <td class="${waiting ? "warn" : ""}">${waiting}${waiting ? `<br><small>${c.decisions.waiting} to decide${c.decisions.waiting ? ` (oldest ${hrs(c.decisions.oldest_waiting_hours)})` : ""}<br>${c.builds.waiting_confirm} to confirm, ${c.builds.waiting_deploy} to deploy</small>` : ""}</td>
+    <td><b>${c.builds.shipped}</b>${c.builds.rolled_back ? `<br><small class="warn">${c.builds.rolled_back} rolled back</small>` : ""}${c.builds.cancelled ? `<br><small>${c.builds.cancelled} cancelled</small>` : ""}</td>
+    <td>${pct(c.floor.same_shift, c.floor.n)}${c.floor.n ? `<br><small>${c.floor.same_shift} of ${c.floor.n}</small>` : ""}</td>
+    <td>${hrs(c.floor.median_hours)}${c.floor.n > 1 ? `<br><small>p90 ${hrs(c.floor.p90_hours)}</small>` : ""}</td>
+    <td>${hrs(c.decisions.wait_median_hours)}${c.floor.deploy_wait_n ? `<br><small>then ${hrs(c.floor.deploy_wait_median_hours)} to deploy</small>` : ""}</td>
+    <td>${decided ? `${c.decisions.approved} approved<br><small>${c.decisions.edited} edited first · ${c.decisions.declined} declined</small>` : "<small>none</small>"}</td>
+    <td class="${nstops ? "warn" : ""}">${nstops}${nstops ? `<br><small>gate ${stops.gate} · reviewer ${stops.reviewer} · tests ${stops.tests}${stops.other ? ` · other ${stops.other}` : ""}</small>` : ""}${c.builds.fix_rounds || c.builds.overrides ? `<br><small>${c.builds.fix_rounds} fix round${c.builds.fix_rounds === 1 ? "" : "s"}${c.builds.overrides ? `, ${c.builds.overrides} overridden` : ""}</small>` : ""}</td>
+    <td>${usd(c.spend.window_usd)}${c.spend.per_shipped_usd != null ? `<br><small>${usd(c.spend.per_shipped_usd)} a change</small>` : ""}<br><small>${usd(c.spend.month_usd)} this month${c.spend.cap_usd ? ` of ${usd(c.spend.cap_usd)}` : ""}</small></td>
+    <td>${quietCell(c.quiet, c.builds.shipped)}</td>
+  </tr>`;
+}
+async function loadHealth() {
+  const days = document.getElementById("h-days").value;
+  const r = await fetch(`/api/admin/health?days=${days}`);
+  if (!r.ok) { document.getElementById("h-fleet").innerHTML = `<div class="sub fail">could not load loop health (${r.status})</div>`; return; }
+  const H = await r.json(); const f = H.fleet, st = f.builds.stops, nstops = st.gate + st.reviewer + st.tests + st.other;
+  const waiting = f.decisions.waiting + f.builds.waiting_deploy + f.builds.waiting_confirm;
+  document.getElementById("h-fleet").innerHTML = [
+    [f.feedback.filed, "filed", `${f.feedback.open} open now`],
+    [f.builds.shipped, "shipped", `${f.builds.rolled_back} rolled back`],
+    [pct(f.floor.same_shift, f.floor.n), "same shift", f.floor.n ? `${f.floor.same_shift} of ${f.floor.n} within ${H.same_shift_hours}h` : "nothing shipped yet"],
+    [hrs(f.floor.median_hours), "to the floor", f.floor.n > 1 ? `median · p90 ${hrs(f.floor.p90_hours)}` : "feedback to deploy"],
+    [hrs(f.decisions.wait_median_hours), "manager wait", f.floor.deploy_wait_n ? `to decide · then ${hrs(f.floor.deploy_wait_median_hours)} to deploy` : "proposal to decision"],
+    [waiting, "waiting on a manager", `${f.decisions.waiting} to decide, ${f.builds.waiting_confirm} to confirm, ${f.builds.waiting_deploy} to deploy`],
+    [nstops, "stops", `gate ${st.gate} · reviewer ${st.reviewer} · tests ${st.tests} · other ${st.other}`],
+    [usd(f.spend.window_usd), "AI spend", f.spend.per_shipped_usd != null ? `${usd(f.spend.per_shipped_usd)} a shipped change` : "in the window"],
+    [dys(f.quiet.check_stop_days), "since a check stop", `rollback ${dys(f.quiet.rollback_days)} · gate ${dys(f.quiet.gate_stop_days)}`],
+  ].map(([v, l, s]) => `<div class="kpi"><b>${v}</b><span>${l}</span><small>${s}</small></div>`).join("");
+  document.getElementById("h-table").innerHTML = `<tr><th>Company</th><th>Filed</th><th>Open</th><th>Waiting</th><th>Shipped</th><th>Same shift</th><th>To floor</th><th>Manager wait</th><th>Decisions</th><th>Stops</th><th>AI spend</th><th>Quiet</th></tr>`
+    + H.companies.map(healthRow).join("") + (H.companies.length > 1 ? healthRow({ ...f, name: "Fleet" }) : "");
+}
 async function load() {
   const r = await fetch("/api/admin/overview");
   if (r.status === 401) { location.href = "/login?next=/admin"; return; }
   if (r.status === 403) { document.body.innerHTML = "<p style='padding:20px'>Admin login required.</p>"; return; }
   D = await r.json();
+  loadHealth().catch((e) => console.error("loop health:", e));
   const fable = D.models.find(m => m.id === "claude-fable-5-1") ? "claude-fable-5-1" : D.defaults.propose;
   document.getElementById("c-model").innerHTML = D.models.filter(m => m.agent !== false || m.id === fable).map(m => `<option value="${m.id}" ${m.id === fable ? "selected" : ""}>guide by ${m.label} ($${m.in}/$${m.out} per M tokens)</option>`).join("");
   document.getElementById("top").textContent = `${D.companies.length} compan${D.companies.length === 1 ? "y" : "ies"} · AI spend this month $${D.totalSpend.toFixed(2)}${D.monthlyCap ? ` of $${D.monthlyCap.toFixed(2)} cap` : " (no instance-wide cap)"} · defaults: propose ${ml(D.defaults.propose)}, build ${ml(D.defaults.build)}, review ${ml(D.defaults.review)}`;
@@ -95,7 +170,7 @@ async function load() {
   </div>`).join("") || '<div class="sub">No modules in the repo library.</div>';
   document.getElementById("companies").innerHTML = D.companies.map(c => `<div class="card">
     <h2>${esc(c.name)} <small>/c/${c.slug}/ · since ${new Date(c.created_at).toLocaleDateString()}</small></h2>
-    <div class="links"><a href="/c/${c.slug}/">Improvement board</a><a href="/c/${c.slug}/agents">Agent settings and docs</a><a href="/api/c/${c.slug}/record/export" download title="The interaction record: everything said and decided, word for word, insert-only">Download the record</a>${c.modules.map(m => `<a href="/c/${c.slug}/m/${m.name}/">${esc(m.title)} (v${m.live_version})</a>`).join("")}</div>
+    <div class="links"><a href="/c/${c.slug}/">Improvement board</a><a href="/c/${c.slug}/agents">Agent settings and docs</a><a href="/c/${c.slug}/connections">Connections</a><a href="/api/c/${c.slug}/record/export" download title="The interaction record: everything said and decided, word for word, insert-only">Download the record</a>${c.modules.map(m => `<a href="/c/${c.slug}/m/${m.name}/">${esc(m.title)} (v${m.live_version})</a>`).join("")}</div>
     <div class="grid">
       <div class="kpi"><b>${c.feedback.open}</b><span>open feedback</span></div>
       <div class="kpi"><b>${c.feedback.total}</b><span>feedback total</span></div>

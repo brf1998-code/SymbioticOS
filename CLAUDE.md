@@ -389,6 +389,76 @@ One instance hosts many **companies**. Everything is scoped by company slug:
   until item 2b), and a proposal's rationale edits. What it feeds next:
   per-plant memory (lessons from adjusted and declined proposals), prompt and
   brief regression, a failure taxonomy, intake tuning, the pattern library.
+- **Connections, first push: spreadsheets and label printers** (2026-09-19,
+  `src/connections.js`, `public/connections.html` at `/c/<slug>/connections`
+  (manager), `public/assets/print-helper.js`, build order item 5, designed in
+  docs/MODULE-CREATION.md "Connections: the outside world"). The rule: the
+  platform owns every connection, the module only uses it. A module declares
+  what it needs in module.json `connections: { name: { kind, label, ... } }`
+  (the gate and `validateModule` refuse a kind the platform does not have, a
+  files connection without `table` and `key`, a printer whose
+  `labels/<name>.zpl` is missing); the platform keeps one row per declared
+  connection in `platform.connections` (settings, status, detail, an
+  encrypted `secrets` column ready for the ERP kind, key `SOS_CONNECTION_KEY`
+  else derived from SESSION_SECRET, never in the agent env), created at mount;
+  the module gets `ctx.connections.<name>` with a small fixed surface. `files`:
+  the manager uploads a csv or xlsx on the connections page, the platform
+  parses it (attachments.js parsers, every row), matches headers to the
+  module table's columns (loosely, plus the module's aliases), previews with
+  typed sample rows and problems, then loads in ONE transaction on the live
+  schema (delete the matching keys, insert every row; any unreadable cell
+  stops the whole load); `platform.connection_uploads` keeps the parsed rows
+  until loaded. Surface: `status()`. `printer`: Zebra Browser Print on the
+  device. The module keeps `labels/<name>.zpl` with `{{field}}` placeholders
+  and calls `print(req, name, data)`; the platform renders (ZPL control
+  characters stripped from data), queues a row in `platform.print_jobs` for
+  the DEVICE that asked (`sos_device` cookie, minted by
+  `connections.deviceCookie` on module pages, the connections page and the
+  print API), and the print helper the platform injects into the pages of a
+  module with a printer connection polls `GET /api/c/<slug>/print/next`
+  every 2 s while visible, asks once which printer this device uses
+  (localStorage), POSTs the ZPL to Browser Print on localhost:9100 (9101
+  https), reports `.../print/jobs/<id>/done|failed`. Unclaimed jobs expire
+  after 10 min; jobs a device took and never reported fail. The page policy
+  of such a module adds `localhost:9100/9101` and `/api/c/<slug>/print/` to
+  connect-src and nothing else. `preview(name, data)` renders a PNG through
+  Labelary (`SOS_LABELARY_URL`, https://api.labelary.com; null when
+  unreachable, as in the sandbox); the connections page shows the test label
+  and the module can show its own. Test label and printer settings (size and
+  dpi, preview only) live on the connections page; the manager pairs each
+  printing device there or on the first label. Record kinds:
+  connection_loaded, connection_settings, connection_tested, label_printed,
+  label_failed. `paperline` declares `stock` (files into `inventory`, key
+  item+location) and `labels` (printer, `labels/traveler.zpl`, printed from
+  station 1). Backup carries the three tables; company delete removes them.
+  Unit: `node scripts/test-connections.js`. Not yet: the ERP kind (SAP first,
+  read-only named queries; NEWP's reach unknown, so the query must be able to
+  run through a plant-side bridge later), the generated setup walkthrough
+  (the page carries a fixed three-step text per kind for now), uploads from a
+  module page (the module links to the connections page instead), the
+  scanner kind (needs nothing).
+- **Loop health** (2026-09-19, `src/health.js`, `GET /api/admin/health?days=`,
+  the top card on /admin, build order item 4). The platform's own numbers,
+  per company and across the fleet, for Brendan (the manager's board shows
+  none of this, by design). A window (7, 30, 90, 365 days, or 0 for all
+  time; default 30) over: feedback filed; proposals approved (and how many
+  the manager edited first), declined, waiting; builds started, shipped,
+  rolled back, cancelled; stops by kind (gate = the platform's own checks,
+  reviewer = the cross-check, tests = smoke and visual, other), fix rounds,
+  overrides; time to floor (feedback filed to deployed, the oldest item of a
+  batch; median, p90, and the same-shift share, within 8 hours); manager
+  wait (proposal drafted to decided; then ready to deployed); AI spend in
+  the window, per shipped change, this month against the cap; build models;
+  intakes. As of now, not windowed: open feedback and its oldest, what is
+  waiting on a manager (decisions, requirement confirmations, deploys), in
+  flight, and the quiet stretch (days since the last reviewer or test stop,
+  gate stop, rollback; a long one is the signal to try a cheaper build
+  model, per the 2026-09-18 decision). Sources: the primary tables and the
+  run log's timestamped lines (`deploy`, `rollback`, `error`, the ready line
+  of each lane), so the whole history counts; the record adds decision times
+  and edits, and a decision before the record uses the run's start.
+  `compute()` is pure and unit tested (`scripts/test-health.js`, synthetic
+  rows, fixed clock); `forAdmin()` is the one call the page makes.
 - **Board band** (2026-09-19): one title row and one quiet module line
   (`.band`, `.modstrip`, `.modcard`), 70px on a desktop against roughly a
   third of the screen before. Module names are the filter toggles, versions
@@ -743,3 +813,10 @@ Passwords live only in Railway; never commit them.
   `registry.moduleServices`; never `require` it inside the module. Run
   `node scripts/test-modulegate.js` before pushing a change to `modules/` or
   to the gate.
+- Outside systems are connections (`src/connections.js`): declared in
+  module.json, set up on the connections page, lent as
+  `ctx.connections.<name>`. A new kind gets a surface there, its settings and
+  secrets in `platform.connections` (secrets encrypted), a page policy
+  addition only if a device-side program must be reached, and gate rules for
+  its declaration. Never let module code hold a credential, a printer address
+  or a file the platform did not hand it.

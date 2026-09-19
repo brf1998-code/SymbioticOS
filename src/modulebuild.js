@@ -230,6 +230,7 @@ function validateModule(dir, slug) {
     for (const pg of pages) if (!fs.existsSync(path.join(dir, pg.file))) errors.push(`module.json points at ${pg.file} for ${pg.route}, but that file does not exist`);
     if (!fs.existsSync(path.join(dir, manifest.entry || "routes.js"))) errors.push(`the entry file ${manifest.entry || "routes.js"} is missing`);
     if (manifest.smoke && !Array.isArray(manifest.smoke)) errors.push('module.json "smoke" must be a list of paths');
+    for (const e of require("./connections").declared(manifest).errors) errors.push(`module.json connections: ${e}`);
   }
   const migDir = path.join(dir, "migrations");
   const migs = fs.existsSync(migDir) ? fs.readdirSync(migDir).filter((f) => f.endsWith(".sql")).sort() : [];
@@ -250,7 +251,7 @@ function validateModule(dir, slug) {
       if (typeof make !== "function") errors.push("routes.js must export a function (ctx) => router");
       else {
         const express = require("express");
-        const r = make({ express, db: async () => ({ rows: [] }), requireManager: (req, res, next) => next(), peer: () => null, agentDoc: async () => "", ai: { models: [], modelFor: async () => null, chat: async () => ({ text: "" }) }, manifest: manifest || {}, moduleName: slug, company: "check" });
+        const r = make({ express, db: async () => ({ rows: [] }), requireManager: (req, res, next) => next(), peer: () => null, agentDoc: async () => "", ai: { models: [], modelFor: async () => null, chat: async () => ({ text: "" }) }, manifest: manifest || {}, moduleName: slug, company: "check", connections: require("./connections").stubs(manifest || {}) });
         if (!r || typeof r !== "function") errors.push("routes.js did not return an express router");
       }
     } catch (e) { errors.push(`routes.js fails to load: ${e.message}`); }

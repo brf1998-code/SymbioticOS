@@ -2,9 +2,26 @@
 // ctx.db is a query function pinned to this module's schema.
 // ctx.requireManager gates shift controls and settings.
 module.exports = function makeRouter(ctx) {
-  const { express, db, requireManager } = ctx;
+  const { express, db, requireManager, connections } = ctx;
   const router = express.Router();
   router.use(express.json());
+
+  // A traveler label, printed on the label printer this device is paired
+  // with (the platform's connection "labels": ctx.connections.labels).
+  const labelData = (t) => ({ job_num: t.job_num, fold_type: t.fold_type, color: t.color, clip_pos: t.clip_pos, released: new Date(t.released_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) });
+  router.post("/api/travelers/:id/print", async (req, res) => {
+    const t = (await db("SELECT * FROM travelers WHERE id=$1", [req.params.id])).rows[0];
+    if (!t) return res.status(404).json({ error: "no such traveler" });
+    try { res.json(await connections.labels.print(req, "traveler", labelData(t))); }
+    catch (e) { res.status(400).json({ error: e.message }); }
+  });
+  router.get("/api/travelers/:id/label.png", async (req, res) => {
+    const t = (await db("SELECT * FROM travelers WHERE id=$1", [req.params.id])).rows[0];
+    if (!t) return res.status(404).json({ error: "no such traveler" });
+    const p = await connections.labels.preview("traveler", labelData(t));
+    if (!p.png) return res.status(503).json({ error: "no preview right now", zpl: p.zpl });
+    res.set("Cache-Control", "no-cache").type("png").send(p.png);
+  });
 
   const COLORS = ["white", "blue", "yellow"];
   const FOLDS = ["dart", "glider"];

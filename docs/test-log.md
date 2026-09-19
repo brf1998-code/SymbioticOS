@@ -33,6 +33,16 @@ S0-84 | 2026-09-19 | PASS | sandbox: decline reason, close, run_fixed with findi
 S0-85 | 2026-09-19 | PASS | sandbox: UPDATE and DELETE on platform.record refused by the trigger; deleting acme removed acme's rows only | pilot | n/a
 S0-86 | 2026-09-19 | PASS | sandbox: export downloaded as an attachment with the company's rows; backup carried the record table | pilot | n/a
 S0-87 | 2026-09-19 | PASS | headless browser at 1280x800: band 70px (9% of the screen), columns start at 205px; at 390x844 the band is 225px, chips wrap, no sideways scroll, no console errors | pilot | n/a
+S0-88 | 2026-09-19 | PASS | loop health unit cases 37 of 37 | pilot | n/a
+S0-89 | 2026-09-19 | PASS | sandbox, fake agent, fresh database: 19 of 19 checks on the health answer after the driven loops; a run at the deploy gate showed as waiting first; acme kept its own row and the fleet added up | pilot | n/a
+S0-90 | 2026-09-19 | PASS | headless browser at 1280: 9 fleet tiles, 4 table rows (demo, acme, fleet, header), table 1174px in a 1174px card, window switch to 7 days reloaded, no script errors (the one console line is the missing favicon) | pilot | n/a
+S0-91 | 2026-09-19 | PASS | connections unit cases 25 of 25 | pilot | n/a
+S0-92 | 2026-09-19 | PASS | sandbox, fresh database, 44 of 44 checks end to end: preview by name and alias, blockers (bad number with the row named, missing key column, a photo), load of 4 rows replaced 3 and added 1 and left the rest, connected with file and count, on the record, parsed rows dropped after the load | pilot | n/a
+S0-93 | 2026-09-19 | PASS | headless browser with a simulated Browser Print on localhost:9100: station 1 printed a traveler, the picker listed ZT411 once, the ZPL reached the write endpoint with the barcode, toast named the printer, job done on ZT411, second label printed without asking; connections page showed connected, printers seen, labels go to ZT411; test label printed from the page; no script errors (15 of 15) | pilot | n/a
+S0-94 | 2026-09-19 | PASS | same, a browser context where localhost:9100 refuses: toast said Browser Print is not running on this device with what to do, the job failed with that reason | pilot | n/a
+S0-95 | 2026-09-19 | PASS | sandbox: settings saved and bounded (dpmm 99 fell back to 8); the preview endpoint answered 503 with the ZPL because the sandbox cannot reach the renderer (a live check on Railway is still to do) | pilot | live check open |
+S0-96 | 2026-09-19 | PASS | sandbox: device B saw nothing of device A's job and could not finish it; a test label from device B went to B | pilot | n/a
+S3-11 | 2026-09-19 | PASS | gate unit: erp kind refused, files without key refused, printer without labels/tag.zpl refused, all three pass once complete; station page policy carries localhost:9100 and /api/c/demo/print/ and not the board; the kpis page policy carries neither | pilot | n/a
 
 ## Stage 1
 

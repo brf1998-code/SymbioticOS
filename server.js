@@ -14,6 +14,7 @@ const pipeline = require("./src/pipeline");
 const intake = require("./src/intake");
 const checks = require("./src/checks");
 const record = require("./src/record");
+const connections = require("./src/connections");
 
 const PORT = process.env.PORT || 3000;
 const page = (name) => path.join(__dirname, "public", name);
@@ -21,6 +22,7 @@ const page = (name) => path.join(__dirname, "public", name);
 async function main() {
   await initPlatformSchema();
   await record.init();   // the interaction record: insert-only, what everyone said and decided
+  await connections.init();   // what modules reach outside through: spreadsheets, label printers (src/connections.js)
 
   const app = express();
   app.disable("x-powered-by");
@@ -40,6 +42,7 @@ async function main() {
 
   app.use(auth.middleware);    // everything below needs a floor, manager, or admin session
   app.use(auth.companyGuard);  // and a floor or manager session reaches its own company only
+  app.use(connections.deviceCookie);   // a random device id per browser, so a print job goes back to the screen that asked
 
   // Landing: admins go to the admin view; everyone else to their company board
   // (the only company, or a chooser when there are several).
@@ -57,6 +60,7 @@ async function main() {
   app.get("/c/:slug/agents", (_req, res) => res.sendFile(page("agents.html")));
   app.get("/c/:slug/diagrams/:module", (_req, res) => res.sendFile(page("diagrams.html")));
   app.get("/c/:slug/checks", auth.requireManager, (_req, res) => res.sendFile(page("checks.html")));
+  app.get("/c/:slug/connections", auth.requireManager, (_req, res) => res.sendFile(page("connections.html")));
   app.get("/admin", auth.requireAdmin, (_req, res) => res.sendFile(page("admin.html")));
 
   app.use(intake.router);    // /api/c/:slug/intakes, /api/intakes/*, /api/attachments/* (before platformApi: the attach route parses a bigger body)

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Symbiotic OS · Connections</title>
+<style>
+  :root { --ink:#1c242e; --steel:#51606f; --line:#d5dbe3; --fog:#f2f4f7; --navy:#1f3a5f; --amber:#c2620a; --green:#2e7d4f; --red:#b3261e; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:system-ui,sans-serif; background:var(--fog); color:var(--ink); padding:0 0 60px; }
+  .band { background:var(--navy); color:#fff; padding:12px 22px; }
+  .band h1 { font-size:20px; } .band a { color:#fff; } .band .sub { font-size:12.5px; opacity:.85; margin-top:4px; }
+  .wrap { max-width:1000px; margin:0 auto; padding:14px 22px 0; }
+  .intro { color:var(--steel); font-size:13px; line-height:1.5; margin-bottom:12px; }
+  h2 { font-size:17px; margin:16px 0 6px; } h2 small { font-weight:400; color:var(--steel); font-size:12px; margin-left:6px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px; margin:10px 0; font-size:13px; line-height:1.5; }
+  .head { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .head b { font-size:15px; }
+  .pill { display:inline-block; font-size:10.5px; font-weight:700; border-radius:10px; padding:2px 8px; color:#fff; background:var(--steel); text-transform:uppercase; letter-spacing:.04em; }
+  .pill.connected { background:var(--green); } .pill.error { background:var(--red); } .pill.not_connected { background:var(--amber); }
+  .kind { font-size:11px; color:var(--steel); text-transform:uppercase; letter-spacing:.05em; }
+  .sub { color:var(--steel); font-size:12.5px; }
+  .steps { margin:8px 0 0 18px; } .steps li { margin:3px 0; }
+  button { border:none; border-radius:7px; padding:8px 12px; font-size:12.5px; font-weight:700; cursor:pointer; font-family:inherit; margin:8px 6px 0 0; min-height:36px; }
+  .go { background:var(--green); color:#fff; } .quiet { background:#e5e9ee; color:var(--ink); } .primary { background:var(--navy); color:#fff; }
+  input, select { font-family:inherit; font-size:13px; border:1px solid var(--line); border-radius:7px; padding:7px; }
+  table { border-collapse:collapse; font-size:12px; margin-top:8px; max-width:100%; }
+  th, td { border-bottom:1px solid var(--line); padding:4px 8px; text-align:left; vertical-align:top; }
+  th { font-size:11px; color:var(--steel); text-transform:uppercase; letter-spacing:.04em; }
+  .tw { overflow-x:auto; }
+  .ok { color:var(--green); font-weight:700; } .bad { color:var(--red); font-weight:700; } .warn { color:var(--amber); font-weight:700; }
+  .box { background:var(--fog); border-radius:8px; padding:10px; margin-top:8px; }
+  .preview img { border:1px solid var(--line); background:#fff; max-width:100%; margin-top:6px; }
+  code { background:var(--fog); padding:1px 5px; border-radius:4px; font-size:12px; }
+  .empty { color:var(--steel); font-size:13px; padding:20px 0; }
+</style>
+</head>
+<body>
+  <div class="band"><h1>Connections</h1><div class="sub" id="sub">The outside world: spreadsheets, label printers. The platform owns every connection; a module only uses it.</div></div>
+  <div class="wrap">
+    <div class="intro">Each module says what it needs from outside in its own words. Set it up here once, test it with one button, and the module uses it from then on. Nothing on this page is written by the agents that build modules.</div>
+    <div id="list"></div>
+  </div>
+<script>
+const SLUG = location.pathname.split("/")[2];
+let D = null;
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
+function when(t) { return t ? new Date(t).toLocaleString() : "never"; }
+async function api(p, body) {
+  const r = await fetch(`/api/c/${SLUG}${p}`, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (r.status === 401 || r.status === 403) { location.href = "/login?next=" + encodeURIComponent(location.pathname); throw new Error("login"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+  return j;
+}
+async function load() {
+  D = await api("/connections");
+  document.querySelector(".band h1").textContent = `Connections`;
+  document.getElementById("sub").textContent = `${SLUG}: ` + (D.modules.length ? `${D.modules.reduce((n, m) => n + m.connections.length, 0)} connection(s) across ${D.modules.length} module(s)` : "no module on this floor declares a connection yet");
+  const list = document.getElementById("list");
+  if (!D.modules.length) { list.innerHTML = `<div class="empty">No module on this floor needs anything from outside yet. When one does (a spreadsheet to load, a label printer), it shows up here with what to set up. <a href="/c/${SLUG}/">Back to the board</a></div>`; return; }
+  list.innerHTML = D.modules.map(m => `<h2>${esc(m.title)} <small>v${m.version} · <a href="/c/${SLUG}/m/${m.module}/">open</a></small></h2>` + m.connections.map(c => card(m, c)).join("")).join("");
+}
+function card(m, c) {
+  const id = `${m.module}-${c.name}`;
+  const status = `<span class="pill ${c.status}">${c.status === "connected" ? "connected" : c.status === "error" ? "trouble" : "not connected yet"}</span>`;
+  let body = "";
+  if (c.kind === "files") {
+    body = `
+      <div class="sub" style="margin-top:6px">Loads into the module's <code>${esc(c.table)}</code> table. Rows are matched on <code>${esc(c.key.join(", "))}</code>: a row with the same ${c.key.length > 1 ? "values" : "value"} is replaced, new ones are added, nothing is deleted.
+        ${c.detail.last_loaded_at ? `Last loaded ${when(c.detail.last_loaded_at)}: ${esc(c.detail.last_file)}, ${c.detail.last_rows} rows.` : "Nothing loaded yet."}</div>
+      <div class="sub" style="margin-top:6px"><b>Columns the spreadsheet can carry:</b> ${c.columns.map(x => `<code>${esc(x.name)}</code>${x.required ? " (needed)" : ""}${x.aliases.length ? ` <span class="sub">or ${x.aliases.map(esc).join(", ")}</span>` : ""}`).join(", ")}. Header names are matched loosely (case, spaces and punctuation do not matter).</div>
+      <div style="margin-top:8px"><input type="file" id="f-${id}" accept=".csv,.xlsx,.tsv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"> <button class="primary" onclick="upload('${m.module}','${c.name}')">Read the spreadsheet</button></div>
+      <div id="p-${id}"></div>
+      ${c.uploads.length ? `<div class="sub" style="margin-top:8px"><b>Loaded before:</b> ${c.uploads.map(u => `${esc(u.filename)} (${u.loaded_rows} rows, ${when(u.loaded_at)})`).join("; ")}</div>` : ""}`;
+  } else if (c.kind === "printer") {
+    const s = c.settings;
+    body = `
+      <div class="sub" style="margin-top:6px">Labels this module prints: ${c.templates.map(t => `<code>${esc(t)}</code>`).join(", ")}.
+        ${c.detail.last_printed_at ? `Last printed ${when(c.detail.last_printed_at)} on ${esc(c.detail.last_printer || "a printer")}.` : "Nothing printed yet."}
+        ${c.detail.printers && c.detail.printers.length ? `Printers seen: ${c.detail.printers.map(esc).join(", ")}.` : ""}
+        ${c.last_error ? `<span class="bad">Last trouble: ${esc(c.last_error)}</span>` : ""}</div>
+      <div class="box">
+        <b>On this device:</b> <span id="dev-${id}"></span>
+        <button class="quiet" onclick="choose('${id}')">Choose the printer for this device</button>
+        <button class="go" onclick="testLabel('${m.module}','${c.name}')">Print a test label here</button>
+        <div class="sub">Label size <input type="number" step="0.5" min="0.5" id="w-${id}" value="${s.width_in}" style="width:64px"> by <input type="number" step="0.5" min="0.5" id="h-${id}" value="${s.height_in}" style="width:64px"> inches,
+          <select id="d-${id}"><option value="6" ${s.dpmm === 6 ? "selected" : ""}>152 dpi</option><option value="8" ${s.dpmm === 8 ? "selected" : ""}>203 dpi</option><option value="12" ${s.dpmm === 12 ? "selected" : ""}>300 dpi</option><option value="24" ${s.dpmm === 24 ? "selected" : ""}>600 dpi</option></select>
+          <button class="quiet" style="margin-top:0;min-height:30px" onclick="saveSettings('${m.module}','${c.name}')">Save</button> <span class="sub">(only the preview uses these; the printer prints what the label says)</span></div>
+        <div class="preview"><a href="#" onclick="return showPreview('${m.module}','${c.name}')">Show what the test label looks like</a><div id="pv-${id}"></div></div>
+      </div>
+      <ol class="steps">
+        <li>On each PC or tablet that prints, install <b>Zebra Browser Print</b> (free, from zebra.com, search "Browser Print") and open it. The first time this site asks it for a printer, Browser Print asks you to allow it: say yes.</li>
+        <li>Plug the printer into that device (USB) or add it in Browser Print (network).</li>
+        <li>Open this page or any screen of the module on that device, choose the printer, print a test label.</li>
+      </ol>
+      ${c.jobs.length ? `<div class="tw"><table><tr><th>When</th><th>Label</th><th>Device</th><th>Printer</th><th>Result</th></tr>${c.jobs.map(j => `<tr><td>${when(j.created_at)}</td><td>${esc(j.template)}</td><td>${esc(j.device || "")}</td><td>${esc(j.printer || "")}</td><td class="${j.status === "done" ? "ok" : j.status === "failed" ? "bad" : j.status === "queued" || j.status === "sent" ? "warn" : ""}">${esc(j.status)}${j.error ? `: ${esc(j.error)}` : ""}</td></tr>`).join("")}</table></div>` : ""}`;
+  }
+  return `<div class="card" id="c-${id}">
+    <div class="head"><b>${esc(c.label)}</b> ${status} <span class="kind">${c.kind === "files" ? "spreadsheet" : "label printer"}</span></div>
+    <div class="sub">${esc(c.text.what)} <b>What a person does:</b> ${esc(c.text.person)}</div>
+    ${body}
+  </div>`;
+}
+// ---- files ----
+function readFile(file) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.onerror = () => rej(new Error("could not read the file")); r.readAsDataURL(file); });
+}
+async function upload(mod, name) {
+  const id = `${mod}-${name}`; const f = document.getElementById(`f-${id}`).files[0]; const out = document.getElementById(`p-${id}`);
+  if (!f) { out.innerHTML = `<div class="box bad">Pick a csv or xlsx file first.</div>`; return; }
+  out.innerHTML = `<div class="box">Reading ${esc(f.name)}...</div>`;
+  try {
+    const p = await api(`/connections/${mod}/${name}/upload`, { filename: f.name, mime: f.type, data: await readFile(f) });
+    const cols = p.mapping.map(x => x.column);
+    out.innerHTML = `<div class="box">
+      <b>${esc(p.filename)}</b>: ${p.row_count} rows. ${p.mapping.length} column${p.mapping.length === 1 ? "" : "s"} matched${p.unmatched.length ? `; ignored: ${p.unmatched.map(esc).join(", ")}` : ""}${p.missing.length ? `; not in the file: ${p.missing.map(x => esc(x.column) + (x.required ? " (needed)" : "")).join(", ")}` : ""}.
+      ${p.blockers.length ? `<div class="bad" style="margin-top:6px">Cannot load: ${p.blockers.map(esc).join("; ")}.</div>` : ""}
+      ${p.problems.length ? `<div class="sub" style="margin-top:4px">${p.problems.slice(0, 8).map(x => `row ${x.row}, ${esc(x.column)}: ${esc(x.problem)}`).join("<br>")}</div>` : ""}
+      <div class="tw"><table><tr>${p.mapping.map(x => `<th>${esc(x.column)}<br><span style="text-transform:none;font-weight:400">from "${esc(x.header)}"</span></th>`).join("")}</tr>
+        ${p.sample.map(r => `<tr>${cols.map(c => `<td>${esc(r[c] == null ? "" : r[c])}</td>`).join("")}</tr>`).join("")}</table></div>
+      ${p.row_count > p.sample.length ? `<div class="sub">first ${p.sample.length} of ${p.row_count} rows</div>` : ""}
+      ${p.can_load ? `<button class="go" onclick="loadRows('${mod}','${name}',${p.upload_id})">Load ${p.row_count} rows into ${esc(p.table)}</button>` : ""}
+    </div>`;
+  } catch (e) { out.innerHTML = `<div class="box bad">${esc(e.message)}</div>`; }
+}
+async function loadRows(mod, name, uploadId) {
+  const out = document.getElementById(`p-${mod}-${name}`);
+  try { const r = await api(`/connections/${mod}/${name}/load`, { upload_id: uploadId }); out.innerHTML = `<div class="box ok">Loaded ${r.loaded} rows into ${esc(r.table)}.</div>`; setTimeout(load, 1200); }
+  catch (e) { out.innerHTML += `<div class="box bad">${esc(e.message)}</div>`; }
+}
+// ---- printer ----
+function deviceText() {
+  const p = window.sosPrint && window.sosPrint.current();
+  document.querySelectorAll("[id^=dev-]").forEach(el => { el.textContent = p ? `labels go to ${p.name || p.uid}` : "no printer chosen yet"; });
+}
+async function choose() { if (!window.sosPrint) return; await window.sosPrint.choose(); deviceText(); }
+async function testLabel(mod, name) {
+  try { await api(`/connections/${mod}/${name}/test`, {}); }
+  catch (e) { alert(e.message); }
+  setTimeout(load, 6000);
+}
+async function saveSettings(mod, name) {
+  const id = `${mod}-${name}`;
+  try { await api(`/connections/${mod}/${name}/settings`, { width_in: Number(document.getElementById(`w-${id}`).value), height_in: Number(document.getElementById(`h-${id}`).value), dpmm: Number(document.getElementById(`d-${id}`).value) }); load(); }
+  catch (e) { alert(e.message); }
+}
+function showPreview(mod, name) {
+  const el = document.getElementById(`pv-${mod}-${name}`);
+  el.innerHTML = `<img src="/api/c/${SLUG}/connections/${mod}/${name}/preview.png?t=${Date.now()}" alt="test label" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'sub',textContent:'The label renderer could not be reached from the platform; printing still works.'}))">`;
+  return false;
+}
+load().then(deviceText).catch(e => { document.getElementById("list").innerHTML = `<div class="empty bad">${esc(e.message)}</div>`; });
+</script>
+<script src="/assets/print-helper.js"></script>
+<script src="/assets/feedback-widget.js" data-module="platform"></script>
+</body>
+</html>

@@ -277,12 +277,19 @@ function checkLayout(files) {
     const entry = String(manifest.entry || "routes.js");
     const norm = path.posix.normalize(entry);
     if (!/^[\w./-]+\.js$/.test(entry) || norm.startsWith("..") || path.posix.isAbsolute(norm)) add("layout-entry", "module.json", `names "${entry}" as its entry`, "the entry is a .js file inside the module");
+    // connections: declared by kind the platform supports, each with what
+    // that kind needs; a printer's labels are files in labels/
+    const decl = require("./connections").declared(manifest);
+    for (const e of decl.errors) add("layout-connections", "module.json", e, "a module declares what it needs from outside in module.json and reaches it only through ctx.connections");
+    for (const [name, d] of Object.entries(decl.connections)) {
+      if (d.kind === "printer") for (const t of d.templates) if (files[`labels/${t}.zpl`] == null) add("layout-connections", "module.json", `connection "${name}" names a label "${t}" but labels/${t}.zpl is not in the module`, "every label a printer connection names is a file in labels/");
+    }
   }
   return found;
 }
 
 // ---- lane rules ----------------------------------------------------------------------
-const UI_MAY_CHANGE = (rel) => rel.startsWith("pages/") || rel === "tour.json" || rel === "reference.md";
+const UI_MAY_CHANGE = (rel) => rel.startsWith("pages/") || rel.startsWith("labels/") || rel === "tour.json" || rel === "reference.md";
 function manifestCore(text) {
   try {
     const m = JSON.parse(text || "{}");
@@ -310,7 +317,7 @@ function checkLane(files, fromFiles, lane) {
     }
     if (lane !== "ui" || UI_MAY_CHANGE(rel)) continue;
     if (rel === "module.json" && before != null && after != null && manifestCore(before) === manifestCore(after)) continue;   // labels, title, description only
-    found.push({ rule: "lane-ui-file", file: rel, label: describe(rel), line: 0, what: `was ${before == null ? "added" : after == null ? "removed" : "changed"}`, why: "this was approved as a look-and-feel change, which may only touch the screens in pages/", evidence: "" });
+    found.push({ rule: "lane-ui-file", file: rel, label: describe(rel), line: 0, what: `was ${before == null ? "added" : after == null ? "removed" : "changed"}`, why: "this was approved as a look-and-feel change, which may only touch the screens in pages/ and the labels in labels/", evidence: "" });
   }
   return found;
 }

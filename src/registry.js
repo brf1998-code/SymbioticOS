@@ -132,8 +132,11 @@ function screenFor(manifest, pagePath) {
 
 // The widget tag carries the company, version and mount so the page can notice a
 // deploy and reload itself, and flag itself when it is the staged preview.
-function widgetInject(html, company, mod, version, mount) {
-  const tag = `<script src="/assets/feedback-widget.js" data-company="${company}" data-module="${mod}" data-version="${version}" data-mount="${mount}"></script>`;
+function widgetInject(html, company, mod, version, mount, manifest) {
+  let tag = `<script src="/assets/feedback-widget.js" data-company="${company}" data-module="${mod}" data-version="${version}" data-mount="${mount}"></script>`;
+  // a module with a printer connection gets the platform's print helper: it
+  // carries queued labels from this device to the printer chosen on it
+  if (hasPrinter(manifest)) tag += `\n<script src="/assets/print-helper.js" data-company="${company}" data-module="${mod}"></script>`;
   // tab and home-screen icon: the company's brand icon when it has one
   const icon = `<link rel="icon" href="/api/c/${company}/icon"><link rel="apple-touch-icon" href="/api/c/${company}/icon">`;
   html = html.includes("</head>") ? html.replace("</head>", `${icon}\n</head>`) : icon + html;
@@ -150,7 +153,7 @@ function buildRouter(company, mod, version, schema) {
   for (const { route, file } of pageEntries(manifest)) {
     router.get(route, (req, res) => {
       const html = fs.readFileSync(path.join(dir, file), "utf8");
-      res.set("Cache-Control", "no-cache").type("html").send(widgetInject(html, company, mod, version, mount));
+      res.set("Cache-Control", "no-cache").type("html").send(widgetInject(html, company, mod, version, mount, manifest));
     });
   }
 
@@ -160,8 +163,12 @@ function buildRouter(company, mod, version, schema) {
   const makeRouter = require(entry);
   const requireManager = (req, res, next) =>
     ["manager", "admin"].includes(req.sosRole) ? next() : res.status(403).json({ error: "manager login required" });
-  router.use(makeRouter({ express, db: scopedDb(schema), moduleName: mod, company, requireManager, ...moduleServices(company, mod, manifest) }));
+  router.use(makeRouter({ express, db: scopedDb(schema), moduleName: mod, company, requireManager, ...moduleServices(company, mod, manifest, version) }));
+  router.manifest = manifest;
   return router;
+}
+function hasPrinter(manifest) {
+  return Object.values((manifest && manifest.connections) || {}).some((c) => c && c.kind === "printer");
 }
 
 // What the platform lends a module beyond its own tables:
@@ -173,10 +180,14 @@ function buildRouter(company, mod, version, schema) {
 //   ai.chat(...)    a plain chat call through the platform's model runner,
 //                   under the monthly cap, cost recorded against the company
 //   ai.models / ai.modelFor(role)
-function moduleServices(company, mod, manifest) {
+//   connections.<name>  the surface of each connection module.json declares
+//                   (src/connections.js): files -> status(); printer ->
+//                   print(req, template, data), preview(template, data), status()
+function moduleServices(company, mod, manifest, version) {
   const agent = require("./agent");
   return {
     manifest,
+    connections: require("./connections").surfaces(company, mod, version, manifest),
     peer(name) {
       const entry = mounts.get(key(company, name));
       if (!entry || !entry.live) return null;
@@ -213,6 +224,8 @@ async function mountLive(company, mod, version) {
   const entry = mounts.get(key(company, mod)) || {};
   entry.live = buildRouter(company, mod, version, liveSchema(company, mod));
   mounts.set(key(company, mod), entry);
+  // one platform.connections row per declared connection, kept across versions
+  await require("./connections").ensureRows(company, mod, readManifest(company, mod, version)).catch((e) => console.error(`[connections] ${company}/${mod}:`, e.message));
 }
 
 async function mountStaged(company, mod, version) {
@@ -572,6 +585,12 @@ function modulePagePolicy(req, company, mod) {
   const at = (p) => (safeHost ? `${safeHost}${p}` : "'self'");
   const own = [`/c/${company}/m/${mod}/`, `/c/${company}/staging/m/${mod}/`];
   const connect = [...own, "/api/feedback", `/api/c/${company}/modules/${mod}/`].map(at);
+  // a module with a printer connection: the platform's print helper on the
+  // page talks to Zebra Browser Print on the device (localhost only) and to
+  // the platform's print queue for this company; nothing else widens
+  const entry = mounts.get(key(company, mod));
+  const manifest = entry && ((entry.live && entry.live.manifest) || (entry.staged && entry.staged.manifest));
+  if (hasPrinter(manifest)) connect.push(at(`/api/c/${company}/print/`), "http://localhost:9100", "https://localhost:9101", "http://127.0.0.1:9100");
   return [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline'",

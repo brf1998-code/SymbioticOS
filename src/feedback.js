@@ -17,10 +17,12 @@ const backup = require("./backup");
 const migrate = require("./migrate");
 const intake = require("./intake");
 const { record, actor } = require("./record");
+const health = require("./health");
+const connections = require("./connections");
 
 const router = express.Router();
 // the restore route carries a whole backup and parses its own body
-router.use((req, res, next) => (req.path === "/api/admin/restore" ? next() : express.json({ limit: "1mb" })(req, res, next)));
+router.use((req, res, next) => (req.path === "/api/admin/restore" || /^\/api\/c\/[^/]+\/connections\/[^/]+\/[^/]+\/upload$/.test(req.path) ? next() : express.json({ limit: "1mb" })(req, res, next)));
 
 async function company(slug) {
   return (await q("SELECT * FROM platform.companies WHERE slug=$1", [slug])).rows[0];
@@ -500,6 +502,69 @@ router.get("/api/admin/overview", requireAdmin, async (_req, res) => {
   });
 });
 
+// Loop health: the platform's own numbers, per company and across the fleet
+// (src/health.js). ?days=7|30|90|365|0 (0 = all time), default 30.
+router.get("/api/admin/health", requireAdmin, async (req, res) => {
+  try { res.json(await health.forAdmin(req.query.days)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- connections: the outside world, owned by the platform (src/connections.js) ----
+// The company's connections page (manager): every declared connection of
+// every live module, its state, and what a person has to set up.
+router.get("/api/c/:slug/connections", requireManager, async (req, res) => {
+  try { res.json({ company: req.params.slug, modules: await connections.companyView(req.params.slug) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.post("/api/c/:slug/connections/:mod/:name/settings", requireManager, async (req, res) => {
+  try { res.json({ settings: await connections.setSettings(req.params.slug, req.params.mod, req.params.name, req.body || {}, actor(req)) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+// files: upload (parse, match the columns, preview), then load (one transaction)
+const sheetJson = express.json({ limit: "24mb" });
+router.post("/api/c/:slug/connections/:mod/:name/upload", requireManager, sheetJson, async (req, res) => {
+  try { res.json(await connections.previewUpload(req.params.slug, req.params.mod, req.params.name, req.body || {}, req.sosRole)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post("/api/c/:slug/connections/:mod/:name/load", requireManager, async (req, res) => {
+  try { res.json(await connections.loadUpload(req.params.slug, req.params.mod, req.params.name, Number((req.body || {}).upload_id), actor(req))); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+// printer: a test label for this device, a preview of the test label, the jobs
+router.post("/api/c/:slug/connections/:mod/:name/test", requireManager, async (req, res) => {
+  try { res.json(await connections.testLabel(req.params.slug, req.params.mod, req.params.name, req)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.get("/api/c/:slug/connections/:mod/:name/preview.png", requireManager, async (req, res) => {
+  try {
+    const c = await connections.row(req.params.slug, req.params.mod, req.params.name);
+    if (!c || c.kind !== "printer") return res.status(404).end();
+    const co = (await q("SELECT name FROM platform.companies WHERE slug=$1", [req.params.slug])).rows[0];
+    const zpl = connections.renderZpl(connections.TEST_LABEL, { company: co ? co.name : req.params.slug, when: "date and time", code: "TEST000000" });
+    const png = await connections.previewPng(zpl, c.settings);
+    if (!png) return res.status(503).json({ error: "the label renderer could not be reached" });
+    res.set("Cache-Control", "no-cache").type("png").send(png);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.get("/api/c/:slug/connections/:mod/:name/jobs", requireManager, async (req, res) => {
+  try { res.json({ jobs: await connections.jobs(req.params.slug, req.params.mod, req.params.name, req.query.limit) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+// the device side: the platform's print helper on a page asks for the next
+// label queued for this device (any signed-in role: a station tablet prints)
+router.get("/api/c/:slug/print/next", async (req, res) => {
+  try { const job = await connections.nextJob(req.params.slug, connections.deviceOf(req)); res.set("Cache-Control", "no-store").json(job ? { job } : {}); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.post("/api/c/:slug/print/jobs/:id/done", async (req, res) => {
+  try { await connections.finishJob(req.params.slug, connections.deviceOf(req), Number(req.params.id), { ok: true, printer: (req.body || {}).printer }); res.json({ ok: true }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post("/api/c/:slug/print/jobs/:id/failed", async (req, res) => {
+  try { await connections.finishJob(req.params.slug, connections.deviceOf(req), Number(req.params.id), { ok: false, printer: (req.body || {}).printer, error: (req.body || {}).error }); res.json({ ok: true }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 router.post("/api/admin/companies", requireAdmin, async (req, res) => {
   const { slug, name, brand_url, brand_model } = req.body || {};
   if (!SLUG.test(slug || "")) return res.status(400).json({ error: "slug: lowercase letters, digits, dashes" });
@@ -619,6 +684,7 @@ router.post("/api/admin/companies/:slug/delete", requireAdmin, async (req, res) 
     for (const t of ["batches", "agent_docs", "reviews", "diagrams", "module_versions", "modules", "schema_snapshots", "attachments", "module_intakes", "company_access"]) {
       counts[t] = (await q(`DELETE FROM platform.${t} WHERE company=$1`, [co.slug])).rowCount;
     }
+    await connections.deleteCompany(co.slug);
     counts.record = await require("./record").deleteCompany(co.slug);
     await q("DELETE FROM platform.companies WHERE slug=$1", [co.slug]);
     await logEvent("company_deleted", co.slug, { name: co.name, modules: mods, counts });

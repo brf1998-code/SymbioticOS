@@ -87,6 +87,7 @@ async function load() {
     } else {
       html += `<button class="done" onclick="complete(${t.id})">Done, send to next station</button>`;
     }
+    if (st.seq === 1) html += `<button class="quiet" onclick="printLabel(${t.id})">Print the traveler label</button><div class="sub" id="printnote"></div>`;
     html += `</div>`;
   }
   html += `<div class="queue">${D.queue.length} waiting at this station${D.queue.length > 1 ? ": " + D.queue.map(x => esc(x.job_num)).join(", ") : ""}</div>`;
@@ -107,6 +108,13 @@ function tickTimer() {
   if (!D || !D.shift) { el.textContent = "no shift"; el.className = "timer off"; return; }
   const left = (new Date(D.shift.ends_at) - Date.now()) / 1000;
   el.textContent = mmss(left); el.className = "timer" + (left < 20 ? " off" : "");
+}
+async function printLabel(id) {
+  const note = document.getElementById("printnote");
+  note.textContent = "Sending the label...";
+  const r = await fetch(`${base}/api/travelers/${id}/print`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  const j = await r.json().catch(() => ({}));
+  note.textContent = r.ok ? (j.device ? "The label is on its way to this device's printer." : "Queued, but this browser is not paired with a printer yet. Open the connections page from the board.") : (j.error || "Could not print");
 }
 async function complete(id, qc) {
   const body = { operator: (document.getElementById("nm") || {}).value || myName() };

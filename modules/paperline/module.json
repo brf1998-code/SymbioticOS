@@ -5,10 +5,63 @@
   "company": "demo",
   "entry": "routes.js",
   "pages": {
-    "/": { "file": "pages/board.html", "label": "Line board (manager view)" },
-    "/station": { "file": "pages/station.html", "label": "Station picker" },
-    "/station/:seq": { "file": "pages/station.html", "label": "Station page (operator, on a phone)" },
-    "/stock": { "file": "pages/stock.html", "label": "Stockroom page" }
+    "/": {
+      "file": "pages/board.html",
+      "label": "Line board (manager view)"
+    },
+    "/station": {
+      "file": "pages/station.html",
+      "label": "Station picker"
+    },
+    "/station/:seq": {
+      "file": "pages/station.html",
+      "label": "Station page (operator, on a phone)"
+    },
+    "/stock": {
+      "file": "pages/stock.html",
+      "label": "Stockroom page"
+    }
   },
-  "smoke": ["/api/state", "/api/station/1", "/api/stock", "/station/1", "/stock"]
+  "smoke": [
+    "/api/state",
+    "/api/station/1",
+    "/api/stock",
+    "/station/1",
+    "/stock"
+  ],
+  "connections": {
+    "stock": {
+      "kind": "files",
+      "label": "Stock count spreadsheet",
+      "table": "inventory",
+      "key": [
+        "item",
+        "location"
+      ],
+      "columns": {
+        "item": [
+          "Item",
+          "Material",
+          "Part"
+        ],
+        "location": [
+          "Location",
+          "Where"
+        ],
+        "qty": [
+          "Qty",
+          "Quantity",
+          "Count",
+          "On hand"
+        ]
+      }
+    },
+    "labels": {
+      "kind": "printer",
+      "label": "Traveler labels",
+      "templates": [
+        "traveler"
+      ]
+    }
+  }
 }
